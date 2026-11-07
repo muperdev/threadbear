@@ -997,9 +997,21 @@ final class ComposerTextView: NSTextView {
         nextResponder?.tryToPerform(#selector(NSResponder.cancelOperation(_:)), with: sender)
     }
 
+    /// Where Paste reads from: the clipboard, or a test's own board.
+    var pasteSource: NSPasteboard = .general
+
     override func paste(_ sender: Any?) {
-        if takeImages(from: .general) { return }
+        if takeImages(from: pasteSource) { return }
         super.paste(sender)
+    }
+
+    /// A plain text view only offers Paste when the clipboard has words (or
+    /// another type it reads), so a screenshot copied with ⌘⌃⇧4, which is
+    /// only HEIC and TIFF, left Paste greyed out and ⌘V did nothing
+    /// (Behrooz, 7 Nov). Pictures and files paste too.
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)), isEditable, hasFiles(pasteSource) { return true }
+        return super.validateUserInterfaceItem(item)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -1071,13 +1083,26 @@ final class ComposerTextView: NSTextView {
         (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType?.conforms(to: .image)) == true
     }
 
+    /// Image types a clipboard carries as they are, best first. Only the
+    /// types it declares count: asking for one it doesn't have (PNG from a
+    /// screenshot's HEIC and TIFF) makes macOS convert it, about 84 MB of
+    /// TIFF for one screen, and this runs every time a menu opens.
+    static let imageTypes: [NSPasteboard.PasteboardType] = [.png, NSPasteboard.PasteboardType("public.heic"), NSPasteboard.PasteboardType("public.jpeg"), .tiff]
+
+    static func imageType(_ pasteboard: NSPasteboard) -> NSPasteboard.PasteboardType? {
+        let types = Set(pasteboard.types ?? [])
+        return imageTypes.first(where: types.contains)
+    }
+
+    /// Cheap: types only, no data read.
     private func hasFiles(_ pasteboard: NSPasteboard) -> Bool {
-        !fileURLs(pasteboard).isEmpty || pasteboard.data(forType: .png) != nil || pasteboard.data(forType: .tiff) != nil
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        return pasteboard.canReadObject(forClasses: [NSURL.self], options: options) || Self.imageType(pasteboard) != nil
     }
 
     /// Files pasted or dropped. Pictures go to `media.import` as chips;
-    /// raw image data (a screenshot on the clipboard) is written to a temp
-    /// PNG first. Any other file (a video, a PDF, a folder) goes in as its
+    /// raw image data (a screenshot on the clipboard) is written to a file
+    /// first. Any other file (a video, a PDF, a folder) goes in as its
     /// full path, for the agent to open where it is: nothing's copied, so
     /// a big one costs nothing, except one macOS is about to take back (a
     /// floating thumbnail's), where an APFS clone keeps it for free.
@@ -1108,19 +1133,23 @@ final class ComposerTextView: NSTextView {
         }
         // Text with an image flavour (rich text from a browser) stays text.
         if pasteboard.string(forType: .string) != nil { return false }
-        guard let data = pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff) else { return false }
-        let png: Data?
-        if pasteboard.data(forType: .png) != nil {
-            png = data
-        } else {
-            png = NSBitmapImageRep(data: data)?.representation(using: .png, properties: [:])
+        // PNG, HEIC (a screenshot copied with ⌘⌃⇧4) and JPEG go in as they
+        // are, as the runner takes them; TIFF goes in as PNG.
+        guard let type = Self.imageType(pasteboard), let data = pasteboard.data(forType: type) else { return false }
+        let saved: Data?
+        let ext: String
+        switch type {
+        case .png: (saved, ext) = (data, "png")
+        case NSPasteboard.PasteboardType("public.heic"): (saved, ext) = (data, "heic")
+        case NSPasteboard.PasteboardType("public.jpeg"): (saved, ext) = (data, "jpeg")
+        default: (saved, ext) = (NSBitmapImageRep(data: data)?.representation(using: .png, properties: [:]), "png")
         }
-        guard let png else { return false }
+        guard let saved else { return false }
         let folder = DroppedFiles.keepFolder
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let url = folder.appendingPathComponent("pasted-\(UUID().uuidString.prefix(8)).png")
+        let url = folder.appendingPathComponent("pasted-\(UUID().uuidString.prefix(8)).\(ext)")
         do {
-            try png.write(to: url)
+            try saved.write(to: url)
             deliver([url], at: range)
             return true
         } catch {
