@@ -22,6 +22,9 @@ struct SettingsView: View {
                     .tabItem { Label("Voice", systemImage: "waveform") }
                     .tag(SettingsTab.voice)
             }
+            DictationSettings()
+                .tabItem { Label("Dictation", systemImage: "mic") }
+                .tag(SettingsTab.dictation)
             ModelSettings()
                 .tabItem { Label("Models", systemImage: "sparkles") }
                 .tag(SettingsTab.models)

@@ -219,7 +219,13 @@ started, errors), never what was said, and is started afresh past 256 KB.
   restart in the background) is put on its own display's. These are
   private window server calls, and they only touch the app's own windows.
 
-## What it reads
+Dictation (the mic beside Send) keeps this Mac's Collabute sign-in in
+the login Keychain, as one item named "Threadbear Collabute dictation"
+(the OAuth tokens Collabute gave it for `voice:transcribe` only), and the
+server and the mic's switch in the app's preferences
+(`app/Sources/Threadbear/Dictation/`). Settings > Dictation > Sign Out
+deletes the item. The microphone is only on while the mic is red.
+
 
 - From your Claude and Codex logins: which account each is (the email in
   `~/.claude.json`), a few settings, and the token counts in your session
@@ -258,6 +264,7 @@ started, errors), never what was said, and is started afresh past 256 KB.
 | Anthropic, OpenAI | yours | Your threads, through the official CLIs on your own logins. With the `labReview` experiment on (off by default), a thread's code change, with your message and the agent's reply, goes to your other provider's CLI as a review thread, as if you'd started one. After a turn fails because the API couldn't be reached, the runner itself opens (and straight away closes) a connection to api.anthropic.com or chatgpt.com on port 443, at most once a minute, until one opens and the thread carries on. Nothing is sent over it (`runner/src/net-probe.ts`). |
 | Mike's push relay | Mike's | Only when a paired iPhone gets a notification. It's sent from your Convex deployment, not the Mac. The text is encrypted for the phone; the relay sees the device token and thread id (`convex/push.ts`, `docs/push-relay.md`). The first time, your deployment registers with it, giving its own address; the relay keeps that address and checks it by posting a one-time code back to your deployment's `/relay/verify` (`convex/http.ts`). |
 | A Connectors gateway | whoever runs it | Only if one is set in `runner.json` or `~/.claude.json`. Its `/health` every few minutes (and once more at the end of a turn where a call to one of its services failed, to see if it needs signing in), and for a project with a Notion page, a Notion read or two every 5 minutes for its task board (`runner/src/notion-tasks.ts`), signed with the header the `headersHelper` command in that `connectors` entry prints, which it runs for each read |
+| Collabute | Collabute's, or the server set in Settings > Dictation | Only once you sign in for dictation: the sign-in (Collabute's OAuth device flow, its approval page in your browser), a token refresh when the last one has run out, and for each dictation a short-lived speech-to-text token from Collabute (`/api/mcp/voice-token`), then your voice, while the mic is red, straight to the speech-to-text service that token is for (Vercel's AI Gateway), which sends back the words. Nothing else of yours is sent, and nothing is recorded or kept (`app/Sources/Threadbear/Dictation/`). |
 | GitHub, Hugging Face | Kyutai's | Only with the `voiceMode` experiment on, the first time Voice is used: the pocket-tts download, then its model and voices. Nothing of yours is sent. |
 | Sentry | Mike's | Nothing from your copy. Only a copy whose `origin` is Mike's own repo reports errors or uploads the app's debug symbols (`runner/src/sentry.ts`, `app/Sources/Threadbear/CrashReporting.swift`, `app/build-app.sh`). The App Store iPhone app sends anonymous crash reports. |
 

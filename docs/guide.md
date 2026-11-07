@@ -1388,6 +1388,24 @@ a thread you stopped yourself. Several threads finishing at once make one
 ding. Pick Chime, Bell or Droplet (each plays as you pick it), set the
 volume, and press Play to hear it again.
 
+### Dictating with Collabute
+
+The mic beside Send types what you say into the message box, using
+Collabute's speech-to-text. The first time you press it, Threadbear opens
+Collabute's sign-in page in your browser: approve Threadbear there (it
+only asks to use dictation), then press the mic again. It turns red while
+it listens, and the words appear where the cursor was as you say them.
+Press it again to stop: the last words settle, and the message waits in
+the box for you to edit or send. Typing in the box while it listens is
+fine; what it hears next goes at the end. Going to another thread stops
+it, keeping what it heard.
+
+Settings (⌘,) > Dictation signs you in or out, hides the mic, and can
+point it at another Collabute server (empty is Collabute's own). It needs
+a Collabute account whose workspace can use AI. Your voice goes straight
+from the Mac to Collabute's speech-to-text while the mic is red, and
+nothing is recorded or kept.
+
 ### Talking with a thread
 
 This is an experiment, off until you turn it on (see Experiments): there's

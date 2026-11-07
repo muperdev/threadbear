@@ -10,6 +10,7 @@ import ThreadbearCore
 struct ComposerControls: View {
     @Environment(AppModel.self) private var app
     @AppStorage(VoiceMode.enabledKey) private var voiceEnabled = true
+    @AppStorage(Dictation.enabledKey) private var dictationEnabled = true
     let thread: ThreadSummary?
     let running: Bool
     let canSend: Bool
@@ -19,6 +20,8 @@ struct ComposerControls: View {
     let onSend: () -> Void
     /// Opens the schedule editor with the draft, instead of sending it now.
     let onSchedule: () -> Void
+    /// The box's text view, for the mic's words (Dictation).
+    var handle: ComposerHandle? = nil
 
     var body: some View {
         if let thread, let place = app.runnerPlace(of: thread) {
@@ -169,6 +172,12 @@ struct ComposerControls: View {
                 ContextRing(meter: meter, openRequest: app.contextMeterRequest) {
                     NSHostingController(rootView: ContextPopover(threadId: thread.id).environment(app))
                 }
+            }
+            // Dictation: talk, and the words go in the box (Settings >
+            // Dictation can hide it).
+            if dictationEnabled, let handle {
+                DictationButton(draftKey: thread?.id ?? "new", handle: handle, size: SendButton.size)
+                    .layoutPriority(1)
             }
             // Voice for the thread, or on a new thread's composer, where
             // what's said first starts it (Settings > Voice can hide it).

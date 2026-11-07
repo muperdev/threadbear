@@ -116,7 +116,8 @@ struct ComposerView: View {
                 sending: creating,
                 onAttach: { chooseImages(for: draft) },
                 onSend: { send() },
-                onSchedule: { app.newSchedule(from: thread, draftKey: draftKey) }
+                onSchedule: { app.newSchedule(from: thread, draftKey: draftKey) },
+                handle: handle
             )
             .environment(\.sendNudges, sends)
         }
