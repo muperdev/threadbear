@@ -187,23 +187,25 @@ final class Dictation {
         if final {
             // Out with the live words, unrecorded, then in with the final
             // ones as one undo.
-            replace(current, with: "", undo: false, in: textView)
+            Self.replace(current, with: "", undo: false, in: textView)
             if !piece.isEmpty { textView.insertText(piece, replacementRange: NSRange(location: current.location, length: 0)) }
             written = nil
             textView.window?.makeFirstResponder(textView)
         } else {
-            replace(current, with: piece, undo: false, in: textView)
+            Self.replace(current, with: piece, undo: false, in: textView)
             written = (NSRange(location: current.location, length: (piece as NSString).length), piece)
             textView.setSelectedRange(NSRange(location: current.location + (piece as NSString).length, length: 0))
         }
     }
 
-    private func replace(_ range: NSRange, with text: String, undo: Bool, in textView: ComposerTextView) {
+    /// With the box's typing attributes, as typing would: a bare string
+    /// takes no colour and drew black on the dark composer.
+    static func replace(_ range: NSRange, with text: String, undo: Bool, in textView: ComposerTextView) {
         guard range.length > 0 || !text.isEmpty else { return }
         if !undo { textView.undoManager?.disableUndoRegistration() }
         defer { if !undo { textView.undoManager?.enableUndoRegistration() } }
         guard textView.shouldChangeText(in: range, replacementString: text) else { return }
-        textView.textStorage?.replaceCharacters(in: range, with: text)
+        textView.textStorage?.replaceCharacters(in: range, with: NSAttributedString(string: text, attributes: textView.typingAttributes))
         textView.didChangeText()
     }
 
