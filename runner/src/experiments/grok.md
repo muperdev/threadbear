@@ -4,7 +4,7 @@ name: Grok threads
 title: Grok threads: run threads on Grok Build, xAI's coding CLI, on your own grok.com login
 added: 2026-11-08
 on: false
-reminder: pending
+reminder: 72f3b3b4
 ---
 
 ## What it does
