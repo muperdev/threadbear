@@ -84,7 +84,7 @@ final class ShortcutsTests: XCTestCase {
             .showInbox: "⌘1", .showScheduled: "⌘2", .showProjects: "⌘3", .showLibrarian: "⌘4",
             .zoomIn: "⌘=", .zoomOut: "⌘-", .actualSize: "⌘0",
             .toggleThreads: "⌃⌘S", .togglePanels: "⌥⌘P",
-            .settings: "⌘,",
+            .settings: "⌘,", .toggleTerminal: "⌘J",
         ]
         for command in ShortcutCommand.allCases {
             XCTAssertEqual(command.defaultKey?.display, expected[command], command.title)
