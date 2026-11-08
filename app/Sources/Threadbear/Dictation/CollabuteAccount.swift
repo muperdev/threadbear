@@ -41,7 +41,7 @@ final class CollabuteAccount {
     /// browser and waits for him to approve it there.
     func signIn() {
         if case .signingIn(_, let url) = state {
-            NSWorkspace.shared.open(url)
+            OpenGate.openWeb(url)
             return
         }
         problem = nil
@@ -51,7 +51,7 @@ final class CollabuteAccount {
             do {
                 let start = try await Self.startDevice(server: server)
                 state = .signingIn(code: start.userCode, url: start.verificationURL)
-                NSWorkspace.shared.open(start.verificationURL)
+                OpenGate.openWeb(start.verificationURL)
                 let tokens = try await Self.waitForApproval(start, server: server)
                 guard !Task.isCancelled else { return }
                 save(tokens)
