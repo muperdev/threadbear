@@ -86,6 +86,12 @@ and ask the user what they use instead, rather than trying to reach them.
   against a real dev runner and debug app, checks each step, and saves a
   shot of each; look at the shots too. The mock fakes patches and trust,
   and tours that passed on it were broken on a real install (30 Oct).
+- A UI idea that moves or is felt (an animation, a drag, a gesture,
+  "juice"): before building it, mock it and show Mike a short clip of it
+  in motion, through show_options when there's more than one. A list of
+  ideas in words isn't enough. He had to ask for this on 3 Nov ("show me
+  some options visually") and twice on 7 Nov ("mock these up and show me
+  a video", "can you mock it out first?").
 - Building a design Mike picked (show_options): before landing, put a
   shot of the build beside the mockup he picked and check the layout
   matches, not just the wording. The done card shipped as a card in the
