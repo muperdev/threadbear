@@ -592,9 +592,23 @@ the one you're reading, right-click it in the list and pick Open in New
 Panel.
 
 The View menu has the rest: Show or Hide Threads (⌃⌘S) for the list,
-Show or Hide Panels (⌥⌘P) for the panels beside the thread, and Reset
-Panel Layout, which puts everything back how it started. Threadbear remembers your
-layout between launches.
+Show or Hide Panels (⌥⌘P) for the panels beside the thread, Show or Hide
+Terminal (⌘J), and Reset Panel Layout, which puts everything back how it
+started. Threadbear remembers your layout between launches.
+
+### Terminal
+<!-- slug: terminal -->
+
+⌘J opens a terminal under the thread, and ⌘J again hides it. It's a real
+one, with your login shell, its colours and full-screen programs like vim
+or htop, and it takes the keyboard as it opens. Each thread has a shell
+of its own, started in the thread's folder (its worktree, when it has
+one), and it keeps running while you look at other threads, so going back
+finds it as you left it. A thread on another Mac or the cloud gets a shell
+on this Mac in your home folder, with a line saying so, and so does the
+new-thread page. If the shell exits, New Shell starts another. Shells stop
+when you quit Threadbear. The Terminal is a panel like the others: drag it
+beside the thread, into a tab, or out into a window of its own.
 
 ## Highlights
 <!-- slug: highlights -->
@@ -974,6 +988,7 @@ key:
 - Actual Size: `actualSize`, ⌘0
 - Show Threads: `toggleThreads`, ⌃⌘S
 - Show Panels: `togglePanels`, ⌥⌘P
+- Show Terminal: `toggleTerminal`, ⌘J
 - Reset Panel Layout: `resetPanelLayout`, no key
 
 In the file, a key is its modifiers and then the key, joined with `+`: `cmd`,

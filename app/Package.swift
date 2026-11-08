@@ -19,6 +19,10 @@ let package = Package(
         // Crash reports from the installed app (CrashReporting.swift):
         // Sentry's static framework alone (SentryBinary/Package.swift says why).
         .package(path: "SentryBinary"),
+        // The Terminal panel's emulator and pty (TerminalPanel.swift), MIT.
+        // 1.99, not 1.20: the 1.x line compiles a Metal shader, which needs
+        // Xcode's separate Metal Toolchain on every Mac that builds the app.
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", .upToNextMinor(from: "1.99.3")),
     ],
     targets: [
         // Protocol models, the JSON-RPC client, the event reducer and other
@@ -35,6 +39,7 @@ let package = Package(
                 .product(name: "Highlightr", package: "Highlightr"),
                 .product(name: "BearDock", package: "dock"),
                 .product(name: "Sentry", package: "SentryBinary"),
+                .product(name: "SwiftTerm", package: "SwiftTerm"),
             ],
             path: "Sources/Threadbear",
             // Big pictures (the Librarian's page). Looked up through Art,
