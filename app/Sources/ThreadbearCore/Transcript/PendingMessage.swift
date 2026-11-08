@@ -20,6 +20,10 @@ public struct PendingMessage: Sendable, Hashable, Identifiable {
     /// running turn (docs/protocol.md, `threads.send`), and its
     /// `user.message` comes when its own turn starts.
     public var queued: Bool
+    /// The turn it will start, when Mike queued it (Cmd+Return) and the
+    /// runner said so: `threads.unqueue` takes it back by this, for the
+    /// pencil and the remove button. Nil for one an older runner queued.
+    public var queuedTurnId: String?
 
     public init(id: String = UUID().uuidString, text: String, images: [ImageRef] = [], answers: [AskAnswer] = [], afterSeq: Int, queued: Bool = false) {
         self.id = id
@@ -45,7 +49,7 @@ public struct PendingMessage: Sendable, Hashable, Identifiable {
 
     /// How the bubble shows it.
     public var row: TranscriptRow {
-        let message = UserMessage(text: text, images: images, answers: answers, pending: queued ? .queued : .sending)
+        let message = UserMessage(text: text, images: images, answers: answers, editable: queued && queuedTurnId != nil, pending: queued ? .queued : .sending)
         return TranscriptRow(id: "p:" + id, seq: afterSeq, content: .user(message))
     }
 

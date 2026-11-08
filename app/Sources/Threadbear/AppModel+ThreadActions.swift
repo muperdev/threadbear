@@ -204,7 +204,11 @@ extension AppModel {
     /// picks go back if the runner doesn't take them. A new thread's
     /// draft stays in the box, greyed, with a spinner for Send, until the
     /// thread exists. While disconnected nothing is touched at all.
-    func send(threadId: String?) {
+    ///
+    /// `queue` (Cmd+Return) asks the runner to hold a message sent while a
+    /// turn runs until that turn ends, rather than steering into it; with
+    /// no turn running it just sends.
+    func send(threadId: String?, queue: Bool = false) {
         let key = threadId ?? "new"
         if let threadId, let edit = editing[threadId] {
             sendEdit(threadId: threadId, edit: edit)
@@ -253,7 +257,7 @@ extension AppModel {
             if let seq, !answers.isEmpty { setAnswers(picks: [:], notes: [:], seq: seq, threadId: threadId) }
             // The card keeps its ticks until his message closes it.
             if !followUps.isEmpty { nextPicks[threadId] = nil }
-            post(threadId: threadId, text: trimmed, images: images, answers: answers, client: client) { [self] in
+            post(threadId: threadId, text: trimmed, images: images, answers: answers, queue: queue, client: client) { [self] in
                 restoreDraft(draft, key: key)
                 if let seq, !answers.isEmpty { setAnswers(picks: picks, notes: notes, seq: seq, threadId: threadId) }
                 if !followUps.isEmpty, nextPicks[threadId] == nil { nextPicks[threadId] = ticked }
@@ -341,7 +345,7 @@ extension AppModel {
     /// Sends a message to a thread, shown dimmed at the end of the
     /// transcript until the runner shows it. `failed` puts back whatever
     /// the send took from the composer, if the runner doesn't take it.
-    private func post(threadId: String, text: String, images: [ImageRef], answers: [AskAnswer], client: RPCClient, failed: @escaping () -> Void = {}) {
+    private func post(threadId: String, text: String, images: [ImageRef], answers: [AskAnswer], queue: Bool = false, client: RPCClient, failed: @escaping () -> Void = {}) {
         let pendingId = UUID().uuidString
         // The thread's own session, open already as its composer is
         // showing; kept by the Task, so a failure finds it.
@@ -354,8 +358,15 @@ extension AppModel {
                 // away (Mike saw "Thread not found", 5 Nov). It goes again,
                 // still showing as on its way through the dropped
                 // connection, once the new runner is connected.
-                _ = try await inRestartOrder(threadId, sentOn: client, waiting: { session?.holdForResend(pendingId) }) { client in
-                    try await client.send(threadId: threadId, text: text, images: images, answers: answers)
+                let result = try await inRestartOrder(threadId, sentOn: client, waiting: { session?.holdForResend(pendingId) }) { client in
+                    try await client.sendMessage(threadId: threadId, text: text, images: images, answers: answers, queue: queue)
+                }
+                // The runner says it queued it: the clock at once, and its
+                // turn id so it can be taken back before it goes.
+                if result.queued == true, let turnId = result.turnId, !turnId.isEmpty {
+                    session?.markQueued(pendingId, turnId: turnId)
+                    checkQueued(threadId)
+                    return
                 }
                 // Taken but not shown: it's queued behind the running
                 // turn. Its user.message usually comes just before this
@@ -367,6 +378,52 @@ extension AppModel {
             } catch {
                 session?.removePending(pendingId)
                 failed()
+                show(error)
+            }
+        }
+    }
+
+    /// The × on a queued message: it goes from the transcript at once and
+    /// the runner drops it (`threads.unqueue`). If the runner can't (it has
+    /// started, so its own row is on its way) that's said; any other
+    /// failure puts it back as it was.
+    func removeQueued(threadId: String, pendingId: String) {
+        takeBackQueued(threadId: threadId, pendingId: pendingId, edit: false)
+    }
+
+    /// The pencil on a queued message: it comes out of the queue and its
+    /// words and pictures go back in the box to change and send again.
+    func editQueued(threadId: String, pendingId: String) {
+        takeBackQueued(threadId: threadId, pendingId: pendingId, edit: true)
+    }
+
+    private func takeBackQueued(threadId: String, pendingId: String, edit: Bool) {
+        let session = self.session(for: threadId)
+        guard let message = session.pending.first(where: { $0.id == pendingId }), let turnId = message.queuedTurnId else { return }
+        guard let client = client(for: threadId) else {
+            showConnectionError(notConnectedText(threadId, "it's still queued"))
+            return
+        }
+        session.removePending(pendingId)
+        let before = drafts[threadId]
+        var restored: Draft?
+        if edit {
+            let back = InlinePictures.draft(text: message.text, images: message.images)
+            restoreDraft(Draft(text: back.text, images: back.images), key: threadId)
+            restored = drafts[threadId]
+            focusComposer(threadId)
+        }
+        Task {
+            do {
+                try await client.unqueue(threadId: threadId, turnId: turnId)
+            } catch {
+                // Its words leave the box again, unless he's typed since.
+                if let restored, drafts[threadId] == restored { drafts[threadId] = before }
+                if case RPCError.server(RPCError.badParams, _) = error {
+                    // It started: its user.message shows it.
+                } else {
+                    session.restorePending(message)
+                }
                 show(error)
             }
         }

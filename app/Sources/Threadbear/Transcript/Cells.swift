@@ -44,6 +44,8 @@ protocol RowCellDelegate: AnyObject {
     /// The pencil by one of Mike's messages: edit it and carry on from
     /// there (docs/protocol.md, "Editing a message").
     func editMessage(rowId: String)
+    /// The × by a message queued behind the running turn: take it back.
+    func removeQueued(rowId: String)
     /// A work:, thread: or review: link in row `rowId`'s text (WorkLinks): open the
     /// step in that turn's working, or the other thread.
     func openThreadLink(_ url: URL, fromRow rowId: String)
@@ -74,6 +76,7 @@ extension RowCellDelegate {
     func openReview(_ review: DesignReview) {}
     func claimWakeUp(rowId: String) -> Bool { false }
     func editMessage(rowId: String) {}
+    func removeQueued(rowId: String) {}
     func openThreadLink(_ url: URL, fromRow rowId: String) {}
     func approvePlan(itemId: String) {}
     func sendBackPlan() {}
@@ -274,6 +277,9 @@ final class TextRowCell: RowCellView {
     /// The pencil left of an editable message of Mike's, shown while the
     /// pointer is over the row.
     let edit = NSButton()
+    /// Left of the pencil on a message queued behind the running turn:
+    /// takes it out of the queue so it never goes. Shown with the pencil.
+    let remove = NSButton()
     /// Left of a message still on its way to the runner: a spinner while
     /// it's sent, a clock once it's queued behind the running turn.
     let pendingMark = PendingMark()
@@ -281,6 +287,9 @@ final class TextRowCell: RowCellView {
     /// tip saying so on hover or click, in place of a line of text.
     let phoneMark = NSButton()
     private var editable = false
+    /// A queued message: the pencil takes it back to the box, and the ×
+    /// beside it drops it.
+    private var removable = false
     private var pointerInside = false
     /// Left of the words of a "Woke up" note. Made the first time one's
     /// shown, as hardly any text rows ever need it.
@@ -322,6 +331,15 @@ final class TextRowCell: RowCellView {
         edit.setTip("Edit this message and carry on from here")
         edit.setAccessibilityLabel("Edit message")
         addSubview(edit)
+        remove.isBordered = false
+        remove.bezelStyle = .regularSquare
+        remove.imagePosition = .imageOnly
+        remove.target = self
+        remove.action = #selector(removeClicked)
+        remove.isHidden = true
+        remove.setTip("Remove it from the queue so it isn't sent")
+        remove.setAccessibilityLabel("Remove queued message")
+        addSubview(remove)
         pendingMark.isHidden = true
         addSubview(pendingMark)
         phoneMark.isBordered = false
@@ -343,6 +361,10 @@ final class TextRowCell: RowCellView {
 
     @objc private func editClicked() {
         delegate?.editMessage(rowId: rowId)
+    }
+
+    @objc private func removeClicked() {
+        delegate?.removeQueued(rowId: rowId)
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -391,6 +413,8 @@ final class TextRowCell: RowCellView {
     private func updateEdit() {
         let show = editable && (pointerInside || Self.debugShowEdit)
         if edit.isHidden == show { edit.isHidden = !show }
+        let showRemove = show && removable
+        if remove.isHidden == showRemove { remove.isHidden = !showRemove }
     }
 
     #if DEBUG
@@ -415,6 +439,7 @@ final class TextRowCell: RowCellView {
         phoneMark.isHidden = true
         textView.isHidden = render.text == nil
         editable = false
+        removable = false
         var pending: UserMessage.Pending?
 
         switch row.content {
@@ -468,6 +493,8 @@ final class TextRowCell: RowCellView {
                 let bottom = render.text != nil ? box.frame.maxY : images.frame.maxY
                 pendingMark.frame = NSRect(x: left - side - zoomed(6), y: bottom - side - zoomed(4), width: side, height: side)
                 pendingMark.show(state)
+                // A queued one's pencil and × go left of its clock.
+                if state == .queued { markEdge = pendingMark.frame.minX + zoomed(6) }
             }
             if message.editable {
                 // Left of the bubble (or of the pictures, with no text),
@@ -480,6 +507,16 @@ final class TextRowCell: RowCellView {
                 let image = Symbols.image("pencil", size: 12)
                 if edit.image !== image { edit.image = image }
                 edit.contentTintColor = .secondaryLabelColor
+                if message.pending == .queued {
+                    removable = true
+                    edit.setTip("Take it out of the queue and back into the box to change")
+                    remove.frame = edit.frame.offsetBy(dx: -side, dy: 0)
+                    let cross = Symbols.image("xmark", size: 11)
+                    if remove.image !== cross { remove.image = cross }
+                    remove.contentTintColor = .secondaryLabelColor
+                } else {
+                    edit.setTip("Edit this message and carry on from here")
+                }
             }
 
         case .assistant:

@@ -195,6 +195,79 @@ final class PendingSendTests: XCTestCase {
         XCTAssertTrue(session.pending.isEmpty)
     }
 
+    /// Cmd+Return asks the runner to queue it (docs/protocol.md,
+    /// threads.send `queue`). Its answer's `queued` shows the clock at once,
+    /// and its turn id lets it be taken back before it goes.
+    func testCommandReturnQueuesAndTheAnswerMarksItAtOnce() async throws {
+        let (app, transport) = try await connected()
+        let session = app.session(for: "th1")
+        app.drafts["th1"] = Draft(text: "Then the docs")
+        app.send(threadId: "th1", queue: true)
+        try await until { transport.waiting("threads.send") }
+        XCTAssertEqual(transport.params("threads.send")?["queue"] as? Bool, true)
+        transport.answer("threads.send", ["turnId": "turn_q", "queued": true])
+        try await until { session.pending.first?.queuedTurnId != nil }
+        XCTAssertEqual(session.pending.first?.queued, true)
+        XCTAssertEqual(session.pending.first?.queuedTurnId, "turn_q")
+        XCTAssertTrue(Self.editable(session.pending.first), "a queued message the runner can take back has the pencil")
+    }
+
+    /// A plain Return doesn't ask for the queue, and a message an older
+    /// runner queued by itself has no turn id to take back.
+    func testPlainReturnDoesNotQueue() async throws {
+        let (app, transport) = try await connected()
+        let session = app.session(for: "th1")
+        app.drafts["th1"] = Draft(text: "And this")
+        app.send(threadId: "th1")
+        try await until { transport.waiting("threads.send") }
+        XCTAssertNil(transport.params("threads.send")?["queue"])
+        transport.answer("threads.send", ["turnId": "turn_1"])
+        try await until { session.pending.first?.queued == true }
+        XCTAssertNil(session.pending.first?.queuedTurnId)
+        XCTAssertFalse(Self.editable(session.pending.first))
+    }
+
+    private static func editable(_ pending: PendingMessage?) -> Bool {
+        guard case .user(let message)? = pending?.row.content else { return false }
+        return message.editable
+    }
+
+    private func queuedOne() async throws -> (AppModel, HoldingTransport, ThreadSession, String) {
+        let (app, transport) = try await connected()
+        let session = app.session(for: "th1")
+        app.drafts["th1"] = Draft(text: "Then the docs")
+        app.send(threadId: "th1", queue: true)
+        try await until { transport.waiting("threads.send") }
+        transport.answer("threads.send", ["turnId": "turn_q", "queued": true])
+        try await until { session.pending.first?.queuedTurnId != nil }
+        return (app, transport, session, try XCTUnwrap(session.pending.first?.id))
+    }
+
+    /// Remove takes it off at once and asks the runner to drop it.
+    func testRemovingAQueuedMessageTakesItOffAtOnce() async throws {
+        let (app, transport, session, id) = try await queuedOne()
+        app.removeQueued(threadId: "th1", pendingId: id)
+        XCTAssertTrue(session.pending.isEmpty, "gone at once")
+        try await until { transport.waiting("threads.unqueue") }
+        XCTAssertEqual(transport.params("threads.unqueue")?["turnId"] as? String, "turn_q")
+        transport.answer("threads.unqueue", [:])
+        XCTAssertNil(app.drafts["th1"])
+    }
+
+    /// Edit takes it off and puts its words back in the box at once. If it
+    /// had started meanwhile, the words come out of the box again (it's
+    /// going anyway) and the error says so.
+    func testEditingAQueuedMessagePutsItBackInTheBox() async throws {
+        let (app, transport, session, id) = try await queuedOne()
+        app.editQueued(threadId: "th1", pendingId: id)
+        XCTAssertTrue(session.pending.isEmpty)
+        XCTAssertEqual(app.drafts["th1"]?.text, "Then the docs")
+        try await until { transport.waiting("threads.unqueue") }
+        transport.fail("threads.unqueue", message: "That message isn't waiting any more: it has started.")
+        try await until { app.errorMessage != nil }
+        XCTAssertNil(app.drafts["th1"], "the words it started with leave the box")
+    }
+
     /// A new thread's draft stays in the box, locked, until the runner has
     /// made the thread; a second Return meanwhile sends nothing.
     func testANewThreadKeepsItsDraftUntilItExists() async throws {

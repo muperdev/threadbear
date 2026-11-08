@@ -416,7 +416,14 @@ A message shows in the thread as soon as you send it, faded, with a
 spinner beside it until the runner has it (a busy Mac can hold the runner
 up for a few seconds). A clock instead means it's waiting for the turn
 that's running to finish, and it starts its own turn then. If it can't be
-sent, it goes and its text is back in the composer. Starting a new thread
+sent, it goes and its text is back in the composer.
+
+While a turn is running, Return sends your message into it, and the agent
+reads it at its next step. ⌘Return queues it instead: it waits, with the
+clock, and starts its own turn once the running one ends (with no turn
+running, ⌘Return just sends). Hover a queued message to change your mind
+before it goes: the pencil takes it out of the queue and puts it back in
+the composer to change and send again, and the cross removes it. Starting a new thread
 keeps your message in the composer, greyed, with a spinner in place of
 Send, until the thread exists.
 

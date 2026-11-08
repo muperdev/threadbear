@@ -1145,6 +1145,10 @@ enum Automation {
             cell.edit.performClick(nil)
             _ = cell.debugHover(false)
             try? await Task.sleep(for: .milliseconds(100))
+            // A queued message's pencil takes it back to the box instead.
+            if row.id.hasPrefix("p:") {
+                return app.transcript.session?.hasPending(String(row.id.dropFirst(2))) == false ? "ok back in the box" : "error it's still queued"
+            }
             guard let id = app.selection, let edit = app.editing[id] else { return "error the edit didn't start" }
             return "ok editing seq \(edit.seq)"
         case "swipe":

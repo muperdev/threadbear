@@ -100,6 +100,7 @@ struct ComposerView: View {
                 focusTrigger: app.focusRequests[draftKey] ?? 0,
                 placeholder: placeholder(picks, followUps: followUps, needsYou: needsYou),
                 onSend: { send() },
+                onQueue: { send(queue: true) },
                 onReturnWhenEmpty: { command in returnWhenEmpty(draft.wrappedValue, command: command) },
                 pictures: ComposerTextView.Pictures(allowed: { picturesAllowed() }, importOne: { await importPicture($0) }),
                 handle: handle,
@@ -285,14 +286,16 @@ struct ComposerView: View {
 
     /// AppModel empties the box, and puts the draft back if it isn't sent.
     /// Picked answers go with it.
-    private func send() {
+    /// `queue` (⌘Return): it waits for a running turn to end rather than
+    /// going into it.
+    private func send(queue: Bool = false) {
         // Return in an empty box comes here too, with nothing to go.
         if Self.canSend((app.drafts[draftKey] ?? Draft()).normalized,
                         picks: thread.map { app.picks(for: $0) } ?? [:],
                         followUps: thread.map { app.pickedFollowUps(threadId: $0.id) } ?? FollowUpPicks()) {
             sends &+= 1
         }
-        app.send(threadId: thread?.id)
+        app.send(threadId: thread?.id, queue: queue)
     }
 
     private static func canSend(_ draft: Draft, picks: [Int: Int], followUps: FollowUpPicks) -> Bool {
@@ -623,6 +626,8 @@ struct ComposerTextField: NSViewRepresentable {
     var focusTrigger: Int
     var placeholder: String
     var onSend: () -> Void
+    /// ⌘Return with something typed: queue it behind the running turn.
+    var onQueue: (() -> Void)?
     /// Return with nothing typed: true if it did something.
     var onReturnWhenEmpty: (_ command: Bool) -> Bool = { _ in false }
     var pictures: ComposerTextView.Pictures?
@@ -704,6 +709,7 @@ struct ComposerTextField: NSViewRepresentable {
         guard let textView = scroll.documentView as? ComposerTextView else { return }
         textView.onSend = onSend
         textView.onReturnWhenEmpty = onReturnWhenEmpty
+        textView.onQueue = onQueue
         textView.pictures = pictures
         textView.onEscape = onEscape
         textView.onPaletteKey = onPaletteKey
@@ -780,6 +786,10 @@ final class ComposerTextView: NSTextView {
     /// composer: lookups for the composer skip it.
     var inAnswerBox = false
     var onSend: (() -> Void)?
+    /// ⌘Return with something typed, in place of `onSend`: the message
+    /// waits for the running turn to end (docs/protocol.md, threads.send
+    /// `queue`). Nil sends as Return does.
+    var onQueue: (() -> Void)?
     /// With whether ⌘ was held.
     var onReturnWhenEmpty: ((_ command: Bool) -> Bool)?
     /// An answer box's Return, with whether ⌘ was held, in place of
@@ -957,6 +967,8 @@ final class ComposerTextView: NSTextView {
                 onAnswerReturn(event.modifierFlags.contains(.command))
             } else if string.isEmpty, onReturnWhenEmpty?(event.modifierFlags.contains(.command)) == true {
                 // Allowed the waiting approval.
+            } else if event.modifierFlags.contains(.command), let onQueue {
+                onQueue()
             } else {
                 onSend?()
             }

@@ -1012,7 +1012,8 @@ private struct SendButton: View {
             }
             .buttonStyle(CircleButtonStyle(filled: canSend))
             .disabled(!canSend)
-            .tip(running ? "Send (into this turn)" : "Send (Return)")
+            // ⌘Return queues it behind the turn instead (ComposerTextView.onQueue).
+            .tip(running ? "Send into this turn (Return), or queue it for after (\u{2318}Return)" : "Send (Return)")
             .accessibilityLabel("Send")
         }
     }

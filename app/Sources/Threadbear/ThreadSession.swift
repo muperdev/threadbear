@@ -447,10 +447,22 @@ final class ThreadSession {
 
     /// The runner took it but hasn't shown it: it's queued behind the
     /// running turn.
-    func markQueued(_ id: String) {
+    func markQueued(_ id: String, turnId: String? = nil) {
         resending.remove(id)
         updatePending { list in
-            if let index = list.firstIndex(where: { $0.id == id }) { list[index].queued = true }
+            guard let index = list.firstIndex(where: { $0.id == id }) else { return }
+            list[index].queued = true
+            if let turnId { list[index].queuedTurnId = turnId }
+        }
+    }
+
+    /// A queued message the runner couldn't take back goes back where it
+    /// was, among the others in the order they were sent.
+    func restorePending(_ message: PendingMessage) {
+        updatePending { list in
+            guard !list.contains(where: { $0.id == message.id }) else { return }
+            let index = list.firstIndex(where: { $0.afterSeq > message.afterSeq }) ?? list.endIndex
+            list.insert(message, at: index)
         }
     }
 

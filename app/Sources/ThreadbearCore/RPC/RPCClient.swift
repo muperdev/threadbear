@@ -31,6 +31,7 @@ public enum RPCError: Error, Sendable, Equatable, LocalizedError {
     public static let subagentNotFound = -32006
     public static let projectNotFound = -32007
     public static let methodNotFound = -32601
+    public static let badParams = -32602
     public static let busy = -32020
     /// The runner's Convex CLI isn't signed in, or its login can't reach
     /// the panel's deployment (docs/protocol.md, "The Convex panel").

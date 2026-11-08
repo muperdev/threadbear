@@ -1118,10 +1118,21 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
     /// the composer, and sending replaces it (docs/protocol.md, "Editing a
     /// message").
     func editMessage(rowId: String) {
+        // A queued message still on its way: out of the queue, back in the box.
+        if rowId.hasPrefix("p:"), let session, let app = session.app {
+            app.editQueued(threadId: session.threadId, pendingId: String(rowId.dropFirst(2)))
+            return
+        }
         guard let session, let app = session.app,
               case .user(let message)? = session.model.item(id: rowId)?.content, message.editable,
               let row = session.model.item(id: rowId) else { return }
         app.startEditing(threadId: session.threadId, seq: row.seq, text: message.text, images: message.images)
+    }
+
+    /// The × by a queued message: it never goes.
+    func removeQueued(rowId: String) {
+        guard rowId.hasPrefix("p:"), let session, let app = session.app else { return }
+        app.removeQueued(threadId: session.threadId, pendingId: String(rowId.dropFirst(2)))
     }
 }
 

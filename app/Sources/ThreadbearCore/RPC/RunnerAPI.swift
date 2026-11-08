@@ -50,13 +50,26 @@ public extension RPCClient {
 
     @discardableResult
     func send(threadId: String, text: String, images: [ImageRef] = [], answers: [AskAnswer] = []) async throws -> String? {
+        try await sendMessage(threadId: threadId, text: text, images: images, answers: answers).turnId
+    }
+
+    /// `queue` (Cmd+Return) waits for the running turn rather than going
+    /// into it; the answer says whether it did (`queued`).
+    @discardableResult
+    func sendMessage(threadId: String, text: String, images: [ImageRef] = [], answers: [AskAnswer] = [], queue: Bool = false) async throws -> TurnResult {
         var params: [String: JSONValue] = ["threadId": .string(threadId), "text": .string(text)]
+        if queue { params["queue"] = .bool(true) }
         if !images.isEmpty { params["images"] = .array(images.map(\.jsonValue)) }
         // The card's answers it carries, for the bubble (docs/protocol.md, "Needs you").
         if !answers.isEmpty {
             params["answers"] = .array(answers.map { .object(["action": .string($0.action), "answer": .string($0.answer)]) })
         }
-        return try await call("threads.send", .object(params), as: TurnResult.self, timeout: RPCClient.sendTimeout).turnId
+        return try await call("threads.send", .object(params), as: TurnResult.self, timeout: RPCClient.sendTimeout)
+    }
+
+    /// Takes a queued message out before its turn starts.
+    func unqueue(threadId: String, turnId: String) async throws {
+        _ = try await call("threads.unqueue", .object(["threadId": .string(threadId), "turnId": .string(turnId)]), as: EmptyResult.self)
     }
 
     /// A send or a new thread waits longer than the usual 30 s: on a Mac
@@ -478,6 +491,10 @@ public struct ThreadResult: Sendable, Decodable {
 
 public struct TurnResult: Sendable, Decodable {
     public var turnId: String?
+    /// It went into the thread's queue behind the running turn, and
+    /// `turnId` is the turn it will start (docs/protocol.md, threads.send).
+    /// Absent from an older runner.
+    public var queued: Bool?
 }
 
 public struct SubscribeResult: Sendable, Decodable {

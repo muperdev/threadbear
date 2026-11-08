@@ -22,7 +22,7 @@ final class EveryClickShowsTests: XCTestCase {
 
     /// The calls that change something.
     private static let changing: Set<String> = [
-        "send", "editMessage", "createThread", "hibernateWhen", "removeHighlight", "runAction", "trustPatches",
+        "send", "sendMessage", "unqueue", "editMessage", "createThread", "hibernateWhen", "removeHighlight", "runAction", "trustPatches",
         "interrupt", "updateThread", "share", "tickAsk", "respond", "answerStartRequest", "approvePlan",
         "answerSecret", "checkClis", "updateCli", "setCliPolicy", "createSchedule", "updateSchedule",
         "deleteSchedule", "setRunnerOrder", "runSchedule", "createProject", "updateProject", "setProjectIcon",
@@ -40,6 +40,7 @@ final class EveryClickShowsTests: XCTestCase {
         "AppModel+ThreadActions.swift sendEdit": "editing.sending: the box shows it's sending",
         "AppModel+ThreadActions.swift send": "creatingThread: the Send button spins",
         "AppModel+ThreadActions.swift post": "the message shows dimmed in the transcript",
+        "AppModel+ThreadActions.swift takeBackQueued": "the queued message goes at once (and its words fill the box, for edit)",
         "AppModel+ThreadActions.swift bringInUpstream": "creatingThread: the buttons spin",
         "AppModel+ThreadActions.swift share": "async: the share popover shows its own state",
         "AppModel+ThreadActions.swift rename": "the title changes at once",
