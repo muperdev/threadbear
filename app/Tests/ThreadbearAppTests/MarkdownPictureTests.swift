@@ -36,6 +36,19 @@ final class MarkdownPictureTests: XCTestCase {
         XCTAssertEqual(style.maximumLineHeight, 0)
     }
 
+    func testAPictureInAFolderWithASpaceIsDrawn() throws {
+        // Every thread's media is under ~/Library/Application Support.
+        let folder = NSTemporaryDirectory() + "md picture \(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: folder) }
+        let path = folder + "/before shot.png"
+        try FileManager.default.moveItem(atPath: try png(width: 400, height: 300), toPath: path)
+        let text = MarkdownRenderer.render("![Before](\(path)) ![After](\(path))").string
+        let (_, range) = try XCTUnwrap(attachment(text))
+        XCTAssertEqual((text.attribute(.link, at: range.location, effectiveRange: nil) as? URL)?.path, path)
+        XCTAssertFalse(text.string.contains("]("))
+    }
+
     func testAMissingFileOrAWebPictureStaysALink() {
         let gone = MarkdownRenderer.render("![Gone](/tmp/no-such-picture-\(UUID().uuidString).png)").string
         XCTAssertNil(attachment(gone))

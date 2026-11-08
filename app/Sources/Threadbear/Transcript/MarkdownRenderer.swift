@@ -139,10 +139,18 @@ enum MarkdownRenderer {
     /// million cells (cross-lab review, 7 Nov 2026). Past this it's words.
     static let maxTableCells = 20_000
 
+    /// What the parser is given for a block: work:, thread: and file path
+    /// destinations with their spaces escaped, as a space ends a
+    /// destination (`[tests pass](work:npm test)`,
+    /// `![shot](/Users/me/Library/Application Support/…/shot.png)`).
+    static func parserSource(_ block: String) -> String {
+        PathLinks.escapeDestinations(WorkLinks.escapeDestinations(block))
+    }
+
     static func renderBlock(_ block: String) -> NSAttributedString {
         // Counted in what the parser gets: escaping work: links decodes
         // `%2A` into `*` (cross-lab review, 7 Nov 2026).
-        let marks = MarkdownNesting.inlineMarks(WorkLinks.escapeDestinations(block))
+        let marks = MarkdownNesting.inlineMarks(parserSource(block))
         guard marks > inlineMarksOnWorkerStack, marks <= maxInlineMarks else { return renderBlockHere(block) }
         // 256 MB holds 4,000 levels with room to spare (each takes a few KB
         // between swift-markdown and the Builder); a worker's is 512 KB.
@@ -167,14 +175,12 @@ enum MarkdownRenderer {
         let buttons = ReplyButtons.mayHold(block) ? ReplyButtons.shared.generation : -1
         let key = "\(TypeScale.percent)|\(rich ? RichBlocks.shared.generation : -1)|\(buttons)|\(localPictures ? 1 : 0)|\(block)" as NSString
         if let cached = cache.object(forKey: key) { return cached }
-        // `[tests pass](work:npm test)`: a space ends a link's destination
-        // for the parser, so work: and thread: links are escaped first.
         var builder = Builder()
         // Quotes or lists nested past this are plain words: parsing and
         // drawing them recurse once a level, on worker threads with small
         // stacks, and 8,000 `>`s from a reply ran one out (Daybreak, 7 Nov
         // 2026). Nothing anyone writes nests this deep.
-        let source = WorkLinks.escapeDestinations(block)
+        let source = parserSource(block)
         if MarkdownNesting.bound(source) > maxNesting || MarkdownNesting.inlineMarks(source) > maxInlineMarks || MarkdownNesting.tableCells(source) > maxTableCells {
             let start = builder.output.length
             builder.append(block, Context())
