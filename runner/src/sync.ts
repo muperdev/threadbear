@@ -517,7 +517,7 @@ type Host = {
 // phoneCommands), so they can answer later; apply() waits for each.
 export type CommandHost = {
   // origin: absent for a message Mike sent from the main Mac (a command `from: "mac"`).
-  send(threadId: string, text: string, images: ImageRef[], opts: { origin?: 'phone'; answers?: AskAnswer[] }): unknown;
+  send(threadId: string, text: string, images: ImageRef[], opts: { origin?: 'phone'; answers?: AskAnswer[]; queue?: boolean }): unknown;
   respondApproval(p: { threadId: string; approvalId: string; decision: ApprovalDecision; message?: string; answers?: Record<string, string>; remote?: boolean }): unknown;
   answerSecret(p: { threadId: string; approvalId: string; secret?: string; decline?: boolean }): unknown;
   update(p: { threadId: string; title?: string; snoozedUntil?: string | null; archived?: boolean; verdict?: ArchiveVerdict; starred?: boolean }): unknown;
@@ -3654,7 +3654,7 @@ export class ConvexSync {
     switch (c.kind) {
       case 'send': {
         const text = commandText(a);
-        await this.withPhoneImages(a.images, (images) => host.send(needThread(), text, images, { ...origin, ...(phoneAnswers(a.answers) ? { answers: phoneAnswers(a.answers) } : {}) }));
+        await this.withPhoneImages(a.images, (images) => host.send(needThread(), text, images, { ...origin, ...(phoneAnswers(a.answers) ? { answers: phoneAnswers(a.answers) } : {}), ...(a.queue === true ? { queue: true } : {}) }));
         return undefined;
       }
       case 'respond': {

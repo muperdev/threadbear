@@ -618,7 +618,7 @@ export class ThreadRouter implements ThreadControl {
 
   async send(threadId: string, text: string, images: Parameters<Runner['send']>[2] = [], opts: Parameters<Runner['send']>[3] = {}): Promise<{ turnId: string }> {
     const e = this.away(threadId);
-    return e ? e.call('threads.send', { threadId, text, images, ...(opts.answers ? { answers: opts.answers } : {}) }) : this.runner.send(threadId, text, images, opts);
+    return e ? e.call('threads.send', { threadId, text, images, ...(opts.answers ? { answers: opts.answers } : {}), ...(opts.queue ? { queue: true } : {}) }) : this.runner.send(threadId, text, images, opts);
   }
 
   async createReview(threadId: string, input: Parameters<Runner['createReview']>[1]): Promise<ReturnType<Runner['createReview']>> {
@@ -706,7 +706,7 @@ export function phoneCommands(runner: Runner, remote?: Pick<Peers, 'owns' | 'cal
     });
   };
   return {
-    send: (id, text, images, o) => at(id, 'threads.send', { text, ...(images.length ? { images } : {}), origin: o.origin, ...(o.answers ? { answers: o.answers } : {}) }, () => runner.send(id, text, images, o)) as { turnId: string },
+    send: (id, text, images, o) => at(id, 'threads.send', { text, ...(images.length ? { images } : {}), origin: o.origin, ...(o.answers ? { answers: o.answers } : {}), ...(o.queue ? { queue: true } : {}) }, () => runner.send(id, text, images, o)) as { turnId: string },
     respondApproval: (p) => at(p.threadId, 'approvals.respond', { ...p }, () => runner.respondApproval(p)),
     // Opened by sync.ts already; a thread still on a draining runner gets
     // it over the local link, both runners sharing the one data dir.

@@ -124,7 +124,7 @@ export function commandArgs(kind: Kind, raw: unknown): Record<string, unknown> {
   switch (kind) {
     case 'send':
       if (str(a.text) === undefined) throw bad('a send needs text');
-      out = pick(a, ['text', 'answers']);
+      out = pick(a, ['text', 'answers', 'queue']);
       break;
     case 'respond':
       if (!str(a.approvalId) || !['allow', 'allowAlways', 'deny', 'answered'].includes(String(a.decision))) throw bad('a respond needs approvalId and decision');

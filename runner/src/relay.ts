@@ -793,7 +793,7 @@ export class Relay {
       case 'threads.send': {
         if (Array.isArray(p.images) && p.images.length) this.unsupported(w, 'Sending pictures to another Mac');
         const text = typeof p.text === 'string' ? p.text : '';
-        const r = await this.command(w.runnerId, threadId, 'send', { text, ...(Array.isArray(p.answers) && p.answers.length ? { answers: p.answers } : {}) });
+        const r = await this.command(w.runnerId, threadId, 'send', { text, ...(Array.isArray(p.answers) && p.answers.length ? { answers: p.answers } : {}), ...(p.queue === true ? { queue: true } : {}) });
         // Not taken in TAKE_MS: it waits in the backend for that runner.
         return { turnId: '', ...(r.state === 'pending' ? { queued: true } : {}) };
       }

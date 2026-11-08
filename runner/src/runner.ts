@@ -1354,7 +1354,10 @@ export class Runner {
   // origin "runner" marks a message the runner sends by itself (restart.ts),
   // "schedule" one a schedule sent (schedules.ts). `queue` keeps it out of a
   // running turn: it waits and starts its own.
-  send(threadId: string, text: string, images: ImageRef[] = [], opts: SendOptions = {}): { turnId: string } {
+  // `queued` when it went into the queue rather than into a running turn
+  // or a turn of its own: `turnId` is then the one it will start, which
+  // unqueue takes.
+  send(threadId: string, text: string, images: ImageRef[] = [], opts: SendOptions = {}): { turnId: string; queued?: true } {
     const st = this.mustGet(threadId);
     this.checkAccepting();
     // A thread a draining runner is letting go of is about to be the new
@@ -1366,7 +1369,19 @@ export class Runner {
     // Its turn was made up; a real agent picking it up would only be lost.
     if (st.rec.sample) throw new RpcError(ErrorCode.badParams, "This is one of the tour's sample threads, so nothing can be sent to it. Start a new thread to try it for real.");
     checkImages(images);
-    return { turnId: this.sendTo(st, text, images, opts) };
+    const turnId = this.sendTo(st, text, images, opts);
+    return st.rec.queue.some((q) => q.turnId === turnId) ? { turnId, queued: true } : { turnId };
+  }
+
+  // Takes a message out of the queue before its turn starts (the app's
+  // remove or edit on a waiting message). Too late once it has started.
+  unqueue(threadId: string, turnId: string): Record<string, never> {
+    const st = this.mustGet(threadId);
+    const i = st.rec.queue.findIndex((q) => q.turnId === turnId);
+    if (i < 0) throw new RpcError(ErrorCode.badParams, "That message isn't waiting any more: it has started.");
+    st.rec.queue.splice(i, 1);
+    this.markDirty(st);
+    return {};
   }
 
   sendTo(st: ThreadState, text: string, images: ImageRef[], opts: SendOptions = {}): string {

@@ -63,6 +63,7 @@ const THREAD_METHODS = new Set([
   'threads.send',
   'threads.edit',
   'threads.interrupt',
+  'threads.unqueue',
   'threads.update',
   'threads.delete',
   'threads.events',
@@ -571,7 +572,9 @@ export class RpcServer {
       case 'buttons.press':
         return r.pressButton(reqString(p, 'threadId'), reqString(p, 'buttonId'));
       case 'threads.send':
-        return r.send(reqString(p, 'threadId'), optString(p, 'text') ?? '', optImages(p) ?? [], { ...optAnswers(p), ...optPhoneOrigin(p) });
+        return r.send(reqString(p, 'threadId'), optString(p, 'text') ?? '', optImages(p) ?? [], { ...optAnswers(p), ...optPhoneOrigin(p), ...(p.queue === true ? { queue: true } : {}) });
+      case 'threads.unqueue':
+        return r.unqueue(reqString(p, 'threadId'), reqString(p, 'turnId'));
       case 'threads.edit':
         return r.editMessage(reqString(p, 'threadId'), reqNumber(p, 'seq'), optString(p, 'text') ?? '', optImages(p) ?? [], { stopBackground: p.stopBackground === true });
       case 'threads.interrupt':
