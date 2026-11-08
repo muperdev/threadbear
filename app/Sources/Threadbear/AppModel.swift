@@ -370,6 +370,12 @@ final class AppModel {
     /// kept across launches: a Codex model is no use to a Claude thread.
     private(set) var lastModels: [String: String] = AppModel.loadMemory(AppModel.lastModelKey)
     private(set) var lastEfforts: [String: String] = AppModel.loadMemory(AppModel.lastEffortKey)
+    /// Fast mode for the next new Claude thread, kept across launches. Only
+    /// the draft's own toggle sets it: turning it on in one thread, which
+    /// costs more, doesn't carry into every new one.
+    var newThreadFastMode: Bool = UserDefaults.standard.bool(forKey: AppModel.newThreadFastKey) {
+        didSet { UserDefaults.standard.set(newThreadFastMode, forKey: Self.newThreadFastKey) }
+    }
     var newThreadPermission: PermissionMode = .full
     /// What the runner says about the Claude and Codex CLIs (`clis.list`,
     /// `clis.updated`). Empty until it's said anything.
@@ -699,6 +705,7 @@ final class AppModel {
     /// came along is still remembered; other providers add ".<provider>".
     static let lastModelKey = "lastModel"
     static let lastEffortKey = "lastEffort"
+    static let newThreadFastKey = "newThreadFastMode"
     static let memoryProviders = ["claude", "codex"]
     static let collapsedSectionsKey = "collapsedSections"
     /// Set once Hibernating and Archive have been folded the first time.

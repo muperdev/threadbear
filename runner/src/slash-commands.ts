@@ -92,9 +92,12 @@ export const THREADBEAR_COMMANDS: SlashCommand[] = [
   { name: 'effort', description: 'Set this thread\'s effort level', argumentHint: '[low|medium|high|xhigh|max]', source: 'threadbear' },
 ];
 
+// Claude only: fast mode, which the app's model picker also sets.
+const FAST_COMMAND: SlashCommand = { name: 'fast', description: 'Turn fast mode on or off: the same model, faster, at a higher price', argumentHint: '[on|off]', source: 'threadbear' };
+
 // Claude commands the picker leaves out: ones its CLI says "isn't available
 // in this environment" to, or that only make sense in its terminal.
-const CLAUDE_HIDDEN = new Set(['help', 'rewind', 'resume', 'login', 'logout', 'permissions', 'exit', 'quit', 'ide', 'terminal-setup', 'vim', 'theme', 'statusline', 'doctor', 'bug', 'feedback', 'hooks', 'agents', 'mcp', 'model', 'effort']);
+const CLAUDE_HIDDEN = new Set(['help', 'rewind', 'resume', 'login', 'logout', 'permissions', 'exit', 'quit', 'ide', 'terminal-setup', 'vim', 'theme', 'statusline', 'doctor', 'bug', 'feedback', 'hooks', 'agents', 'mcp', 'model', 'effort', 'fast']);
 
 export type CommandPlan =
   // Send it to the CLI as typed (its adapter knows what to do with it).
@@ -102,6 +105,7 @@ export type CommandPlan =
   // The runner does it.
   | { kind: 'model'; args: string }
   | { kind: 'effort'; args: string }
+  | { kind: 'fast'; args: string }
   | { kind: 'clear' }
   | { kind: 'status' }
   // Answered with this note, and nothing sent.
@@ -114,6 +118,7 @@ export function planCommand(provider: Provider, cmd: ParsedCommand, skills: Read
   const name = cmd.name.toLowerCase();
   if (name === 'model') return { kind: 'model', args: cmd.args };
   if (name === 'effort') return { kind: 'effort', args: cmd.args };
+  if (name === 'fast') return provider === 'claude' ? { kind: 'fast', args: cmd.args } : { kind: 'note', text: "Codex threads don't have fast mode." };
   if (provider === 'claude') {
     // Claude's CLI runs the rest itself, and answers any others it can't
     // ("/x isn't available in this environment").
@@ -134,7 +139,7 @@ export function planCommand(provider: Provider, cmd: ParsedCommand, skills: Read
 
 // The picker's list for a thread: Threadbear's own first, then the CLI's.
 export function commandList(provider: Provider, cli: SlashCommand[]): SlashCommand[] {
-  const own = provider === 'codex' ? [...THREADBEAR_COMMANDS, ...CODEX_COMMANDS] : THREADBEAR_COMMANDS;
+  const own = provider === 'codex' ? [...THREADBEAR_COMMANDS, ...CODEX_COMMANDS] : [...THREADBEAR_COMMANDS, FAST_COMMAND];
   const seen = new Set(own.map((c) => c.name));
   const rest = cli.filter((c) => {
     if (seen.has(c.name) || (provider === 'claude' && CLAUDE_HIDDEN.has(c.name))) return false;

@@ -50,6 +50,8 @@ final class ComposerChipsTests: XCTestCase {
         XCTAssertEqual(ComposerChips.chipTitle(model: "claude-fable-5-1", effort: "xhigh", choices: choices), "Fable 5.1 · Extra high")
         XCTAssertEqual(ComposerChips.chipTitle(model: "claude-fable-5-1", effort: nil, choices: choices), "Fable 5.1")
         XCTAssertEqual(ComposerChips.chipTitle(model: nil, effort: "low", choices: choices), "Default · Low")
+        XCTAssertEqual(ComposerChips.chipTitle(model: "claude-fable-5-1", effort: "high", fast: true, choices: choices), "Fable 5.1 · High · Fast")
+        XCTAssertEqual(ComposerChips.chipTitle(model: "claude-fable-5-1", effort: nil, fast: true, choices: choices), "Fable 5.1 · Fast")
         XCTAssertEqual(ComposerChips.choice(for: "claude-fable-5-1", in: choices)?.effortLevels, ["low", "max"])
     }
 

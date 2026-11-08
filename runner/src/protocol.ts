@@ -64,6 +64,7 @@ export type ModelChoice = {
   description?: string;
   effortLevels?: EffortLevel[];
   defaultEffort?: EffortLevel; // the model's own level, when the CLI says (Codex)
+  fastMode?: true; // the CLI offers fast mode on it (Claude's supportsFastMode)
 };
 
 export type UsageWindowKind = 'five_hour' | 'weekly' | 'weekly_model' | 'daily' | 'monthly' | 'allowance' | 'other';
@@ -183,6 +184,7 @@ export type ThreadSummary = {
   provider: Provider;
   model?: string;
   effort?: EffortLevel;
+  fastMode?: true; // Claude Code's fast mode; absent means standard speed
   modelInUse?: string;
   effortInUse?: EffortLevel;
   permissionMode: PermissionMode;

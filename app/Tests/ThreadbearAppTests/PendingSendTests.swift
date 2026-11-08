@@ -486,6 +486,18 @@ final class PendingSendTests: XCTestCase {
         XCTAssertNil(app.errorMessage)
     }
 
+    /// Fast mode shows on at once, and goes back off if the runner says no.
+    func testFastModeShowsAtOnceAndRollsBack() async throws {
+        let (app, transport) = try await connected()
+        app.setFastMode("th1", true)
+        XCTAssertEqual(app.threads["th1"]?.fastMode, true, "before the runner answers")
+        try await until { transport.waiting("threads.update") }
+        XCTAssertEqual(transport.params("threads.update")?["fastMode"] as? Bool, true)
+        transport.fail("threads.update", code: -32602, message: "No")
+        try await until { app.errorMessage != nil }
+        XCTAssertEqual(app.threads["th1"]?.fastMode, false)
+    }
+
     /// With no restart on, "Thread not found" for a pick is shown, and the
     /// guess put back.
     func testAnUpdateForAThreadNotFoundWithNoRestartStillFails() async throws {
@@ -515,6 +527,8 @@ final class PendingSendTests: XCTestCase {
         XCTAssertEqual(ThreadUpdate(permissionMode: .ask).applied(to: thread).permissionMode, .ask)
         XCTAssertEqual(ThreadUpdate(model: .some("haiku")).applied(to: thread).model, "haiku")
         XCTAssertNil(ThreadUpdate(model: .some(nil)).applied(to: thread).model, "back to the default")
+        XCTAssertTrue(ThreadUpdate(fastMode: true).applied(to: thread).fastMode)
+        XCTAssertFalse(ThreadUpdate(fastMode: false).applied(to: ThreadUpdate(fastMode: true).applied(to: thread)).fastMode)
         XCTAssertEqual(ThreadUpdate(accountId: "codex-main", model: .some("gpt")).applied(to: thread), thread)
         XCTAssertEqual(ThreadUpdate(cwd: "/tmp").applied(to: thread), thread)
     }

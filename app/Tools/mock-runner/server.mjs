@@ -53,7 +53,7 @@ const quiet = Boolean(args.quiet);
 // default its settings name.
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const models = [
-  { id: 'opus', model: 'claude-opus-5-5', title: 'Opus 5.5', description: 'For complex work and everyday tasks', effortLevels: EFFORTS },
+  { id: 'opus', model: 'claude-opus-5-5', title: 'Opus 5.5', description: 'For complex work and everyday tasks', effortLevels: EFFORTS, fastMode: true },
   { id: 'claude-fable-5-1[1m]', model: 'claude-fable-5-1', title: 'Fable 5.1', description: 'For your toughest challenges', effortLevels: EFFORTS },
   { id: 'sonnet', model: 'claude-sonnet-5-5', title: 'Sonnet 5.5', description: 'Most efficient for simpler tasks', effortLevels: EFFORTS },
   { id: 'haiku', model: 'claude-haiku-5-5', title: 'Haiku 5.5', description: 'Fastest for quick answers', effortLevels: EFFORTS },
@@ -636,6 +636,7 @@ async function dispatch(client, method, p) {
         ...(pool ? { poolId: pool.id } : {}),
         id: threadId, title: (p.title ?? p.text.split('\n')[0]).slice(0, 60), cwd: p.cwd ?? defaults.cwd,
         accountId, provider, model: p.model ?? defaults.models[provider], effort: p.effort ?? defaults.efforts[provider],
+        ...(p.fastMode === true && provider === 'claude' ? { fastMode: true } : {}),
         permissionMode: p.permissionMode ?? 'full', status: 'starting', live: true, needsYou: false,
         createdAt: now, updatedAt: now, lastActivityAt: now, preview: '', lastSeq: 0, lastSeenSeq: 0,
       };
@@ -727,6 +728,10 @@ async function dispatch(client, method, p) {
       if (s.poolId) delete s.waitingForRoom;
       if (p.model !== undefined) s.model = p.model ?? undefined;
       if (p.effort !== undefined) s.effort = p.effort ?? undefined;
+      // Fast mode: Claude only, and only on a model that has it, as the runner.
+      if (p.fastMode !== undefined) s.fastMode = p.fastMode === true || undefined;
+      const fastRow = models.find((m) => m.id === s.model || m.model === s.model);
+      if (s.provider !== 'claude' || (fastRow && !fastRow.fastMode)) delete s.fastMode;
       if (p.snoozedUntil !== undefined) {
         // "restart": until the runner next starts, as the runner keeps it.
         const untilRestart = p.snoozedUntil === 'restart';

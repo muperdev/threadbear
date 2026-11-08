@@ -754,3 +754,56 @@ test('archiving during a turn archives in Codex only once the live CLI has exite
   const archived: { nativeSessionId: string }[] = h.codex.archived;
   assert.ok(!archived.some((a) => a.nativeSessionId === '019a-back'));
 });
+
+// ---------------------------------------------------------------- fast mode
+
+test('fast mode: on a Claude thread it goes to the CLI at start and live, and a turn the CLI ran at standard speed says why, once', async () => {
+  const h = codexHarness();
+  const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-3', fastMode: true });
+  assert.equal(thread.fastMode, true);
+  assert.deepEqual(checkSummary(thread), []);
+  const s = h.adapter.last;
+  assert.equal(s.opts.fastMode, true);
+  s.init();
+  assert.equal(h.runner.update({ threadId: thread.id, fastMode: false }).thread.fastMode, undefined);
+  h.runner.update({ threadId: thread.id, fastMode: true });
+  // The same again changes nothing.
+  h.runner.update({ threadId: thread.id, fastMode: true });
+  assert.deepEqual(s.fastModes, [false, true]);
+  s.out({ kind: 'fastMode', state: 'off', reason: 'extra_usage_disabled' });
+  s.result();
+  s.out({ kind: 'fastMode', state: 'off', reason: 'extra_usage_disabled' });
+  s.out({ kind: 'fastMode', state: 'on' });
+  assert.deepEqual(notes(h, thread.id).filter((n) => /fast mode/i.test(n)), ["Fast mode isn't available (usage credits are off for this login), so this thread runs at standard speed."]);
+  // Not asked for: nothing to say.
+  const plain = h.runner.create({ text: 'hi', accountId: 'claude-3' }).thread;
+  assert.equal(plain.fastMode, undefined);
+  h.adapter.last.out({ kind: 'fastMode', state: 'off', reason: 'free' });
+  assert.deepEqual(notes(h, plain.id).filter((n) => /fast mode/i.test(n)), []);
+});
+
+test("fast mode: a Codex thread never has it, a model that doesn't offer it drops it, and a move to Codex clears it", async () => {
+  const h = codexHarness();
+  h.adapter.models = async () => [
+    { id: 'opus', model: 'claude-opus-5-5', title: 'Opus 5.5', fastMode: true },
+    { id: 'sonnet', model: 'claude-sonnet-5-5', title: 'Sonnet 5.5' },
+  ];
+  await h.runner.probeModels();
+  const codex = h.runner.create({ text: 'hi', accountId: 'codex-main', fastMode: true }).thread;
+  assert.equal(codex.fastMode, undefined);
+  assert.equal(h.codex.last.opts.fastMode, undefined);
+  assert.equal(h.runner.update({ threadId: codex.id, fastMode: true }).thread.fastMode, undefined);
+  const sonnet = h.runner.create({ text: 'hi', accountId: 'claude-3', model: 'sonnet', fastMode: true }).thread;
+  assert.equal(sonnet.fastMode, undefined);
+  assert.ok(notes(h, sonnet.id).includes("Sonnet 5.5 doesn't have fast mode, so this thread runs at standard speed."));
+  const opus = h.runner.create({ text: 'hi', accountId: 'claude-3', model: 'opus', fastMode: true }).thread;
+  assert.equal(opus.fastMode, true);
+  const s = h.adapter.last;
+  s.init();
+  // Onto a model without it: off, and the live CLI told.
+  assert.equal(h.runner.update({ threadId: opus.id, model: 'sonnet' }).thread.fastMode, undefined);
+  assert.deepEqual(s.fastModes, [false]);
+  h.runner.update({ threadId: opus.id, model: 'opus', fastMode: true });
+  assert.equal(h.runner.get(opus.id).fastMode, true);
+  assert.equal(h.runner.update({ threadId: opus.id, accountId: 'codex-main' }).thread.fastMode, undefined);
+});

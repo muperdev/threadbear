@@ -149,6 +149,25 @@ test('effort: sent at start, changed through flag settings, and read back from t
   state.close!();
 });
 
+test('fast mode: a flag setting at start (kept beside untrusted settings), changed through flag settings, and what the CLI said back', async () => {
+  const off = start();
+  assert.equal(off.state.options.settings, undefined);
+  off.state.close!();
+  const held = start([], { fastMode: true, untrustedProjectSettings: { permissions: { allow: ['Read'] } } });
+  assert.deepEqual(held.state.options.settings, { permissions: { allow: ['Read'] }, fastMode: true });
+  held.state.close!();
+  const { session, state, outputs } = start([], { fastMode: true });
+  // The SDK only lets fast mode on from flag settings (its opt-in).
+  assert.deepEqual(state.options.settings, { fastMode: true });
+  await session.setFastMode!(false);
+  await session.setFastMode!(true);
+  assert.deepEqual(state.flags, [{ fastMode: null }, { fastMode: true }]);
+  await state.frame!({ type: 'result', subtype: 'success', is_error: false, duration_ms: 5, fast_mode_state: 'off', fast_mode_disabled_reason: 'extra_usage_disabled', session_id: 's' });
+  await state.frame!({ type: 'result', subtype: 'success', is_error: false, duration_ms: 5, session_id: 's' });
+  assert.deepEqual(outputs.filter((o) => o.kind === 'fastMode'), [{ kind: 'fastMode', state: 'off', reason: 'extra_usage_disabled' }]);
+  state.close!();
+});
+
 test('Stop hook: a turn that skipped end_turn is sent back once to call it', async () => {
   const { state } = start([], {}, { mcpServersFor: () => ({ threadbear: { type: 'sdk', name: 'threadbear' } }) });
   const stop = state.options.hooks.Stop[0].hooks[0];
@@ -292,7 +311,7 @@ test("models() asks a promptless CLI for its picker; the 'default' row is left o
   const { fn, state } = fakeQuery();
   state.models = [
     { value: 'default', resolvedModel: 'claude-opus-5-5', displayName: 'Default (recommended)', description: 'Opus 5.5 · Best' },
-    { value: 'opus', resolvedModel: 'claude-opus-5-5', displayName: 'Opus 5.5', description: 'For complex work', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+    { value: 'opus', resolvedModel: 'claude-opus-5-5', displayName: 'Opus 5.5', description: 'For complex work', supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'], supportsFastMode: true },
     { value: 'claude-fable-5-1[1m]', resolvedModel: 'claude-fable-5-1', displayName: 'Fable 5.1', supportsEffort: true, supportedEffortLevels: ['low', 'nope'] },
     { value: 'claude-haiku-4-5-20251001', displayName: 'Haiku 4.5', description: 'Fastest' },
   ];
@@ -300,7 +319,7 @@ test("models() asks a promptless CLI for its picker; the 'default' row is left o
   const adapter = new ClaudeAdapter({ claudePath: '/nonexistent', registry: new ProcessRegistry(dir, nullLogger), log: nullLogger, queryFn: fn });
   const models = await adapter.models({ id: 'claude-3', provider: 'claude', title: 'x', configDir: dir });
   assert.deepEqual(models, [
-    { id: 'opus', model: 'claude-opus-5-5', title: 'Opus 5.5', description: 'For complex work', effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+    { id: 'opus', model: 'claude-opus-5-5', title: 'Opus 5.5', description: 'For complex work', effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'], fastMode: true },
     { id: 'claude-fable-5-1[1m]', model: 'claude-fable-5-1', title: 'Fable 5.1', effortLevels: ['low'] },
     { id: 'claude-haiku-4-5-20251001', model: 'claude-haiku-4-5-20251001', title: 'Haiku 4.5', description: 'Fastest' },
   ]);

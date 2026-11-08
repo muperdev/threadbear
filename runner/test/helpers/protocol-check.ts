@@ -206,6 +206,8 @@ export function checkSummary(t: Obj): string[] {
     if (!ok) problems.push('waitingOn');
   }
   for (const k of ['effort', 'effortInUse']) if (t[k] !== undefined && !EFFORTS.includes(t[k])) problems.push(k);
+  // Present only when on, and only on a Claude thread.
+  if (t.fastMode !== undefined && !(t.fastMode === true && t.provider === 'claude')) problems.push('fastMode');
   for (const k of ['contextTokens', 'contextWindow', 'costUsd']) if (t[k] !== undefined && !isNum(t[k])) problems.push(k);
   if (t.panels !== undefined) {
     if (!Array.isArray(t.panels) || t.panels.length === 0) problems.push('panels (absent when empty)');
@@ -316,7 +318,7 @@ export function checkSummary(t: Obj): string[] {
     'id', 'title', 'cwd', 'accountId', 'provider', 'model', 'permissionMode', 'status', 'live', 'needsYou', 'createdAt', 'updatedAt',
     'lastActivityAt', 'snoozedUntil', 'snoozedUntilRestart', 'snoozedUntilRelease', 'archivedAt', 'archivedBy', 'archiveVerdict', 'starredAt', 'preview', 'lastSeq', 'lastSeenSeq', 'nativeSessionId', 'contextTokens', 'costUsd',
     'poolId', 'waitingForRoom', 'waitingForNetwork', 'wakeWhen', 'waitingOn',
-    'effort', 'modelInUse', 'effortInUse', 'contextWindow', 'panels', 'actions', 'hooks', 'patches', 'background', 'subagents', 'projects', 'worktree',
+    'effort', 'fastMode', 'modelInUse', 'effortInUse', 'contextWindow', 'panels', 'actions', 'hooks', 'patches', 'background', 'subagents', 'projects', 'worktree',
     'needs', 'asks', 'asksSeq', 'highlightsAt', 'panelRequest', 'share', 'startedBy', 'asked', 'looseEnds',
   ]);
   for (const k of Object.keys(t)) if (!allowed.has(k)) problems.push(`unexpected field ${k}`);
@@ -339,6 +341,7 @@ function checkModelChoice(m: Obj): string[] {
     problems.push('effortLevels');
   }
   if (m?.defaultEffort !== undefined && !EFFORTS.includes(m.defaultEffort)) problems.push('defaultEffort');
+  if (m?.fastMode !== undefined && m.fastMode !== true) problems.push('fastMode');
   return problems.map((p) => `models[${m?.id}].${p}`);
 }
 

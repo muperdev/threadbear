@@ -27,6 +27,7 @@ export type StartSessionOptions = {
   account: Account;
   model?: string;
   effort?: EffortLevel; // undefined: the model's own level
+  fastMode?: boolean; // Claude only
   permissionMode: PermissionMode;
   // Its CLI must run in a sandbox (sandbox.ts, ThreadRecord.confined): an
   // adapter that can't put it in one refuses to start it.
@@ -104,6 +105,9 @@ export type AdapterOutput =
   | { kind: 'session'; nativeSessionId: string; model?: string }
   // The effort level the CLI applied to the turn that just ended.
   | { kind: 'effort'; level: EffortLevel }
+  // Whether the turn that just ended ran in fast mode, and if not, why
+  // (the CLI's fast_mode_disabled_reason). Claude only.
+  | { kind: 'fastMode'; state: 'off' | 'cooldown' | 'on'; reason?: string }
   | { kind: 'context'; contextTokens: number; contextWindow?: number }
   // A rate-limit reading for the session's account (D's UsageStore keeps
   // it). email and plan come with it when the CLI reports them.
@@ -220,6 +224,8 @@ export interface AgentSession {
   interrupt(): Promise<void>;
   setModel(model: string | undefined): Promise<void>;
   setEffort(effort: EffortLevel | undefined): Promise<void>;
+  // Claude only: the runner never asks a session without it.
+  setFastMode?(on: boolean): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
   // From now on every tool call goes to the approval card's check, past
   // any allow rule the CLI loaded: a session started in Full with a

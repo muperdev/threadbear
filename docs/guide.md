@@ -461,7 +461,8 @@ uncommitted changes, or what you write after it), `/clear` or `/new`,
 
 Two are Threadbear's own, on both: `/model` and `/effort` change the
 thread's model and effort level, the same as the menus under the message
-box, so the change sticks. On their own they say what the thread is on and
+box, so the change sticks. In a Claude thread `/fast` turns fast mode on
+or off (`/fast on`, `/fast off`). On their own they say what the thread is on and
 what you can pick. `/clear` starts the agent on a fresh session; the
 transcript above stays for you to read.
 
@@ -818,6 +819,17 @@ Claude Code login in `~/.claude` and the Codex login in `~/.codex`. It never
 reads their passwords or tokens. The account and model a thread runs on are
 small menus on the composer. Whatever you picked last is what the next
 thread starts on.
+
+On a Claude model that has it (Opus, for now), the model picker has
+Standard and Fast under the effort levels. Fast is Claude Code's fast
+mode: the same model, answering faster, at a higher price (on a
+subscription it draws from usage credits). It's for that one thread, and
+its chip then ends in "Fast", like "Opus 5.5 · High · Fast". Turning it on
+in a thread doesn't carry into new ones; the new-thread picker's own
+toggle does. Picking a model without it puts the thread back on Standard,
+and if your login can't have fast mode (no usage credits, or your
+organization turned it off), the thread says why once and carries on at
+standard speed. Codex threads don't have it.
 
 Once a thread has run a turn, a small ring beside the send button shows
 how full its context is: how much of the model's window the conversation

@@ -62,12 +62,13 @@ public enum ComposerChips {
         choices.first { $0.id == id } ?? choices.first { $0.model == id }
     }
 
-    /// The model chip: the model's title, and the effort level after a dot
-    /// when one is known ("Fable 5.1 · High").
-    public static func chipTitle(model: String?, effort: String?, choices: [ModelChoice]) -> String {
-        let title = modelTitle(model, choices: choices)
-        guard let effort, !effort.isEmpty else { return title }
-        return "\(title) · \(effortTitle(effort))"
+    /// The model chip: the model's title, the effort level after a dot
+    /// when one is known, and "Fast" in fast mode ("Opus 5.5 · High · Fast").
+    public static func chipTitle(model: String?, effort: String?, fast: Bool = false, choices: [ModelChoice]) -> String {
+        var parts = [modelTitle(model, choices: choices)]
+        if let effort, !effort.isEmpty { parts.append(effortTitle(effort)) }
+        if fast { parts.append("Fast") }
+        return parts.joined(separator: " · ")
     }
 
     /// The CLI's effort levels, lowest first.

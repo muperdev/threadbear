@@ -101,6 +101,18 @@ export const commandsPart = {
           say(rec.effort ? `Effort set to ${effortTitle(rec.effort)}.` : "Back to the model's own effort level.");
           break;
         }
+        case 'fast': {
+          const arg = plan.args.trim().toLowerCase();
+          const on = arg === '' ? !rec.fastMode : arg === 'on' ? true : arg === 'off' ? false : undefined;
+          if (on === undefined) {
+            say(`Type /fast on or /fast off. It's ${rec.fastMode ? 'on' : 'off'} now.`);
+            break;
+          }
+          // A model without it says so through update's note instead.
+          this.update({ threadId: rec.id, fastMode: on });
+          if ((rec.fastMode === true) === on) say(rec.fastMode ? 'Fast mode on: the same model, answering faster, at a higher price.' : 'Fast mode off: standard speed.');
+          break;
+        }
         case 'clear':
           // A fresh native session from the next message; the CLI that has
           // the old one goes once this turn is over.

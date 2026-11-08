@@ -315,6 +315,7 @@ export function modelChoices(rows: ModelInfo[]): ModelChoice[] {
       const levels = row.supportedEffortLevels.filter(isEffortLevel);
       if (levels.length) choice.effortLevels = levels;
     }
+    if (row.supportsFastMode === true) choice.fastMode = true;
     out.push(choice);
   }
   return out;
@@ -446,6 +447,9 @@ class ClaudeSession implements AgentSession {
     if (opts.model) options.model = opts.model;
     const effort = claudeEffort(opts.effort);
     if (effort) options.effort = effort;
+    // Fast mode only comes on in an SDK session from flag settings (the
+    // CLI's sdk_opt_in_required otherwise), beside any untrusted folder's.
+    if (opts.fastMode) options.settings = { ...((options.settings as Record<string, unknown> | undefined) ?? {}), fastMode: true };
     // The never-ask tools go in as allow rules too, so the CLI lets them
     // through before its own checks (Auto's classifier included) rather
     // than relying on canUseTool being reached. They're not the thread's
@@ -789,6 +793,13 @@ class ClaudeSession implements AgentSession {
   async setEffort(effort: EffortLevel | undefined): Promise<void> {
     if (this.exited) return;
     await this.q.applyFlagSettings({ effortLevel: claudeEffort(effort) ?? null });
+  }
+
+  // null rather than false, so it's off without hiding a setting of
+  // Mike's own beneath (as setEffort).
+  async setFastMode(on: boolean): Promise<void> {
+    if (this.exited) return;
+    await this.q.applyFlagSettings({ fastMode: on ? true : null });
   }
 
   // Leaving Full access counts at once and coming to it only once the CLI

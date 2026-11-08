@@ -189,8 +189,8 @@ public enum Pools {
 
     /// The model chip: who runs it (the pool's title, or a pinned login's
     /// short name), the model and the effort: "Claude · Opus 5.5 · High".
-    public static func chipTitle(owner: String?, model: String?, effort: String?, choices: [ModelChoice]) -> String {
-        let rest = ComposerChips.chipTitle(model: model, effort: effort, choices: choices)
+    public static func chipTitle(owner: String?, model: String?, effort: String?, fast: Bool = false, choices: [ModelChoice]) -> String {
+        let rest = ComposerChips.chipTitle(model: model, effort: effort, fast: fast, choices: choices)
         guard let owner, !owner.isEmpty else { return rest }
         return owner + " · " + rest
     }

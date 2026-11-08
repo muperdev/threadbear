@@ -884,6 +884,12 @@ extension AppModel {
         update(threadId, ThreadUpdate(effort: .some(effort)))
     }
 
+    /// Fast mode on one thread. Unlike model and effort it isn't what the
+    /// next new thread starts on (`newThreadFastMode`).
+    func setFastMode(_ threadId: String, _ on: Bool) {
+        update(threadId, ThreadUpdate(fastMode: on))
+    }
+
     /// Keeps a last-picked value across launches; nil (the default) clears it.
     static func remember(_ value: String?, forKey key: String) {
         if let value, !value.isEmpty { UserDefaults.standard.set(value, forKey: key) }

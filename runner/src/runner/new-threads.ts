@@ -28,6 +28,7 @@ export const newThreadsPart = {
     poolId?: string;
     model?: string;
     effort?: EffortLevel;
+    fastMode?: boolean;
     permissionMode?: PermissionMode;
     title?: string;
     origin?: MessageOrigin;
@@ -150,6 +151,7 @@ export const newThreadsPart = {
     poolId?: string;
     model?: string;
     effort?: EffortLevel;
+    fastMode?: boolean;
     permissionMode?: PermissionMode;
     title?: string;
     origin?: MessageOrigin;
@@ -212,6 +214,12 @@ export const newThreadsPart = {
     const checked = this.checkSettings(account, params.model || this.defaultModelFor(account.provider), params.effort ?? this.defaultEffortFor(account.provider));
     if (checked.model) rec.model = checked.model;
     if (checked.effort) rec.effort = checked.effort;
+    const notes = checked.notes;
+    if (params.fastMode) {
+      const fast = this.checkFastMode(account, rec.model);
+      if (fast.ok) rec.fastMode = true;
+      else if (fast.note) notes.push(fast.note);
+    }
     // Whether the first turn should look for a worktree patch. Reading the
     // patch files is async, so it happens there; a folder with no patch
     // files at all (most of them) starts its CLI straight away as before.
@@ -233,7 +241,7 @@ export const newThreadsPart = {
       /* keep the last pick */
     } else if (!poolId) this.rememberAccount(accountId);
     else if (params.poolId !== undefined) this.rememberPool(poolId);
-    return { st, notes: checked.notes };
+    return { st, notes };
   },
 
   // An account whose CLI this runner can't drive (a Codex login found
@@ -273,6 +281,17 @@ export const newThreadsPart = {
       }
     }
     return { ...(model ? { model } : {}), ...(effort ? { effort } : {}), notes };
+  },
+
+  // Whether a thread on this account and model can have fast mode: Claude
+  // only (silently: nothing offers it on Codex), and not on a model the
+  // CLI's list says doesn't have it. Before the list is known, or for a
+  // model it doesn't list, the CLI decides (Runner's 'fastMode' output).
+  checkFastMode(this: Runner, account: Account, model: string | undefined): { ok: boolean; note?: string } {
+    if (account.provider !== 'claude') return { ok: false };
+    const row = modelRow(account, model ?? account.defaultModel);
+    if (row && !row.fastMode) return { ok: false, note: `${row.title} doesn't have fast mode, so this thread runs at standard speed.` };
+    return { ok: true };
   },
 
   // Whether a thread on this account can run this model id. Codex: one the

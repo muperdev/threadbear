@@ -511,6 +511,12 @@ export class ClaudeNormalizer {
     // a client can show how full the context is.
     const window = contextWindowOf(msg.modelUsage, this.model);
     if (window !== undefined && this.contextNow !== undefined) out.push({ kind: 'context', contextTokens: this.contextNow, contextWindow: window });
+    // Before the result, so a note about it lands in the turn it's about.
+    const fast = msg.fast_mode_state;
+    if (fast === 'off' || fast === 'on' || fast === 'cooldown') {
+      const reason = msg.fast_mode_disabled_reason;
+      out.push({ kind: 'fastMode', state: fast, ...(typeof reason === 'string' && reason ? { reason } : {}) });
+    }
     out.push({ kind: 'result', result });
   }
 }

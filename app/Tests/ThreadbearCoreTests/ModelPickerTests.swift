@@ -77,6 +77,19 @@ final class ModelPickerTests: XCTestCase {
 
     /// The levels come from the chosen model's row when the CLI gave any,
     /// else the usual five.
+    /// Fast mode is offered only on a Claude model whose row says it has
+    /// it, so nothing shows before the list is known.
+    func testFastModeFollowsTheModel() {
+        var withFast = choices
+        withFast[0].fastMode = true
+        XCTAssertTrue(ModelPicker.offersFastMode(model: "opus", in: withFast))
+        XCTAssertTrue(ModelPicker.offersFastMode(model: "claude-opus-5-5", in: withFast), "by the full id too")
+        XCTAssertFalse(ModelPicker.offersFastMode(model: "sonnet", in: withFast))
+        XCTAssertFalse(ModelPicker.offersFastMode(model: "opus", in: []), "no list yet")
+        XCTAssertFalse(ModelPicker.offersFastMode(model: nil, in: withFast))
+        XCTAssertFalse(ModelPicker.offersFastMode(model: "opus", in: withFast, provider: "codex"))
+    }
+
     func testEffortLevelsFollowTheModel() {
         XCTAssertEqual(ModelPicker.effortLevels(for: "claude-opus-5", in: choices), ["low", "high"])
         XCTAssertEqual(ModelPicker.effortLevels(for: "claude-haiku-4-5-20251001", in: choices), efforts, "no levels listed: the usual ones")

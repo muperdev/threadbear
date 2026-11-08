@@ -186,6 +186,14 @@ public enum ModelPicker {
         return levels
     }
 
+    /// Whether the picker offers fast mode for a model: Claude only, and
+    /// only where the CLI's list says the model has it, so nothing shows
+    /// before the list is known (protocol "Fast mode").
+    public static func offersFastMode(model: String?, in choices: [ModelChoice], provider: String = "claude") -> Bool {
+        guard provider == "claude", let model else { return false }
+        return ComposerChips.choice(for: model, in: choices)?.fastMode == true
+    }
+
     /// The level a thread with none chosen runs at, when it's known: the
     /// runner's default for the provider (new threads), else the account's
     /// own (Codex's `model_reasoning_effort`), else the model's.

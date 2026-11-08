@@ -47,6 +47,7 @@ export type ThreadRecord = {
   provider: Provider;
   model?: string;
   effort?: EffortLevel;
+  fastMode?: true; // Claude Code's fast mode, asked for (docs/protocol.md, "Fast mode")
   modelInUse?: string; // full id the CLI ran the last turn on
   effortInUse?: EffortLevel; // the level the CLI reported for the last turn
   permissionMode: PermissionMode;

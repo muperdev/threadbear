@@ -33,6 +33,7 @@ public extension RPCClient {
         if let poolId = request.poolId { params["poolId"] = .string(poolId) }
         if let model = request.model { params["model"] = .string(model) }
         if let effort = request.effort { params["effort"] = .string(effort) }
+        if request.fastMode { params["fastMode"] = .bool(true) }
         if let mode = request.permissionMode { params["permissionMode"] = .string(mode.rawValue) }
         if let title = request.title { params["title"] = .string(title) }
         if let runnerId = request.runnerId { params["runnerId"] = .string(runnerId) }
@@ -346,14 +347,17 @@ public struct NewThreadRequest: Sendable, Hashable {
     public var poolId: String?
     public var model: String?
     public var effort: String?
+    /// Claude Code's fast mode (protocol "Fast mode").
+    public var fastMode: Bool
     public var permissionMode: PermissionMode?
     public var title: String?
     /// Another runner, when this Mac's runner makes it there through
     /// Convex (docs/protocol.md, "Other runners' threads through the backend").
     public var runnerId: String?
 
-    public init(text: String, images: [ImageRef] = [], cwd: String? = nil, accountId: String? = nil, poolId: String? = nil, model: String? = nil, effort: String? = nil, permissionMode: PermissionMode? = nil, title: String? = nil) {
+    public init(text: String, images: [ImageRef] = [], cwd: String? = nil, accountId: String? = nil, poolId: String? = nil, model: String? = nil, effort: String? = nil, fastMode: Bool = false, permissionMode: PermissionMode? = nil, title: String? = nil) {
         self.text = text
+        self.fastMode = fastMode
         self.images = images
         self.cwd = cwd
         self.accountId = accountId
@@ -396,6 +400,8 @@ public struct ThreadUpdate: Sendable, Hashable {
     public var accountId: String?
     public var model: String??
     public var effort: String??
+    /// Claude Code's fast mode on or off.
+    public var fastMode: Bool?
     public var permissionMode: PermissionMode?
     public var snoozedUntil: Date??
     /// Hibernate until the runner next starts (`snoozedUntil: "restart"`).
@@ -411,8 +417,9 @@ public struct ThreadUpdate: Sendable, Hashable {
     /// null, which pins it to the login it's on. `accountId` pins too.
     public var poolId: String??
 
-    public init(title: String? = nil, cwd: String? = nil, accountId: String? = nil, model: String?? = nil, effort: String?? = nil, permissionMode: PermissionMode? = nil, snoozedUntil: Date?? = nil, snoozeUntilRestart: Bool = false, archived: Bool? = nil, verdict: ArchiveVerdict? = nil, starred: Bool? = nil, poolId: String?? = nil) {
+    public init(title: String? = nil, cwd: String? = nil, accountId: String? = nil, model: String?? = nil, effort: String?? = nil, fastMode: Bool? = nil, permissionMode: PermissionMode? = nil, snoozedUntil: Date?? = nil, snoozeUntilRestart: Bool = false, archived: Bool? = nil, verdict: ArchiveVerdict? = nil, starred: Bool? = nil, poolId: String?? = nil) {
         self.verdict = verdict
+        self.fastMode = fastMode
         self.title = title
         self.cwd = cwd
         self.accountId = accountId
@@ -433,6 +440,7 @@ public struct ThreadUpdate: Sendable, Hashable {
         if let accountId { params["accountId"] = .string(accountId) }
         if let model { params["model"] = model.map { .string($0) } ?? .null }
         if let effort { params["effort"] = effort.map { .string($0) } ?? .null }
+        if let fastMode { params["fastMode"] = .bool(fastMode) }
         if let permissionMode { params["permissionMode"] = .string(permissionMode.rawValue) }
         if snoozeUntilRestart {
             params["snoozedUntil"] = .string("restart")
@@ -459,6 +467,7 @@ public struct ThreadUpdate: Sendable, Hashable {
         if accountId == nil, poolId == nil {
             if let model { thread.model = model }
             if let effort { thread.effort = effort }
+            if let fastMode { thread.fastMode = fastMode }
         }
         if snoozeUntilRestart {
             thread.snoozedUntil = .distantFuture
