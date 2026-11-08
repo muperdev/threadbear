@@ -95,7 +95,13 @@ private struct InboxList: View {
             let layout = open.flatMap { section in
                 drawn(section).map { SectionRow.id(section: section.title, thread: $0.id) }
             }
-            ThreadList(order: order, layout: layout, scrollID: { rowIDs[$0] ?? $0 }) { select in
+            let dock = ArchiveDock.place(collapsed: app.collapsedSections.contains(.archived), searching: searching)
+            let archiveSection = { (select: @escaping (String) -> Void) in
+                ThreadSection(section: .archived, threads: archive.rows, total: archived.count, more: archive.more,
+                              searching: searching, showMore: { archiveLimit += ArchiveRows.step }, select: select)
+            }
+            ThreadList(order: order, layout: layout, scrollID: { rowIDs[$0] ?? $0 },
+                       reveal: searching ? nil : (open: dock == .endOfList, id: ArchiveDock.headingID)) { select in
                 if !app.threadsLoaded {
                     // Before the runner's first list: rows shaped like
                     // threads, so the sidebar reads as loading, not empty.
@@ -104,11 +110,9 @@ private struct InboxList: View {
                     if searching && sections.isEmpty {
                         EmptyNote(text: "No threads match.")
                     }
-                    ForEach(InboxSection.allCases, id: \.self) { section in
-                        if section == .archived {
-                            ThreadSection(section: section, threads: archive.rows, total: archived.count, more: archive.more,
-                                          searching: searching, showMore: { archiveLimit += ArchiveRows.step }, select: select)
-                        } else if section == .hibernating {
+                    // Archived goes at the foot, below (`ArchiveDock`).
+                    ForEach(InboxSection.allCases.filter { $0 != .archived }, id: \.self) { section in
+                        if section == .hibernating {
                             // The heading comes up as the first thread sets
                             // off for it, so there's a moon to land in.
                             ThreadSection(section: section, threads: hibernating, searching: searching,
@@ -127,6 +131,15 @@ private struct InboxList: View {
                             InboxZero()
                         }
                     }
+                }
+            } footer: { select in
+                if app.threadsLoaded && dock == .endOfList {
+                    Color.clear.frame(height: 0).id(ArchiveDock.headingID)
+                    archiveSection(select)
+                }
+            } pinned: { select in
+                if app.threadsLoaded && dock == .pinned {
+                    archiveSection(select)
                 }
             }
             // An archived panel falls off the bottom of this when the
@@ -290,6 +303,29 @@ enum ArchiveRows {
         let count = min(archived.count, max(limit, selected))
         return (Array(archived.prefix(count)), archived.count - count)
     }
+}
+
+/// Where the Archived section goes: at the foot of the inbox's column
+/// whatever the number of threads (Behrooz asked 8 Nov; it had floated
+/// mid-column under the last section). Folded, its heading is pinned below
+/// the scrolling list, so it's always in sight. Open, or while a search
+/// draws its matches, it's the list's last section, and the list is made
+/// at least as tall as the column so a short one still puts it at the foot.
+enum ArchiveDock: Equatable {
+    case pinned, endOfList
+
+    static func place(collapsed: Bool, searching: Bool) -> ArchiveDock {
+        collapsed && !searching ? .pinned : .endOfList
+    }
+
+    /// The room to leave above the footer so the rows (`rows` tall without
+    /// it) end at the foot of the column, above the room left at the bottom.
+    static func gap(viewport: CGFloat, bottomPadding: CGFloat, rows: CGFloat) -> CGFloat {
+        max(0, viewport - bottomPadding - rows)
+    }
+
+    /// The Archived heading's id in the list, to scroll to as it opens.
+    static let headingID = "archived-heading"
 }
 
 /// A row's identity in the lazy stack includes its section. Keyed by the
@@ -483,7 +519,7 @@ extension InboxSection {
 /// are drawn here rather than in a `List` because the sidebar list style
 /// paints its own accent-coloured selection, which can't be made as quiet
 /// as the other agent apps' grey highlight.
-struct ThreadList<Content: View>: View {
+struct ThreadList<Content: View, Footer: View, Pinned: View>: View {
     @Environment(AppModel.self) private var app
     /// Thread ids top to bottom, for the arrow keys.
     let order: [String]
@@ -492,20 +528,44 @@ struct ThreadList<Content: View>: View {
     var layout: [String]? = nil
     /// The id a thread's row has in the stack, to scroll it into view.
     var scrollID: (String) -> String = { $0 }
+    /// Scrolled to the top of the list as it turns true: the Archived
+    /// heading's id as it leaves the foot and opens into the list.
+    var reveal: (open: Bool, id: String)? = nil
     @ViewBuilder let content: (_ select: @escaping (String) -> Void) -> Content
+    /// The list's last rows, held at the foot of the column when the list
+    /// is shorter than it (`ArchiveDock`).
+    @ViewBuilder var footer: (_ select: @escaping (String) -> Void) -> Footer
+    /// Below the scrolling list, always in sight (`ArchiveDock`).
+    @ViewBuilder var pinned: (_ select: @escaping (String) -> Void) -> Pinned
     @FocusState private var focused: Bool
     @Namespace private var rowSpace
+    /// The scroll view's height, so the rows can fill it.
+    @State private var viewport: CGFloat = 0
+    /// Room between the rows and the footer, so the footer meets the foot.
+    @State private var gap: CGFloat = 0
+    private static var bottomPadding: CGFloat { zoomed(32) }
 
     var body: some View {
+        let select: (String) -> Void = { id in
+            // Clicking a row gives the list focus, so the arrow
+            // keys move through threads from there.
+            focused = true
+            app.select(id)
+        }
         ScrollViewReader { proxy in
+          VStack(spacing: 0) {
             ScrollView {
+                // One lazy stack, with a gap before the footer that makes it
+                // fill the column: a second stack under the first left the
+                // first blank when a search shrank a list scrolled down.
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    content { id in
-                        // Clicking a row gives the list focus, so the arrow
-                        // keys move through threads from there.
-                        focused = true
-                        app.select(id)
-                    }
+                    content(select)
+                    Color.clear.frame(height: gap)
+                    footer(select)
+                }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                    let fill = ArchiveDock.gap(viewport: viewport, bottomPadding: Self.bottomPadding, rows: height - gap)
+                    if abs(fill - gap) > 0.5 { gap = fill }
                 }
                 .environment(\.sidebarRowSpace, rowSpace)
                 // Only when rows come, go or change places, or the selection
@@ -515,8 +575,11 @@ struct ThreadList<Content: View>: View {
                 .animation(Juice.selection, value: SelectionKey(thread: app.selection, subagent: app.subagentSelection, project: app.openProjectId))
                 .padding(.horizontal, SidebarMetrics.outerInset)
                 // Room for the last row to scroll clear of the fade below.
-                .padding(.bottom, zoomed(32))
+                .padding(.bottom, Self.bottomPadding)
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewport = $0 }
+            // The gap follows the column's height as well as the rows'.
+            .onChange(of: viewport) { gap = 0 }
             // With a mouse connected macOS draws a legacy scroller with a
             // track down the list, which also pushed the times left. Codex,
             // Claude and T3 show none; the list scrolls the same without it.
@@ -556,7 +619,27 @@ struct ThreadList<Content: View>: View {
             .onExitCommand {
                 if app.sidebarMode != .inbox { app.sidebarMode = .inbox }
             }
+            .onChange(of: reveal?.open ?? false) { _, open in
+                guard open, let id = reveal?.id else { return }
+                // Once the section has its rows in the list.
+                DispatchQueue.main.async {
+                    withAnimation(.snappy(duration: 0.25)) { proxy.scrollTo(id, anchor: .top) }
+                }
+            }
+            pinned(select)
+                .padding(.horizontal, SidebarMetrics.outerInset)
+                .padding(.bottom, zoomed(8))
+                .environment(\.sidebarRowSpace, rowSpace)
+          }
         }
+    }
+}
+
+extension ThreadList where Footer == EmptyView, Pinned == EmptyView {
+    init(order: [String], layout: [String]? = nil, scrollID: @escaping (String) -> String = { $0 },
+         @ViewBuilder content: @escaping (_ select: @escaping (String) -> Void) -> Content) {
+        self.init(order: order, layout: layout, scrollID: scrollID, content: content,
+                  footer: { _ in EmptyView() }, pinned: { _ in EmptyView() })
     }
 }
 
