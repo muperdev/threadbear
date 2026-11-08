@@ -25,7 +25,7 @@ type Msg = Record<string, unknown>;
 
 function relay(): void {
   const sock = net.createConnection(process.env.FAKE_CODEX_SOCKET!);
-  const keep = ['CODEX_HOME', 'CODEX_MANAGED_BY_NPM', 'CODEX_MANAGED_PACKAGE_ROOT', 'CODEX_INTERNAL_ORIGINATOR_OVERRIDE', 'CODEX_THREAD_ID', 'THREADBEAR_THREAD_ID', 'CLAUDECODE', 'CLAUDE_CONFIG_DIR'];
+  const keep = ['CODEX_HOME', 'GROK_HOME', 'CODEX_MANAGED_BY_NPM', 'CODEX_MANAGED_PACKAGE_ROOT', 'CODEX_INTERNAL_ORIGINATOR_OVERRIDE', 'CODEX_THREAD_ID', 'THREADBEAR_THREAD_ID', 'CLAUDECODE', 'CLAUDE_CONFIG_DIR'];
   const env: Record<string, string | undefined> = {};
   for (const k of keep) env[k] = process.env[k];
   sock.write(JSON.stringify({ $fake: 'hello', pid: process.pid, argv: process.argv.slice(2), cwd: process.cwd(), env }) + '\n');

@@ -34,7 +34,7 @@ public struct ContextMeter: Equatable, Sendable {
 
     /// What happens when it fills, by the thread's provider.
     public static func compactNote(provider: String) -> String {
-        let name = provider == "codex" ? "Codex" : provider == "claude" ? "Claude" : "The agent"
+        let name = provider == "codex" ? "Codex" : provider == "claude" ? "Claude" : provider == "grok" ? "Grok" : "The agent"
         return "\(name) compacts it by itself when it's nearly full."
     }
 

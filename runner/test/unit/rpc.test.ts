@@ -602,7 +602,7 @@ test('clis.* call CliUpdates and return at once; without it they are -32601; cli
     ['setPolicy', 'codex', 'notify'],
   ]);
   const badParams = (e: { code: number }) => e.code === -32602;
-  await assert.rejects(c.call('clis.update', { provider: 'grok' }), badParams);
+  await assert.rejects(c.call('clis.update', { provider: 'gemini' }), badParams);
   await assert.rejects(c.call('clis.update', {}), badParams);
   await assert.rejects(c.call('clis.update', { provider: 'codex', version: '../../evil' }), badParams);
   await assert.rejects(c.call('clis.update', { provider: 'codex', force: 'yes' }), badParams);

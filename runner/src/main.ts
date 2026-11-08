@@ -34,6 +34,8 @@ import { ClaudeAdapter } from './adapters/claude/adapter.ts';
 import { ProcessRegistry } from './proc.ts';
 import { Runner } from './runner.ts';
 import { CodexAdapter } from './adapters/codex/adapter.ts';
+import { GrokAdapter } from './adapters/grok/adapter.ts';
+import { McpHttpServer } from './mcp-http.ts';
 import { resolveCodexBinary } from './adapters/codex/appserver.ts';
 import { checkSurface, testedVersion } from './adapters/codex/surface.ts';
 import { CliUpdates } from './updates/manager.ts';
@@ -118,7 +120,7 @@ async function main(): Promise<void> {
   const usageHistory = new UsageHistory({ dataDir: cfg.home, clock: realClock, log });
   const usage = new UsageStore({ limitsFile: cfg.tokenStatsLimitsFile, dataDir: cfg.home, clock: realClock, log, history: usageHistory });
   usage.start();
-  const accounts = new AccountRegistry(cfg, usage);
+  const accounts = new AccountRegistry({ ...cfg, grokOn: () => experimentOn(cfg.home, 'grok') }, usage);
   const tally = new TokenTally({ dataDir: cfg.home, clock: realClock, log, accounts: () => accounts.list() });
   if (cfg.tokenTally !== false) tally.start();
   // Every session gets tools for driving Threadbear itself, bound to its
@@ -220,6 +222,19 @@ async function main(): Promise<void> {
     onNotice: (text) => runner.notice('warning', text),
     extraGuidance: () => (experimentOn(cfg.home, 'richBlocks') ? RICH_BLOCKS_LINE : ''),
   });
+  // Grok threads (the grok experiment, which also decides whether Grok
+  // logins are listed): one `grok agent stdio` per live thread, with the
+  // threadbear tools served to it over MCP on 127.0.0.1. Their end_turn
+  // works as Codex's: the final answer after it ends the turn.
+  const grok = new GrokAdapter({
+    grokBinary: () => cfg.grokPath,
+    grokArgs: cfg.grokArgs,
+    registry,
+    log,
+    mcp: new McpHttpServer(log),
+    toolsFor: (threadId) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, scheduleChecks: () => experimentOn(cfg.home, 'scheduleChecks'), remote: remoteControl, replyButtons: () => experimentOn(cfg.home, 'replyButtons') }),
+    extraGuidance: () => (experimentOn(cfg.home, 'richBlocks') ? RICH_BLOCKS_LINE : ''),
+  });
   // The runner's own small-model calls, on the settings' Claude pool.
   const models = new Models({
     home: cfg.home,
@@ -242,7 +257,7 @@ async function main(): Promise<void> {
     atMac: () => atMac,
     config: cfg,
     store,
-    adapters: { claude, codex },
+    adapters: { claude, codex, grok },
     accounts,
     // A draining runner's readings go to the primary, which owns
     // usage.json (docs/protocol.md, "Handovers").

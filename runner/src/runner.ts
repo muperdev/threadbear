@@ -3698,11 +3698,11 @@ export function oneLine(text: string, max: number): string {
 
 // A provider's name in notes.
 export function providerName(p: Provider): string {
-  return p === 'codex' ? 'Codex' : 'Claude';
+  return p === 'codex' ? 'Codex' : p === 'grok' ? 'Grok' : 'Claude';
 }
 
 function cliName(p: Provider): string {
-  return p === 'codex' ? 'Codex' : 'Claude Code';
+  return p === 'codex' ? 'Codex' : p === 'grok' ? 'Grok Build' : 'Claude Code';
 }
 
 // Claude's own ids: its aliases, and anything starting claude- (with or

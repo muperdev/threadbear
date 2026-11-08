@@ -562,8 +562,8 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
       for (const a of r.accounts) {
         const note = a.note ? `  (${a.note})` : '';
         // The provider has its own column, so not "Codex · " again.
-        const who = a.email ?? a.title.replace(/^Codex · /, '');
-        console.log(`${a.id === r.defaults.accountId ? '*' : ' '} ${a.id.padEnd(12)} ${(a.provider === 'codex' ? 'Codex' : 'Claude').padEnd(7)}${who}${note}`);
+        const who = a.email ?? a.title.replace(/^(Codex|Grok) · /, '');
+        console.log(`${a.id === r.defaults.accountId ? '*' : ' '} ${a.id.padEnd(12)} ${(a.provider === 'codex' ? 'Codex' : a.provider === 'grok' ? 'Grok' : 'Claude').padEnd(7)}${who}${note}`);
       }
       return 0;
     }

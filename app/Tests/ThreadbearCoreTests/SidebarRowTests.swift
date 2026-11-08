@@ -369,4 +369,19 @@ final class DockBadgeTests: XCTestCase {
         XCTAssertEqual(try decode(#"{"kind":"tool","label":"Sentry","why":"2 events"}"#).startedBy, ThreadStartedBy(kind: "tool", label: "Sentry", why: "2 events"))
         XCTAssertNil(try decode(#""nonsense""#).startedBy)
     }
+
+}
+
+final class GrokAccountNameTests: XCTestCase {
+    /// A Grok login reads like a Codex one: "Grok" alone, or with its id
+    /// when there are several.
+    func testGrokLoginsReadAsGrok() {
+        let one = [Account(id: "claude-main", provider: "claude", title: "me@example.com"), Account(id: "grok-main", provider: "grok", title: "Grok · grok-main")]
+        XCTAssertEqual(AccountName.short("grok-main", accounts: one), "Grok")
+        XCTAssertEqual(AccountName.label("grok-main", accounts: one), "Grok")
+        let two = one + [Account(id: "grok-1", provider: "grok", title: "Grok · grok-1")]
+        XCTAssertEqual(AccountName.short("grok-1", accounts: two), "Grok grok-1")
+        XCTAssertEqual(ModelPicker.providerTitle("grok"), "Grok")
+        XCTAssertEqual(ComposerChips.effortLevels(provider: "grok"), ["low", "medium", "high", "xhigh"])
+    }
 }

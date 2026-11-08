@@ -86,7 +86,10 @@ const CODEX_COMMANDS: SlashCommand[] = [
   { name: 'status', description: 'The model, effort, context used and the login\'s limits', source: 'threadbear' },
 ];
 
-// Threadbear's own, on both providers: settings the app also changes.
+// Threadbear's own on Grok threads, beside the commands Grok lists itself.
+const GROK_COMMANDS: SlashCommand[] = CODEX_COMMANDS.filter((c) => c.source === 'threadbear' && c.name !== 'status');
+
+// Threadbear's own, on every provider: settings the app also changes.
 export const THREADBEAR_COMMANDS: SlashCommand[] = [
   { name: 'model', description: 'Switch this thread\'s model', argumentHint: '[model]', source: 'threadbear' },
   { name: 'effort', description: 'Set this thread\'s effort level', argumentHint: '[low|medium|high|xhigh|max]', source: 'threadbear' },
@@ -118,14 +121,18 @@ export function planCommand(provider: Provider, cmd: ParsedCommand, skills: Read
   const name = cmd.name.toLowerCase();
   if (name === 'model') return { kind: 'model', args: cmd.args };
   if (name === 'effort') return { kind: 'effort', args: cmd.args };
-  if (name === 'fast') return provider === 'claude' ? { kind: 'fast', args: cmd.args } : { kind: 'note', text: "Codex threads don't have fast mode." };
+  if (name === 'fast') return provider === 'claude' ? { kind: 'fast', args: cmd.args } : { kind: 'note', text: `${provider === 'grok' ? 'Grok' : 'Codex'} threads don't have fast mode.` };
   if (provider === 'claude') {
     // Claude's CLI runs the rest itself, and answers any others it can't
     // ("/x isn't available in this environment").
     return CLAUDE_ELSEWHERE.has(name) ? { kind: 'note', text: `/${name} is part of Claude Code's terminal app. ${ELSEWHERE[name]}` } : { kind: 'cli' };
   }
-  if (name === 'compact' || name === 'review') return { kind: 'cli' };
   if (name === 'clear' || name === 'new') return { kind: 'clear' };
+  if (provider === 'grok') {
+    // Grok runs its own commands from the prompt (ACP's available commands).
+    return name in ELSEWHERE ? { kind: 'note', text: `/${name} is part of Grok's terminal app and doesn't run in Threadbear.${ELSEWHERE[name] ? ` ${ELSEWHERE[name]}` : ''}` } : { kind: 'cli' };
+  }
+  if (name === 'compact' || name === 'review') return { kind: 'cli' };
   if (name === 'status' || name === 'context' || name === 'cost' || name === 'usage') return { kind: 'status' };
   if (skills.has(cmd.name)) return { kind: 'cli' };
   if (name in ELSEWHERE) {
@@ -139,7 +146,7 @@ export function planCommand(provider: Provider, cmd: ParsedCommand, skills: Read
 
 // The picker's list for a thread: Threadbear's own first, then the CLI's.
 export function commandList(provider: Provider, cli: SlashCommand[]): SlashCommand[] {
-  const own = provider === 'codex' ? [...THREADBEAR_COMMANDS, ...CODEX_COMMANDS] : [...THREADBEAR_COMMANDS, FAST_COMMAND];
+  const own = provider === 'codex' ? [...THREADBEAR_COMMANDS, ...CODEX_COMMANDS] : provider === 'grok' ? [...THREADBEAR_COMMANDS, ...GROK_COMMANDS] : [...THREADBEAR_COMMANDS, FAST_COMMAND];
   const seen = new Set(own.map((c) => c.name));
   const rest = cli.filter((c) => {
     if (seen.has(c.name) || (provider === 'claude' && CLAUDE_HIDDEN.has(c.name))) return false;

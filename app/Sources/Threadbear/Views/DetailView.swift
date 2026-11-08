@@ -928,7 +928,7 @@ struct SignInBanner: View {
 
     var body: some View {
         if let account = app.signInAccount(for: thread) {
-            let name = account.provider == "codex" ? "Codex" : "Claude"
+            let name = ModelPicker.providerTitle(account.provider)
             HStack(spacing: zoomed(8)) {
                 Image(systemName: "person.crop.circle.badge.exclamationmark").foregroundStyle(.orange)
                 Text("\(name) needs you to sign in again.").lineLimit(1)
@@ -945,11 +945,11 @@ struct SignInBanner: View {
             .overlay(alignment: .bottom) { Rectangle().fill(Color(nsColor: Theme.hairline)).frame(height: 0.5) }
         } else if let runner = app.remoteSignInRunner(for: thread) {
             // Another Mac's login: signed in on that Mac, not from here.
-            let name = thread.provider == "codex" ? "Codex" : "Claude"
+            let name = ModelPicker.providerTitle(thread.provider)
             HStack(spacing: zoomed(8)) {
                 Image(systemName: "person.crop.circle.badge.exclamationmark").foregroundStyle(.orange)
                 Text("\(name) on \(runner) needs you to sign in again.").lineLimit(1)
-                    .tip("Sign in on \(runner) itself: \(name == "Codex" ? "codex login" : "claude auth login") in its Terminal")
+                    .tip("Sign in on \(runner) itself: \(name == "Codex" ? "codex login" : name == "Grok" ? "grok login" : "claude auth login") in its Terminal")
                 Spacer(minLength: zoomed(6))
                 Button("Send again") { app.sendAgain(thread.id) }
                     .tip("Send your last message again, once you've signed in")

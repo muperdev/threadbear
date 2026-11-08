@@ -446,9 +446,9 @@ test('pools in the tools: list_accounts prints them, create_thread and update_th
   const made = await t.call('create_thread', { text: 'On Codex', pool: 'CODEX' });
   assert.equal(made.error, false, made.text);
   assert.equal(h.runner.list().find((x) => x.title === 'On Codex')!.poolId, 'codex');
-  const bad = await t.call('create_thread', { text: 'y', pool: 'grok' });
+  const bad = await t.call('create_thread', { text: 'y', pool: 'gemini' });
   assert.equal(bad.error, true);
-  assert.match(bad.text, /No pool grok\. Pools: claude \(Claude\), codex \(Codex\)/);
+  assert.match(bad.text, /No pool gemini\. Pools: claude \(Claude\), codex \(Codex\)/);
   // update_thread: "pin" pins, a pool puts it back.
   const pinned = await t.call('update_thread', { threadId: o.id, pool: 'pin' });
   assert.match(pinned.text, /pool: none \(pinned to its account\)/);

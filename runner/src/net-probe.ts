@@ -17,6 +17,8 @@ const HOSTS: Record<Provider, string> = {
   claude: 'api.anthropic.com',
   // Codex logins are ChatGPT ones; its requests go to chatgpt.com.
   codex: 'chatgpt.com',
+  // Grok Build under a grok.com login chats through this proxy.
+  grok: 'cli-chat-proxy.grok.com',
 };
 
 const PROBE_TIMEOUT_MS = 5_000;

@@ -21,6 +21,17 @@ final class SignInTests: XCTestCase {
         XCTAssertTrue(script.contains("CODEX_HOME='/tmp/it'\\''s here' '/opt/codex' login"), script)
     }
 
+    // grok-main is ~/.grok, where grok looks with no GROK_HOME; another
+    // Grok login signs in to its own folder.
+    func testGrokLoginsUseGrokHome() {
+        let main = SignIn.script(Account(id: "grok-main", provider: "grok", title: "Grok · grok-main", configDir: "/Users/x/.grok"), cliPath: "")
+        XCTAssertTrue(main.contains("\ngrok login\n"), main)
+        XCTAssertFalse(main.contains("GROK_HOME"))
+        XCTAssertTrue(main.contains("Signing in to Grok for Threadbear"), main)
+        let other = SignIn.script(Account(id: "grok-1", provider: "grok", title: "Grok · grok-1", configDir: "/tmp/grok-1"), cliPath: "")
+        XCTAssertTrue(other.contains("GROK_HOME='/tmp/grok-1' grok login"), other)
+    }
+
     func testScriptRunsInZsh() throws {
         let script = SignIn.script(Account(id: "codex-1", provider: "codex", title: "c", configDir: "/tmp/it's here"), cliPath: "/bin/echo")
         XCTAssertTrue(script.hasPrefix("#!/bin/zsh -l\n"))

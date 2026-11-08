@@ -20,7 +20,8 @@ test('effort levels include ultra and providers include codex', () => {
   assert.ok(isEffortLevel('ultra'));
   assert.ok(!isEffortLevel('extreme'));
   assert.ok(isProvider('codex') && isProvider('claude'));
-  assert.ok(!isProvider('grok'));
+  assert.ok(isProvider('grok'));
+  assert.ok(!isProvider('gemini'));
 });
 
 test('config: the step 4 settings default safely', () => {
@@ -47,7 +48,7 @@ test('config: runner.json and env set the step 4 settings', () => {
       defaults: {
         cwd: '/tmp',
         model: 'claude-haiku-5-5',
-        models: { codex: ' gpt-6-luna ', claude: '', grok: 'x' },
+        models: { codex: ' gpt-6-luna ', claude: '', gemini: 'x' },
         efforts: { codex: 'low', claude: 'extreme' },
       },
       codexPath: '~/bin/codex',
@@ -104,7 +105,7 @@ test('protocol check: Codex summaries and events', () => {
     lastActivityAt: ts, preview: '', lastSeq: 3, lastSeenSeq: 3, contextTokens: 1200, contextWindow: 258_400,
   };
   assert.deepEqual(checkSummary(summary), []);
-  assert.deepEqual(checkSummary({ ...summary, provider: 'grok' }), ['provider']);
+  assert.deepEqual(checkSummary({ ...summary, provider: 'gemini' }), ['provider']);
   assert.deepEqual(checkSummary({ ...summary, contextWindow: '258k' }), ['contextWindow']);
 
   const env = { seq: 1, ts, threadId: 'th_1', turnId: 't1' };

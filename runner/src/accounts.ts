@@ -83,12 +83,22 @@ export function isCodexLogin(dir: string): boolean {
   return store === 'keyring' || store === 'auto';
 }
 
+// A Grok Build home counts as a login when auth.json exists (checked,
+// never opened, as Codex's).
+export function isGrokLogin(dir: string): boolean {
+  return isDirectory(dir) && fs.existsSync(path.join(dir, 'auth.json'));
+}
+
 export type DiscoveryConfig = Pick<Config, 'claudeMainDir' | 'claudeMainJson' | 'tokenStatsAccountsDir'> &
-  Partial<Pick<Config, 'codexMainDir' | 'accountNotes' | 'accountsDir'>>;
+  Partial<Pick<Config, 'codexMainDir' | 'grokMainDir' | 'accountNotes' | 'accountsDir'>> & {
+    // Whether Grok logins are listed (the grok experiment), asked on every scan.
+    grokOn?: () => boolean;
+  };
 
 // claude-main is ~/.claude (its .claude.json sits at ~/.claude.json);
 // codex-main is ~/.codex. Token Stats' Accounts folder holds claude-N and
-// codex-N, each its own CLAUDE_CONFIG_DIR or CODEX_HOME. Claude accounts
+// codex-N, each its own CLAUDE_CONFIG_DIR or CODEX_HOME. With the grok
+// experiment on, grok-main is ~/.grok and grok-N are GROK_HOMEs. Claude accounts
 // come first, so the first account is Claude's.
 export function discoverAccounts(cfg: DiscoveryConfig): Account[] {
   const out: Account[] = [];
@@ -121,6 +131,12 @@ export function discoverAccounts(cfg: DiscoveryConfig): Account[] {
   for (const { id, dir } of [...codex, ...numbered('codex')]) {
     if (isCodexLogin(dir)) out.push(codexAccount(id, dir));
   }
+  if (cfg.grokOn?.()) {
+    const grok = cfg.grokMainDir ? [{ id: 'grok-main', dir: cfg.grokMainDir }] : [];
+    for (const { id, dir } of [...grok, ...numbered('grok')]) {
+      if (isGrokLogin(dir)) out.push({ id, provider: 'grok', title: providerTitle('grok', undefined, id), configDir: dir });
+    }
+  }
   for (const a of out) {
     const note = cfg.accountNotes?.[a.id];
     if (note) a.note = note;
@@ -145,14 +161,21 @@ function codexAccount(id: string, configDir: string): Account {
 }
 
 // "Codex · <email>", so an app that only shows titles can tell codex-main
-// from a Claude login with the same address.
+// from a Claude login with the same address. Grok's the same.
 function codexTitle(email: string | undefined, id: string): string {
   return `Codex · ${email ?? id}`;
+}
+
+function providerTitle(provider: Account['provider'], email: string | undefined, id: string): string {
+  if (provider === 'codex') return codexTitle(email, id);
+  if (provider === 'grok') return `Grok · ${email ?? id}`;
+  return email ?? id;
 }
 
 // The model an account names for sessions that name none: Claude's
 // settings.json, Codex's config.toml.
 function settingsModel(account: Account): string | undefined {
+  if (account.provider === 'grok') return undefined;
   if (account.provider === 'codex') return readCodexConfig(path.join(account.configDir, 'config.toml')).model;
   return readSettingsModel(path.join(account.configDir, 'settings.json'));
 }
@@ -232,7 +255,7 @@ export class AccountRegistry {
     const id = this.usage.identityFor(account);
     if (id.email) out.email = id.email;
     if (id.plan) out.plan = id.plan;
-    out.title = out.provider === 'codex' ? codexTitle(out.email, out.id) : (out.email ?? out.id);
+    out.title = providerTitle(out.provider, out.email, out.id);
     const usage = this.usage.usageFor(out);
     if (usage) out.usage = usage;
     return out;

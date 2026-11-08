@@ -106,6 +106,7 @@ public enum ModelPicker {
         switch id {
         case "claude": return "Claude"
         case "codex": return "Codex"
+        case "grok": return "Grok"
         default: return id.isEmpty ? "Claude" : id.prefix(1).uppercased() + id.dropFirst()
         }
     }
@@ -117,6 +118,7 @@ public enum ModelPicker {
         switch id {
         case "claude": return "sparkle"
         case "codex": return "chevron.left.forwardslash.chevron.right"
+        case "grok": return "bolt"
         default: return "cpu"
         }
     }
@@ -139,7 +141,8 @@ public enum ModelPicker {
     /// CLI always takes; Codex offers just its default, since a Claude
     /// alias would be the wrong provider's model.
     public static func rows(choices: [ModelChoice], defaultId: String?, selected: String?, query: String = "", provider: String = "claude") -> [Row] {
-        let codex = provider == "codex"
+        // Codex and Grok ids are all dashed, every one a main row.
+        let codex = provider == "codex" || provider == "grok"
         let fallback: [ModelChoice] = codex
             ? [defaultId].compactMap { $0 }.filter { !$0.isEmpty }.map { ModelChoice(id: $0, model: $0, title: ComposerChips.model($0)) }
             : aliases.map { ModelChoice(id: $0, model: $0, title: ComposerChips.model($0)) }

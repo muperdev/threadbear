@@ -96,7 +96,7 @@ test('findPool: by id, else id or title ignoring case', () => {
   assert.equal(findPool(pools, 'convex')?.id, 'convex');
   assert.equal(findPool(pools, 'Claude')?.id, 'claude');
   assert.equal(findPool(pools, 'CODEX ')?.id, 'codex');
-  assert.equal(findPool(pools, 'grok'), undefined);
+  assert.equal(findPool(pools, 'gemini'), undefined);
 });
 
 // ---------------------------------------------------------- folders

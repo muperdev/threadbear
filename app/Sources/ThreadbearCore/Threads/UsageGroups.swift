@@ -50,8 +50,8 @@ public enum UsageGroups {
         var order: [String] = []
         for account in accounts where !order.contains(account.provider) { order.append(account.provider) }
         if !keepOrder {
-            let rank = ["claude": 0, "codex": 1]
-            order = order.enumerated().sorted { (rank[$0.element] ?? 2, $0.offset) < (rank[$1.element] ?? 2, $1.offset) }.map(\.element)
+            let rank = ["claude": 0, "codex": 1, "grok": 2]
+            order = order.enumerated().sorted { (rank[$0.element] ?? 3, $0.offset) < (rank[$1.element] ?? 3, $1.offset) }.map(\.element)
         }
         return order.map { provider in Provider(provider: provider, accounts: accounts.filter { $0.provider == provider }) }
     }
@@ -60,6 +60,7 @@ public enum UsageGroups {
         switch provider {
         case "claude": return "Claude"
         case "codex": return "Codex"
+        case "grok": return "Grok"
         default: return provider.prefix(1).uppercased() + provider.dropFirst()
         }
     }

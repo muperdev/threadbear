@@ -4,8 +4,9 @@
 
 export const PROTOCOL_VERSION = 1;
 
-export type Provider = 'claude' | 'codex';
-export const PROVIDERS: readonly Provider[] = ['claude', 'codex'];
+// grok: Grok Build's CLI (docs/grok-plan.md), behind the grok experiment.
+export type Provider = 'claude' | 'codex' | 'grok';
+export const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'grok'];
 
 export function isProvider(v: unknown): v is Provider {
   return typeof v === 'string' && (PROVIDERS as readonly string[]).includes(v);

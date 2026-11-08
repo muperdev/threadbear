@@ -120,7 +120,12 @@ started, errors), never what was said, and is started afresh past 256 KB.
   Another landing waits; exiting, including a crash, releases the lock.
 - **The runner** listens on `127.0.0.1:8797` only, and needs a token
   (`runner/src/config.ts`). It starts the official `claude` and `codex`
-  CLIs for your threads.
+  CLIs for your threads. With the `grok` experiment on (off by default) it
+  also starts xAI's `grok` CLI (`grok agent --no-leader stdio`, from
+  `~/.local/bin/grok` or `grokPath`) for Grok threads, and while one runs
+  serves that thread's threadbear tools to it over MCP on a free port on
+  127.0.0.1, at a path with a random secret that goes when the thread's
+  CLI stops (`runner/src/mcp-http.ts`).
 - **Agents get full access by default.** Claude runs with
   `bypassPermissions` and Codex with `danger-full-access`. "Ask before
   edits" is a choice for each thread.
@@ -231,7 +236,9 @@ deletes the item. The microphone is only on while the mic is red.
   `~/.claude.json`), a few settings, and the token counts in your session
   transcripts, so it can show how much room each login has
   (`runner/src/accounts.ts`, `runner/src/token-tally.ts`;
-  `THREADBEAR_TOKEN_TALLY=off` stops the counting). It never reads or
+  `THREADBEAR_TOKEN_TALLY=off` stops the counting). With the `grok`
+  experiment on, whether `~/.grok/auth.json` (or a `grok-N` folder's)
+  exists, to list a Grok login; it's never opened. It never reads or
   copies login tokens or the Keychain.
 - Token Stats' files, if you have that app, and any logins you've added
   under `accounts` in its data folder (`claude-1`, `codex-1`...).

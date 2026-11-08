@@ -156,6 +156,7 @@ extension AppModel {
         switch thread.provider {
         case "claude": return Account(id: "claude-main", provider: "claude", title: "Claude")
         case "codex": return Account(id: "codex-main", provider: "codex", title: "Codex")
+        case "grok": return Account(id: "grok-main", provider: "grok", title: "Grok")
         default: return nil
         }
     }
@@ -259,16 +260,19 @@ enum SignIn {
     /// often Threadbear's own copy, not on the PATH); empty uses the PATH's.
     static func script(_ account: Account, cliPath: String) -> String {
         let codex = account.provider == "codex"
+        let grok = account.provider == "grok"
         var env = ""
         if codex, !account.configDir.isEmpty { env = "CODEX_HOME=\(quoted(account.configDir)) " }
-        if !codex, account.id != "claude-main", !account.configDir.isEmpty { env = "CLAUDE_CONFIG_DIR=\(quoted(account.configDir)) " }
-        let binary = cliPath.isEmpty ? (codex ? "codex" : "claude") : quoted(cliPath)
+        if grok, account.id != "grok-main", !account.configDir.isEmpty { env = "GROK_HOME=\(quoted(account.configDir)) " }
+        if !codex, !grok, account.id != "claude-main", !account.configDir.isEmpty { env = "CLAUDE_CONFIG_DIR=\(quoted(account.configDir)) " }
+        let binary = cliPath.isEmpty ? (codex ? "codex" : grok ? "grok" : "claude") : quoted(cliPath)
+        let name = codex ? "Codex" : grok ? "Grok" : "Claude"
         return """
         #!/bin/zsh -l
         export PATH="$HOME/.local/bin:$PATH"
-        printf '%s\\n' \(quoted("Signing in to \(codex ? "Codex" : "Claude") for Threadbear (\(Self.oneLine(account.title)))."))
+        printf '%s\\n' \(quoted("Signing in to \(name) for Threadbear (\(Self.oneLine(account.title)))."))
         echo
-        \(env)\(binary) \(codex ? "login" : "auth login")
+        \(env)\(binary) \(codex || grok ? "login" : "auth login")
         echo
         echo "Done. Go back to Threadbear and press Send again. You can close this window."
 

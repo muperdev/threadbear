@@ -174,6 +174,9 @@ export function testConfig(home: string, extra: Partial<Config> = {}): Config {
     // Nothing under the real ~/.codex or Token Stats, and no CLI installs.
     codexArgs: [],
     codexMainDir: path.join(home, 'no-codex-main'),
+    grokPath: path.join(home, 'no-grok'),
+    grokArgs: [],
+    grokMainDir: path.join(home, 'no-grok-main'),
     tokenStatsLimitsFile: path.join(home, 'no-limits.json'),
     cliUpdates: { claude: 'off', codex: 'off', checkMinutes: 60, keepCodexVersions: 2 },
     accountNotes: {},

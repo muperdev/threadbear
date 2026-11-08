@@ -79,6 +79,11 @@ export type Config = {
   codexPath?: string;
   codexArgs: string[]; // extra `codex app-server` arguments
   codexMainDir: string; // codex-main's CODEX_HOME
+  // Grok Build's binary (the grok experiment, docs/grok-plan.md). Grok
+  // updates itself, so this is only ever where it is.
+  grokPath: string;
+  grokArgs: string[]; // extra `grok agent` arguments, before `stdio`
+  grokMainDir: string; // grok-main's GROK_HOME
   tokenStatsLimitsFile: string; // Token Stats' limits.json, read only
   cliUpdates: CliUpdatesConfig;
   // Reads the CLIs' transcripts for the Usage panel's token counts
@@ -151,6 +156,8 @@ export type RunnerJson = {
   maxLiveCLIs?: number;
   codexPath?: string;
   codexArgs?: string[];
+  grokPath?: string;
+  grokArgs?: string[];
   cliUpdates?: Partial<CliUpdatesConfig>;
   accountNotes?: Record<string, string>;
   poolFolders?: Record<string, string[]>;
@@ -278,6 +285,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(codexPath ? { codexPath: expandHome(codexPath) } : {}),
     codexArgs: Array.isArray(json.codexArgs) ? json.codexArgs.filter((a): a is string => typeof a === 'string') : [],
     codexMainDir: expandHome(env.THREADBEAR_CODEX_MAIN_DIR || '~/.codex'),
+    grokPath: expandHome(nonEmpty(env.THREADBEAR_GROK_PATH) ?? nonEmpty(json.grokPath) ?? '~/.local/bin/grok'),
+    grokArgs: Array.isArray(json.grokArgs) ? json.grokArgs.filter((a): a is string => typeof a === 'string') : [],
+    grokMainDir: expandHome(env.THREADBEAR_GROK_MAIN_DIR || '~/.grok'),
     tokenStatsLimitsFile: expandHome(
       env.THREADBEAR_TOKEN_STATS_LIMITS || '~/Library/Application Support/Token Stats/limits.json',
     ),

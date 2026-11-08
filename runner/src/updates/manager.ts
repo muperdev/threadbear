@@ -15,7 +15,13 @@ import type { Config } from '../config.ts';
 import type { Logger } from '../log.ts';
 import { paths } from '../config.ts';
 import type { CliPolicy, CliStatus, Provider } from '../protocol.ts';
-import { PROVIDERS } from '../protocol.ts';
+// The CLIs Threadbear checks and updates. Grok Build updates itself, so a
+// Grok login never shows here.
+export const MANAGED_CLIS = ['claude', 'codex'] as const;
+export type ManagedCli = (typeof MANAGED_CLIS)[number];
+export function isManagedCli(p: Provider): p is ManagedCli {
+  return (MANAGED_CLIS as readonly string[]).includes(p);
+}
 import { claudeChannel, claudeInstalledVersion, claudeLatestVersion, runClaudeUpdate } from './claude.ts';
 import { CodexCopies, NPM_LATEST, codexPackageVersion, type CodexResolver, type SurfaceCheck } from './codex.ts';
 import { VERSION_RE, compareVersions, defaultExec, defaultFetchText, type Exec, type FetchText } from './exec.ts';
@@ -101,7 +107,7 @@ export class CliUpdates {
     });
     // A previous update that was running when the runner stopped didn't
     // finish; say so rather than show it running forever.
-    for (const p of PROVIDERS) {
+    for (const p of MANAGED_CLIS) {
       const u = this.st[p]?.update;
       if (u && (u.state === 'running' || u.state === 'waiting')) this.st[p]!.update = { ...u, state: 'failed', message: 'The runner stopped before this finished.' };
     }
@@ -137,20 +143,23 @@ export class CliUpdates {
   }
 
   list(): CliStatus[] {
-    return PROVIDERS.map((p) => this.status(p));
+    return MANAGED_CLIS.map((p) => this.status(p));
   }
 
   check(p?: Provider): CliStatus[] {
-    for (const prov of p ? [p] : PROVIDERS) this.track(prov, this.runCheck(prov, true));
+    if (p && !isManagedCli(p)) return this.list();
+    for (const prov of p ? [p] : MANAGED_CLIS) this.track(prov, this.runCheck(prov, true));
     return this.list();
   }
 
   update(p: Provider, o: { version?: string; force?: boolean } = {}): CliStatus[] {
+    if (!isManagedCli(p)) return this.list();
     this.startUpdate(p, o);
     return this.list();
   }
 
   setPolicy(p: Provider, policy: CliPolicy): CliStatus[] {
+    if (!isManagedCli(p)) return this.list();
     this.ps(p).policy = policy;
     this.save();
     this.changed();
@@ -167,7 +176,7 @@ export class CliUpdates {
   // CLI's init (Claude) or initialize (Codex). Two failures in a row on a
   // version it just moved to send a warning, once.
   sessionStarted(p: Provider, version: string | undefined, ok: boolean): void {
-    if (!version) return;
+    if (!version || !isManagedCli(p)) return;
     const s = this.ps(p);
     if (ok) {
       if (s.startFailures?.version === version) {
@@ -194,7 +203,7 @@ export class CliUpdates {
 
   // ---- status
 
-  private status(p: Provider): CliStatus {
+  private status(p: ManagedCli): CliStatus {
     const s = this.st[p] ?? {};
     const installedVersion = this.installed[p];
     const latestVersion = s.latestVersion;
@@ -226,13 +235,13 @@ export class CliUpdates {
   // THREADBEAR_CLI_UPDATES=off (tests, dev runners) and runner.json's own
   // "off" can't be turned on from the app; a Codex binary set by hand is
   // never updated.
-  private policy(p: Provider): CliPolicy {
+  private policy(p: ManagedCli): CliPolicy {
     if (this.configOff(p)) return 'off';
     if (p === 'codex' && this.cfg.codexPath) return 'off';
     return this.st[p]?.policy ?? this.cfg.cliUpdates[p];
   }
 
-  private configOff(p: Provider): boolean {
+  private configOff(p: ManagedCli): boolean {
     return this.env.THREADBEAR_CLI_UPDATES === 'off' || this.cfg.cliUpdates[p] === 'off';
   }
 
@@ -264,11 +273,11 @@ export class CliUpdates {
       this.d.clock.setTimeout(() => {
         this.timers.delete(name);
         if (name === 'check') {
-          for (const p of PROVIDERS) this.track(p, this.runCheck(p, false));
+          for (const p of MANAGED_CLIS) this.track(p, this.runCheck(p, false));
           const jitter = Math.floor((this.d.random ?? Math.random)() * CHECK_JITTER_MS);
           this.schedule('check', this.cfg.cliUpdates.checkMinutes * 60_000 + jitter);
         } else if (name.startsWith('retry:')) {
-          const [, p, attempt] = name.split(':') as [string, Provider, string];
+          const [, p, attempt] = name.split(':') as [string, ManagedCli, string];
           const o = this.retryOptions[p] ?? {};
           delete this.retryOptions[p];
           this.startUpdate(p, o, Number(attempt));
@@ -277,7 +286,7 @@ export class CliUpdates {
     );
   }
 
-  private async runCheck(p: Provider, asked: boolean): Promise<void> {
+  private async runCheck(p: ManagedCli, asked: boolean): Promise<void> {
     await this.refreshInstalled();
     const policy = this.policy(p);
     if (policy === 'off' && !asked) return;
@@ -314,7 +323,7 @@ export class CliUpdates {
 
   // ---- updating
 
-  private startUpdate(p: Provider, o: UpdateOptions, attempt = 1): void {
+  private startUpdate(p: ManagedCli, o: UpdateOptions, attempt = 1): void {
     if (this.running[p] || this.stopped) return;
     const target = o.version ?? this.st[p]?.latestVersion;
     if (this.d.hooks.restartPending()) {
@@ -457,17 +466,17 @@ export class CliUpdates {
 
   // ---- state
 
-  private ps(p: Provider): ProviderState {
+  private ps(p: ManagedCli): ProviderState {
     return (this.st[p] ??= {});
   }
 
-  private setUpdate(p: Provider, u: NonNullable<CliStatus['update']>): void {
+  private setUpdate(p: ManagedCli, u: NonNullable<CliStatus['update']>): void {
     this.ps(p).update = stripUndefined(u);
     this.save();
     this.changed();
   }
 
-  private finish(p: Provider, u: NonNullable<CliStatus['update']>): void {
+  private finish(p: ManagedCli, u: NonNullable<CliStatus['update']>): void {
     this.setUpdate(p, { ...u, finishedAt: this.iso() });
   }
 
@@ -490,7 +499,7 @@ export class CliUpdates {
     }
   }
 
-  private track(_p: Provider, promise: Promise<void>): void {
+  private track(_p: ManagedCli, promise: Promise<void>): void {
     const tracked = promise.catch((e: Error) => this.d.log.error('cli updates: failed', { error: e.message }));
     this.work.add(tracked);
     void tracked.finally(() => this.work.delete(tracked));
