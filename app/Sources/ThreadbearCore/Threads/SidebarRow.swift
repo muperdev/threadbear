@@ -167,7 +167,7 @@ public enum AccountName {
         guard let account = accounts.first(where: { $0.id == id }) else { return id }
         let full = title(account)
         let siblings = accounts.filter { $0.id != id && $0.provider == account.provider }
-        if account.provider == "codex" || account.provider == "grok" {
+        if account.provider == "codex" || account.provider == "grok" || account.provider == "devin" {
             let name = ModelPicker.providerTitle(account.provider)
             guard !siblings.isEmpty else { return name }
             return name + " " + localPart(full)
@@ -186,7 +186,7 @@ public enum AccountName {
     /// whole address. Codex reads as `short` has it.
     public static func login(_ id: String, accounts: [Account]) -> String {
         guard let account = accounts.first(where: { $0.id == id }) else { return id }
-        if account.provider == "codex" || account.provider == "grok" { return short(id, accounts: accounts) }
+        if account.provider == "codex" || account.provider == "grok" || account.provider == "devin" { return short(id, accounts: accounts) }
         let full = title(account)
         guard let domain = domainPart(full) else { return full }
         let siblings = accounts.filter { $0.id != id && $0.provider == account.provider }.map(title)
@@ -209,7 +209,7 @@ public enum AccountName {
     /// is unique.
     public static func label(_ id: String, accounts: [Account]) -> String {
         guard let account = accounts.first(where: { $0.id == id }) else { return id }
-        if account.provider == "codex" || account.provider == "grok" { return short(id, accounts: accounts) }
+        if account.provider == "codex" || account.provider == "grok" || account.provider == "devin" { return short(id, accounts: accounts) }
         let full = title(account)
         guard let at = full.firstIndex(of: "@") else { return full }
         let siblings = accounts.filter { $0.id != id && $0.provider == account.provider }.map(title)

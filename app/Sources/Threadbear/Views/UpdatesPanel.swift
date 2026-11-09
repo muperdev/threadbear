@@ -200,8 +200,10 @@ struct UpdatesPanel: View {
     }
 }
 
-/// The two CLIs: their versions, Update (or Update anyway, or Go back),
-/// whether updates install by themselves, and when the runner last looked.
+/// The CLIs (Claude Code, Codex, and Grok Build and Devin once installed):
+/// their versions, Update (or Update anyway, or Go back), whether updates
+/// install by themselves, Update all when several are behind, and when the
+/// runner last looked.
 struct CliSection: View {
     @Environment(AppModel.self) private var app
 
@@ -220,6 +222,14 @@ struct CliSection: View {
                         Text(checked).font(.system(size: zoomed(11))).foregroundStyle(.tertiary)
                     }
                     Spacer()
+                    let behind = CliText.updatable(app.clis)
+                    if behind.count > 1 {
+                        Button("Update all") { app.updateAllClis() }
+                            .buttonStyle(.borderless)
+                            .busy(behind.contains { app.isBusy(BusyKey.updateCli($0)) })
+                            .tip("Install the new version of every CLI that has one")
+                            .font(.system(size: zoomed(11)))
+                    }
                     Button("Check now") { app.checkClis() }
                         .buttonStyle(.borderless)
                         .busy(app.isBusy(BusyKey.checkClis))

@@ -11,7 +11,7 @@ import { RunnerClient, RpcClientError } from './client.ts';
 import { ErrorCode, type Account, type ImageRef, type PersistedEvent, type RunnerDefaults, type ThreadSummary } from './protocol.ts';
 import { pushFailingText } from './push-failing.ts';
 
-const providerLabel = (p: string): string => ({ claude: 'Claude', codex: 'Codex', grok: 'Grok' })[p] ?? p;
+const providerLabel = (p: string): string => ({ claude: 'Claude', codex: 'Codex', grok: 'Grok', devin: 'Devin' })[p] ?? p;
 import type { RestartResult, RunnerStatus } from './restart.ts';
 import type { UpstreamStatus } from './upstream.ts';
 

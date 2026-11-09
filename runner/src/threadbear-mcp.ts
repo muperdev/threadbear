@@ -138,7 +138,7 @@ type Result = { content: { type: 'text'; text: string }[]; isError?: boolean };
 // model doesn't offer, with a note.
 const effortEnum = z.enum(EFFORT_LEVELS as unknown as [EffortLevel, ...EffortLevel[]]);
 
-const providerName = (a: { provider: string }): string => (a.provider === 'codex' ? 'Codex' : a.provider === 'grok' ? 'Grok' : 'Claude');
+const providerName = (a: { provider: string }): string => (a.provider === 'codex' ? 'Codex' : a.provider === 'grok' ? 'Grok' : a.provider === 'devin' ? 'Devin' : 'Claude');
 
 const ok = (text: string): Result => ({ content: [{ type: 'text', text }] });
 const fail = (text: string): Result => ({ content: [{ type: 'text', text }], isError: true });

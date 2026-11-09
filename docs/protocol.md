@@ -88,7 +88,7 @@ upgrade with an `Authorization` header that's wrong is turned away with HTTP
 ## Types
 
 ```ts
-type Provider = "claude" | "codex" | "grok"   // grok: Grok Build, behind the grok experiment (docs/grok-plan.md)
+type Provider = "claude" | "codex" | "grok" | "devin"   // grok: Grok Build, behind the grok experiment (docs/grok-plan.md); devin: the Devin CLI, behind the devin experiment (docs/devin-plan.md)
 
 type Account = {
   id: string            // "claude-main", "claude-1", "codex-main", "codex-1", ...
@@ -149,14 +149,16 @@ type CliStatus = {
   provider: Provider
   path: string          // the binary new sessions start
   managedBy: "threadbear" | "cli" | "none" // Codex: Threadbear's own copies;
-                        // Claude: its own installer; "none": codexPath set by
-                        // hand, never updated
+                        // Devin: Threadbear, by its installer's steps;
+                        // Claude and Grok: their own updaters; "none": a
+                        // codexPath set by hand, or a Devin not from its
+                        // installer, never updated
   installedVersion?: string // what new sessions start on
   latestVersion?: string
   status: "current" | "behind" | "held" | "unknown" | "missing"
   policy: "auto" | "notify" | "off"
   inUse: { version: string, threadIds: string[] }[] // versions live sessions run
-  previousVersion?: string  // Codex: the kept version "Go back" returns to
+  previousVersion?: string  // Codex and Devin: the kept version "Go back" returns to
   checkedAt?: string
   hold?: { version: string, reason: string, missing?: string[] } // why an
                         // update wasn't installed by itself ("the app-server
@@ -1025,9 +1027,9 @@ the summary and then the reply.
 | `models.run` | `{ job: "classify" \| "extract" \| "summarize" \| "generate", text: string, labels?: string[], fields?: Record<string, string>, maxWords?: number, system?: string, cwd?: string, maxTokens?: number }` | `{ ok: true, value, model }` or `{ ok: false, reason: "no-pool" \| "off" \| "private" \| "no-room" \| "timeout" \| "provider", message }`. One model call by hand (`tb models try`), on the pool like any other, with `feature: "tb"`. `maxTokens` (generate only, 1 to 8000, default 500) caps the answer, reasoning included; `classify` needs 2 or more `labels` and answers one of them; `extract` needs `fields` (name to a plain description) and answers an object of them, `null` where the text doesn't say |
 | `runner.status` | `{}` | `{ version, release?, branch?, pid, startedAt, home, logFile, liveClis, running: string[], background: { threadId, tasks: string[] }[], pendingRestart?: { when, reason?, release?, resumeThreadId?, requestedAt, backgroundUntil?, waitingFor: string[] }, rolledBack?: { from, at }, draining?: { pid, version, release?, since, threads: string[] }[], update?: { state, checkout?, reason?, checkedAt?, commit?, release?, logFile?, launcherChanged?, launcherReason? }, macScreen?: { fullDiskAccess?, dialogs, dialogsSince? }, clis?: CliStatus[] }`. `running` lists the threads that are starting, running or waiting on an approval or a question; `background` the threads whose CLI is still running background shells or subagents (`tasks` describes each). A restart waits for both. `branch` is the branch the release was built from. `rolledBack` is set when this release is running because `launch.mjs` went back to it from `from`, which kept crashing at startup (and nobody has activated it on purpose since). `update` is the runner following main by itself (docs/dev-tools.md): `state` is `off` (`reason` says why), `idle`, `checking`, `building`, `waiting` (`release` is built and starts on the pending restart) or `failed` (`reason` is the error; `logFile` has the build's output); `commit` is main's tip at the last check (`checkedAt`) |
 | `runner.restart` | `{ when?: "idle" \| "now", resume?: { threadId, text }, reason?: string, release?: string, backgroundWaitMs?: number, cancel?: boolean }` | `{ scheduled: boolean, waitingFor: string[], background?: { threadId, tasks: string[] }[], note?: string, noResume?: string, handover?: { keeps: string[] } }`. See Restarts below; `handover` under Handovers. `scheduled` is true once the restart is saved; an empty `waitingFor` means it is happening now. `background` is the background work among `waitingFor`. `release` is the release the restart should come back on (the deploy script sets it). `backgroundWaitMs` limits how long background shells and subagents hold the restart. `cancel: true` withdraws a pending restart that hasn't begun and returns `scheduled: false` (`-32020` once it has begun), with a `note` when it also put `current` back. `noResume` says why the `resume` won't be sent as things stand (the thread has already been resumed 3 times in the last hour), so whoever asked can say so rather than wait for it. A runner older than this answers `-32601` |
-| `clis.list` | `{}` | `{ clis: CliStatus[] }` |
-| `clis.check` | `{ provider?: Provider }` | `{ clis: CliStatus[] }`. Starts a version check (both CLIs when `provider` is absent) and returns at once, with the state as it was when the call arrived; the result comes through `clis.updated` |
-| `clis.update` | `{ provider: Provider, version?: string, force?: boolean }` | `{ clis: CliStatus[] }`. Starts an update and returns at once, with `update.state` `running` or `waiting`; progress comes through `clis.updated`. `version` picks a kept Codex version (how "Go back" works). `force: true` installs a held version anyway |
+| `clis.list` | `{}` | `{ clis: CliStatus[] }`. Claude Code and Codex always; Grok Build and Devin once their binary is there |
+| `clis.check` | `{ provider?: Provider }` | `{ clis: CliStatus[] }`. Starts a version check (every listed CLI when `provider` is absent) and returns at once, with the state as it was when the call arrived; the result comes through `clis.updated` |
+| `clis.update` | `{ provider: Provider, version?: string, force?: boolean }` | `{ clis: CliStatus[] }`. Starts an update and returns at once, with `update.state` `running` or `waiting`; progress comes through `clis.updated`. `version` picks a kept Codex or Devin version, or a Grok one (how "Go back" works). `force: true` installs a held version anyway |
 | `clis.setPolicy` | `{ provider: Provider, policy: "auto" \| "notify" \| "off" }` | `{ clis: CliStatus[] }` |
 | `usage.stats` | `{ days?: number }` | `UsageStats` (see Usage history): each login's tokens by the hour and its limit readings over time, for the Usage panel's charts. `days` is 1 to 14 (default 8). A runner older than this answers `-32601` |
 

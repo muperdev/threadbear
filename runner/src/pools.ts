@@ -14,7 +14,7 @@ export const UNKNOWN_WAIT_MS = 30 * 60_000;
 // A wait ends a minute after the reset, so the provider has caught up.
 export const WAIT_SLACK_MS = 60_000;
 
-const PROVIDER_TITLES: Record<Provider, string> = { claude: 'Claude', codex: 'Codex', grok: 'Grok' };
+const PROVIDER_TITLES: Record<Provider, string> = { claude: 'Claude', codex: 'Codex', grok: 'Grok', devin: 'Devin' };
 
 // The built-in list, worked out from the logins found: one pool per
 // provider holding its logins that have no note, then one per noted login

@@ -119,6 +119,7 @@ export const poolsPart = {
     const accounts = this.safeAccounts();
     if (model.startsWith('gpt-') || accounts.some((a) => a.provider === 'codex' && modelRow(a, model))) return 'codex';
     if (model.startsWith('grok-') || accounts.some((a) => a.provider === 'grok' && modelRow(a, model))) return 'grok';
+    if (model.startsWith('swe-')) return 'devin';
     if (accounts.some((a) => a.provider === 'claude' && modelRow(a, model))) return 'claude';
     return undefined;
   },

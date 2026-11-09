@@ -121,16 +121,17 @@ export function planCommand(provider: Provider, cmd: ParsedCommand, skills: Read
   const name = cmd.name.toLowerCase();
   if (name === 'model') return { kind: 'model', args: cmd.args };
   if (name === 'effort') return { kind: 'effort', args: cmd.args };
-  if (name === 'fast') return provider === 'claude' ? { kind: 'fast', args: cmd.args } : { kind: 'note', text: `${provider === 'grok' ? 'Grok' : 'Codex'} threads don't have fast mode.` };
+  if (name === 'fast') return provider === 'claude' ? { kind: 'fast', args: cmd.args } : { kind: 'note', text: `${provider === 'grok' ? 'Grok' : provider === 'devin' ? 'Devin' : 'Codex'} threads don't have fast mode.` };
   if (provider === 'claude') {
     // Claude's CLI runs the rest itself, and answers any others it can't
     // ("/x isn't available in this environment").
     return CLAUDE_ELSEWHERE.has(name) ? { kind: 'note', text: `/${name} is part of Claude Code's terminal app. ${ELSEWHERE[name]}` } : { kind: 'cli' };
   }
   if (name === 'clear' || name === 'new') return { kind: 'clear' };
-  if (provider === 'grok') {
-    // Grok runs its own commands from the prompt (ACP's available commands).
-    return name in ELSEWHERE ? { kind: 'note', text: `/${name} is part of Grok's terminal app and doesn't run in Threadbear.${ELSEWHERE[name] ? ` ${ELSEWHERE[name]}` : ''}` } : { kind: 'cli' };
+  if (provider === 'grok' || provider === 'devin') {
+    // Grok and Devin run their own commands from the prompt (ACP's available commands).
+    const who = provider === 'grok' ? 'Grok' : 'Devin';
+    return name in ELSEWHERE ? { kind: 'note', text: `/${name} is part of ${who}'s terminal app and doesn't run in Threadbear.${ELSEWHERE[name] ? ` ${ELSEWHERE[name]}` : ''}` } : { kind: 'cli' };
   }
   if (name === 'compact' || name === 'review') return { kind: 'cli' };
   if (name === 'status' || name === 'context' || name === 'cost' || name === 'usage') return { kind: 'status' };
@@ -146,7 +147,7 @@ export function planCommand(provider: Provider, cmd: ParsedCommand, skills: Read
 
 // The picker's list for a thread: Threadbear's own first, then the CLI's.
 export function commandList(provider: Provider, cli: SlashCommand[]): SlashCommand[] {
-  const own = provider === 'codex' ? [...THREADBEAR_COMMANDS, ...CODEX_COMMANDS] : provider === 'grok' ? [...THREADBEAR_COMMANDS, ...GROK_COMMANDS] : [...THREADBEAR_COMMANDS, FAST_COMMAND];
+  const own = provider === 'codex' ? [...THREADBEAR_COMMANDS, ...CODEX_COMMANDS] : provider === 'grok' || provider === 'devin' ? [...THREADBEAR_COMMANDS, ...GROK_COMMANDS] : [...THREADBEAR_COMMANDS, FAST_COMMAND];
   const seen = new Set(own.map((c) => c.name));
   const rest = cli.filter((c) => {
     if (seen.has(c.name) || (provider === 'claude' && CLAUDE_HIDDEN.has(c.name))) return false;

@@ -105,7 +105,7 @@ function setup(o: { latest?: Partial<Record<Provider, string>>; env?: NodeJS.Pro
   fs.mkdirSync(path.join(home, 'run'), { recursive: true });
   const claude = fakeClaude(root);
   const npm = fakeNpm(root);
-  const cfg = testConfig(home, { claudePath: claude.claudePath, claudeMainDir: path.join(root, 'claude-main'), cliUpdates: { claude: 'auto', codex: 'auto', checkMinutes: 60, keepCodexVersions: 2 }, ...o.cfg });
+  const cfg = testConfig(home, { claudePath: claude.claudePath, claudeMainDir: path.join(root, 'claude-main'), cliUpdates: { claude: 'auto', codex: 'auto', grok: 'auto', devin: 'auto', checkMinutes: 60, keepCodexVersions: 2 }, ...o.cfg });
   const latest = { claude: '2.1.311', codex: '0.165.0', ...o.latest };
   const fetched: string[] = [];
   const fetchText = async (url: string) => {

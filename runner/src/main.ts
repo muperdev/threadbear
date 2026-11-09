@@ -37,6 +37,7 @@ import { ProcessRegistry } from './proc.ts';
 import { Runner } from './runner.ts';
 import { CodexAdapter } from './adapters/codex/adapter.ts';
 import { GrokAdapter } from './adapters/grok/adapter.ts';
+import { devinAdapter } from './adapters/devin/adapter.ts';
 import { McpHttpServer } from './mcp-http.ts';
 import { resolveCodexBinary } from './adapters/codex/appserver.ts';
 import { checkSurface, testedVersion } from './adapters/codex/surface.ts';
@@ -122,7 +123,7 @@ async function main(): Promise<void> {
   const usageHistory = new UsageHistory({ dataDir: cfg.home, clock: realClock, log });
   const usage = new UsageStore({ limitsFile: cfg.tokenStatsLimitsFile, dataDir: cfg.home, clock: realClock, log, history: usageHistory });
   usage.start();
-  const accounts = new AccountRegistry({ ...cfg, grokOn: () => experimentOn(cfg.home, 'grok') }, usage);
+  const accounts = new AccountRegistry({ ...cfg, grokOn: () => experimentOn(cfg.home, 'grok'), devinOn: () => experimentOn(cfg.home, 'devin') }, usage);
   const tally = new TokenTally({ dataDir: cfg.home, clock: realClock, log, accounts: () => accounts.list() });
   if (cfg.tokenTally !== false) tally.start();
   // Every session gets tools for driving Threadbear itself, bound to its
@@ -163,6 +164,7 @@ async function main(): Promise<void> {
       releaseIdle: (p, v) => runner.releaseIdle(p, v),
       versionsInUse: (p) => runner.versionsInUse(p),
       codexBinariesInUse: () => runner.codexBinariesInUse(),
+      devinBinariesInUse: () => devin.binariesInUse(),
     },
     codex: { resolve: (start) => resolveCodexBinary(start), checkSurface, testedVersion },
     notice: (level, message) => runner.notice(level, message),
@@ -230,12 +232,25 @@ async function main(): Promise<void> {
   // logins are listed): one `grok agent stdio` per live thread, with the
   // threadbear tools served to it over MCP on 127.0.0.1. Their end_turn
   // works as Codex's: the final answer after it ends the turn.
+  const acpMcp = new McpHttpServer(log);
   const grok = new GrokAdapter({
     grokBinary: () => cfg.grokPath,
     grokArgs: cfg.grokArgs,
     registry,
     log,
-    mcp: new McpHttpServer(log),
+    mcp: acpMcp,
+    toolsFor: (threadId) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, scheduleChecks: () => experimentOn(cfg.home, 'scheduleChecks'), remote: remoteControl, replyButtons: () => experimentOn(cfg.home, 'replyButtons') }),
+    extraGuidance: () => (experimentOn(cfg.home, 'richBlocks') ? RICH_BLOCKS_LINE : ''),
+  });
+  // Devin threads (the devin experiment, docs/devin-plan.md): one `devin
+  // acp` per live thread, driven by the Grok adapter in Devin's dialect,
+  // with the same threadbear tools over the same MCP server.
+  const devin = devinAdapter({
+    devinBinary: () => cfg.devinPath,
+    devinArgs: cfg.devinArgs,
+    registry,
+    log,
+    mcp: acpMcp,
     toolsFor: (threadId) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, scheduleChecks: () => experimentOn(cfg.home, 'scheduleChecks'), remote: remoteControl, replyButtons: () => experimentOn(cfg.home, 'replyButtons') }),
     extraGuidance: () => (experimentOn(cfg.home, 'richBlocks') ? RICH_BLOCKS_LINE : ''),
   });
@@ -261,7 +276,7 @@ async function main(): Promise<void> {
     atMac: () => atMac,
     config: cfg,
     store,
-    adapters: { claude, codex, grok },
+    adapters: { claude, codex, grok, devin },
     accounts,
     // A draining runner's readings go to the primary, which owns
     // usage.json (docs/protocol.md, "Handovers").

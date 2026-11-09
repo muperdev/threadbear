@@ -978,7 +978,7 @@ struct SignInBanner: View {
             HStack(spacing: zoomed(8)) {
                 Image(systemName: "person.crop.circle.badge.exclamationmark").foregroundStyle(.orange)
                 Text("\(name) on \(runner) needs you to sign in again.").lineLimit(1)
-                    .tip("Sign in on \(runner) itself: \(name == "Codex" ? "codex login" : name == "Grok" ? "grok login" : "claude auth login") in its Terminal")
+                    .tip("Sign in on \(runner) itself: \(name == "Codex" ? "codex login" : name == "Grok" ? "grok login" : name == "Devin" ? "devin auth login" : "claude auth login") in its Terminal")
                 Spacer(minLength: zoomed(6))
                 Button("Send again") { app.sendAgain(thread.id) }
                     .tip("Send your last message again, once you've signed in")

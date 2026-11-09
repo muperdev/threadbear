@@ -46,6 +46,11 @@ extension AppModel {
         cliCall(BusyKey.updateCli(provider)) { try await $0.updateCli(provider: provider, version: version, force: force) }
     }
 
+    /// Every CLI with a new version waiting, each with its own spinner.
+    func updateAllClis() {
+        for provider in CliText.updatable(clis) { updateCli(provider) }
+    }
+
     /// The menu says the new setting at once, and goes back if it's refused.
     func setCliPolicy(_ provider: String, _ policy: String) {
         guard let index = clis.firstIndex(where: { $0.provider == provider }) else {
@@ -157,6 +162,7 @@ extension AppModel {
         case "claude": return Account(id: "claude-main", provider: "claude", title: "Claude")
         case "codex": return Account(id: "codex-main", provider: "codex", title: "Codex")
         case "grok": return Account(id: "grok-main", provider: "grok", title: "Grok")
+        case "devin": return Account(id: "devin-main", provider: "devin", title: "Devin")
         default: return nil
         }
     }
@@ -261,12 +267,13 @@ enum SignIn {
     static func script(_ account: Account, cliPath: String) -> String {
         let codex = account.provider == "codex"
         let grok = account.provider == "grok"
+        let devin = account.provider == "devin"
         var env = ""
         if codex, !account.configDir.isEmpty { env = "CODEX_HOME=\(quoted(account.configDir)) " }
         if grok, account.id != "grok-main", !account.configDir.isEmpty { env = "GROK_HOME=\(quoted(account.configDir)) " }
-        if !codex, !grok, account.id != "claude-main", !account.configDir.isEmpty { env = "CLAUDE_CONFIG_DIR=\(quoted(account.configDir)) " }
-        let binary = cliPath.isEmpty ? (codex ? "codex" : grok ? "grok" : "claude") : quoted(cliPath)
-        let name = codex ? "Codex" : grok ? "Grok" : "Claude"
+        if !codex, !grok, !devin, account.id != "claude-main", !account.configDir.isEmpty { env = "CLAUDE_CONFIG_DIR=\(quoted(account.configDir)) " }
+        let binary = cliPath.isEmpty ? (codex ? "codex" : grok ? "grok" : devin ? "devin" : "claude") : quoted(cliPath)
+        let name = codex ? "Codex" : grok ? "Grok" : devin ? "Devin" : "Claude"
         return """
         #!/bin/zsh -l
         export PATH="$HOME/.local/bin:$PATH"

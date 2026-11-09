@@ -710,7 +710,7 @@ final class AppModel {
     static let lastModelKey = "lastModel"
     static let lastEffortKey = "lastEffort"
     static let newThreadFastKey = "newThreadFastMode"
-    static let memoryProviders = ["claude", "codex", "grok"]
+    static let memoryProviders = ["claude", "codex", "grok", "devin"]
     static let collapsedSectionsKey = "collapsedSections"
     /// Set once Hibernating and Archive have been folded the first time.
     /// They came after collapsedSections did, so a saved list without them

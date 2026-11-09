@@ -28,6 +28,8 @@ export type McpEndpoint = {
 
 const MAX_BODY = 8 * 1024 * 1024;
 
+export const KEEP_ALIVE_MS = 10 * 60_000;
+
 export class McpHttpServer {
   private server?: http.Server;
   private starting?: Promise<number>;
@@ -59,6 +61,11 @@ export class McpHttpServer {
         this.starting = undefined;
         reject(e);
       });
+      // Agents' HTTP clients keep a connection to reuse well past Node's
+      // 5 s default; a close racing their next request failed it ("error
+      // sending request", Devin 3000.12.32 after 5.4 s idle, 9 Nov 2026).
+      server.keepAliveTimeout = KEEP_ALIVE_MS;
+      server.headersTimeout = KEEP_ALIVE_MS + 5000;
       server.listen(0, '127.0.0.1', () => {
         this.server = server;
         server.unref();

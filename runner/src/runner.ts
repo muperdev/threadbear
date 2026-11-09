@@ -3732,11 +3732,11 @@ export function oneLine(text: string, max: number): string {
 
 // A provider's name in notes.
 export function providerName(p: Provider): string {
-  return p === 'codex' ? 'Codex' : p === 'grok' ? 'Grok' : 'Claude';
+  return p === 'codex' ? 'Codex' : p === 'grok' ? 'Grok' : p === 'devin' ? 'Devin' : 'Claude';
 }
 
 function cliName(p: Provider): string {
-  return p === 'codex' ? 'Codex' : p === 'grok' ? 'Grok Build' : 'Claude Code';
+  return p === 'codex' ? 'Codex' : p === 'grok' ? 'Grok Build' : p === 'devin' ? 'Devin' : 'Claude Code';
 }
 
 // Claude's own ids: its aliases, and anything starting claude- (with or

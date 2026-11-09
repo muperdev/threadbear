@@ -81,8 +81,11 @@ public enum ComposerChips {
     /// Grok's: up to Extra High.
     public static let grokEffortLevels = ["low", "medium", "high", "xhigh"]
 
+    /// Devin's (`thought_level` on SWE-2): Medium, High and Max.
+    public static let devinEffortLevels = ["medium", "high", "max"]
+
     public static func effortLevels(provider: String) -> [String] {
-        provider == "codex" ? codexEffortLevels : provider == "grok" ? grokEffortLevels : effortLevels
+        provider == "codex" ? codexEffortLevels : provider == "grok" ? grokEffortLevels : provider == "devin" ? devinEffortLevels : effortLevels
     }
 
     /// Goldilocks: what the porridge is like at each level, under its name

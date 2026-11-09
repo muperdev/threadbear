@@ -233,6 +233,20 @@ final class CodexTranscriptTests: XCTestCase {
         XCTAssertEqual(CliText.policies.map(CliText.policyTitle), ["Automatic", "Ask me", "Off"])
     }
 
+    /// Update all installs every CLI that's behind: not one held back, not
+    /// one already updating.
+    func testUpdateAllTakesTheOnesBehind() {
+        let claude = CliStatus(provider: "claude", installedVersion: "2.1.311", latestVersion: "2.1.312", status: "behind")
+        let grok = CliStatus(provider: "grok", installedVersion: "1.0.77", latestVersion: "1.0.78", status: "behind")
+        var devin = CliStatus(provider: "devin", installedVersion: "3000.11.205", latestVersion: "3000.12.32", status: "behind")
+        let codex = CliStatus(provider: "codex", installedVersion: "0.164.0", latestVersion: "0.165.0", status: "held")
+        XCTAssertEqual(CliText.updatable([claude, codex, grok, devin]), ["claude", "grok", "devin"])
+        devin.update = CliStatus.Update(state: "running", targetVersion: "3000.12.32")
+        XCTAssertEqual(CliText.updatable([claude, codex, grok, devin]), ["claude", "grok"])
+        XCTAssertEqual(CliText.statusLine(grok), "Grok Build 1.0.77, 1.0.78 available")
+        XCTAssertEqual(CliText.bannerText(devin), "Updating Devin to 3000.12.32")
+    }
+
     /// After going back from a version the runner holds it, with its own
     /// reason; "Go back" to it would just be "Update anyway" again.
     func testAVersionWentBackFromIsHeldWithItsReason() {

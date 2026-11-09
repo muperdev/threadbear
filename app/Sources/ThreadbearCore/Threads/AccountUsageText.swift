@@ -337,6 +337,7 @@ public enum CliText {
         case "claude": return "Claude Code"
         case "codex": return "Codex"
         case "grok": return "Grok Build"
+        case "devin": return "Devin"
         default: return provider.prefix(1).uppercased() + provider.dropFirst()
         }
     }
@@ -381,6 +382,12 @@ public enum CliText {
         guard let previous = cli.previousVersion, !previous.isEmpty, previous != cli.installedVersion, !isUpdating(cli),
               previous != cli.hold?.version else { return nil }
         return "Go back to \(previous)"
+    }
+
+    /// The CLIs "Update all" installs: each one behind and not held back.
+    /// The button shows only when there are two or more.
+    public static func updatable(_ clis: [CliStatus]) -> [String] {
+        clis.filter { $0.status == "behind" && !isUpdating($0) }.map(\.provider)
     }
 
     public static func isUpdating(_ cli: CliStatus) -> Bool {
@@ -468,7 +475,7 @@ public enum AccountMenu {
                 sections.append(Section(id: provider, title: ModelPicker.providerTitle(provider), items: [item]))
             }
         }
-        let order = ["claude", "codex", "grok"]
+        let order = ["claude", "codex", "grok", "devin"]
         return sections.enumerated().sorted { a, b in
             let ia = order.firstIndex(of: a.element.id) ?? order.count
             let ib = order.firstIndex(of: b.element.id) ?? order.count
