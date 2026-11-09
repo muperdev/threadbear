@@ -38,7 +38,7 @@ final class DictationStream {
     /// Asks for the microphone, gets a token, opens the socket and starts
     /// listening.
     func start(token: CollabuteAuth.VoiceToken, language: String?) async throws {
-        try await VoiceAudio.askForAccess()
+        try await DictationAudio.askForAccess()
         self.language = language
         open(token)
         try startEngine()
@@ -191,7 +191,7 @@ final class DictationStream {
         var lastLevel = Date.distantPast
         // The microphone's own format; converted on the audio thread.
         input.installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
-            let level = VoiceAudio.level(buffer)
+            let level = DictationAudio.level(buffer)
             if let out = converter.convert(buffer), let samples = out.floatChannelData?[0] {
                 let pcm = DictationFrames.pcm16(UnsafeBufferPointer(start: samples, count: Int(out.frameLength)))
                 for frame in chunker.add(pcm) {
