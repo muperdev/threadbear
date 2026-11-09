@@ -3218,7 +3218,7 @@ test('the phone asks for a thread\'s slash commands: the list goes back as the c
   const done = calls.find((c) => c.fn === 'sync:finishCommand' && c.args.commandId === 'sc1')!;
   assert.equal(done.args.ok, true);
   const list = JSON.parse(done.args.result as string) as { name: string }[];
-  assert.deepEqual(list.map((c) => c.name), ['model', 'effort', 'compact', 'deslop']);
+  assert.deepEqual(list.map((c) => c.name), ['model', 'effort', 'fast', 'compact', 'deslop']);
   await sync.stop();
 });
 
