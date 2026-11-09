@@ -674,7 +674,8 @@ struct PreviewBody: View {
                 // two threads on one runner can show the same copy.
                 .id("\(thread.id) \(path)")
         } else {
-            QuickLookView(url: URL(fileURLWithPath: path), opened: preview.opened)
+            QuickLookView(url: URL(fileURLWithPath: path), opened: preview.opened,
+                          reveal: preview.away == nil ? { [app] in app.revealInFinder($0.path) } : nil)
         }
     }
 }
@@ -784,6 +785,8 @@ struct QuickLookView: NSViewRepresentable {
     let url: URL
     /// Bumped by each open, so the same file opened again is read again.
     let opened: Int
+    /// Show in Finder on a picture's right-click menu (FilePreviewView.reveal).
+    var reveal: ((URL) -> Void)? = nil
 
     final class Coordinator {
         var shown: (URL, Int)?
@@ -794,6 +797,7 @@ struct QuickLookView: NSViewRepresentable {
     func makeNSView(context: Context) -> FilePreviewView { FilePreviewView() }
 
     func updateNSView(_ view: FilePreviewView, context: Context) {
+        view.reveal = reveal
         if let shown = context.coordinator.shown, shown.0 == url, shown.1 == opened { return }
         view.show(url)
         context.coordinator.shown = (url, opened)
@@ -930,17 +934,43 @@ final class FilePreviewView: NSView {
         return pressTarget(at: point)
     }
 
+    /// Shows the file in the Finder, for the picture's right-click menu.
+    /// Nil for a copy fetched from another Mac: its folder is just the
+    /// cache, as the panel's bar has no Reveal in Finder for one either.
+    var reveal: ((URL) -> Void)?
+
     /// A picture's right-click menu: Copy Image, to paste the picture
-    /// itself into Slack or X (Mike, 3 Nov). Copy path and Reveal in
-    /// Finder are on its Highlights row and the panel's bar already.
+    /// itself into Slack or X (Mike, 3 Nov), then Show in Finder and Copy
+    /// Path, as a file link in the transcript has. The panel's bar has a
+    /// Reveal in Finder button too, but a right-click on the picture is
+    /// where people look (Behrooz, 9 Nov).
     override func menu(for event: NSEvent) -> NSMenu? {
         guard case .picture = content else { return super.menu(for: event) }
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Copy Image", symbol: "doc.on.doc", action: #selector(copyImageItem), target: self))
+        if reveal != nil {
+            menu.addItem(.separator())
+            menu.addItem(NSMenuItem(title: "Show in Finder", symbol: "folder", action: #selector(showInFinderItem), target: self))
+            menu.addItem(NSMenuItem(title: "Copy Path", symbol: "doc.on.doc", action: #selector(copyPathItem), target: self))
+        }
         return menu
     }
 
     @objc private func copyImageItem() { copyImage() }
+
+    @objc private func showInFinderItem() {
+        if let url { reveal?(url) }
+    }
+
+    @objc private func copyPathItem() { copyPath() }
+
+    /// Puts the picture's path on `pasteboard` as text.
+    @discardableResult
+    func copyPath(to pasteboard: NSPasteboard = .general) -> Bool {
+        guard let url else { return false }
+        pasteboard.clearContents()
+        return pasteboard.setString(url.path, forType: .string)
+    }
 
     /// Puts the picture on `pasteboard` as the file's own bytes (a PNG
     /// stays a PNG, a GIF keeps its frames) and as TIFF, which every app

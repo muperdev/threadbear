@@ -284,7 +284,8 @@ in the side pane, or the picture or video showing there. It drops as the file it
 drag a clip straight into a post on X, or onto the Finder. A web link drags
 out as its address.
 To paste a picture instead, right-click it in the side pane and choose
-Copy Image.
+Copy Image. The same menu has Show in Finder and Copy Path, as a file
+link's right-click menu in a reply does.
 
 ## Full access or Ask before edits
 <!-- slug: full-access -->
