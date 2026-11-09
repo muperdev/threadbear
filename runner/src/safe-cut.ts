@@ -122,18 +122,21 @@ export function tailSafely(text: string, max: number, mark = ''): string {
   return mark + text.slice(safeStart(text, text.length - Math.max(0, max - mark.length)));
 }
 
-// Text read only up to a limit (a command's output) ends wherever the limit
-// fell, perhaps in a secret whose end was never read: its last run of
-// non-space characters goes, and a tail kept from the end of a longer output
-// loses its first run likewise (dropPartialStart).
-export function dropPartialEnd(text: string): string {
-  const at = lastSpace(text, text.length, Infinity);
-  return at < 0 ? '' : text.slice(0, at + 1);
+// Text read only up to a limit (a command's output) ends wherever the
+// reading stopped, perhaps in a secret whose end was never read; text whose
+// start was let go of (a check's output, kept from the end) likewise begins
+// in one. The run of non-space characters at that edge was never seen whole,
+// so a cut is never inside it, and the place is then checked like any other
+// cut, against what was read either side of it (safeEnd, safeStart). A space
+// isn't taken as outside every secret: dropping just the last run cut a quoted
+// password with a space in it at that space, when a long blob followed it, and
+// sent its first word (Daybreak, 8 Nov).
+export function safeEndOfPartial(text: string, end: number): number {
+  return safeEnd(text, Math.min(end, lastSpace(text, text.length, Infinity) + 1));
 }
 
-export function dropPartialStart(text: string): string {
-  const at = nextSpace(text, 0);
-  return at >= text.length ? '' : text.slice(at);
+export function safeStartOfPartial(text: string, start: number): number {
+  return safeStart(text, Math.max(start, nextSpace(text, 0)));
 }
 
 // Whether text.slice(start, end), a part taken out of `text` some other way

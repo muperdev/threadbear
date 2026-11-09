@@ -14,6 +14,9 @@ import ThreadbearCore
 /// top right, to read the reply behind it (Mike, 30 Oct).
 struct ComposerCard: NSViewRepresentable {
     let row: TranscriptRow
+    /// The thread whose card it is, so a reply button in it is pressed as
+    /// that thread's and no other (ComposerCardHost.hostedThreadId).
+    var threadId: String? = nil
     var collapsed = false
     let controller: TranscriptController
 
@@ -23,7 +26,7 @@ struct ComposerCard: NSViewRepresentable {
 
     func updateNSView(_ view: ComposerCardHost, context: Context) {
         view.attach(controller)
-        view.show(row, collapsed: collapsed)
+        view.show(row, collapsed: collapsed, threadId: threadId)
     }
 
     /// SwiftUI asks this many times a layout pass, once for each stack
@@ -38,8 +41,19 @@ struct ComposerCard: NSViewRepresentable {
     }
 }
 
-final class ComposerCardHost: NSView {
+final class ComposerCardHost: NSView, TranscriptThreadHost {
     private let cell = TextRowCell()
+    /// The thread whose card this is, for a reply button pressed in one of
+    /// its asks (TranscriptTextView.transcriptThreadId): the thread it was
+    /// shown for, and only while its controller still shows that thread.
+    /// The main panel's controller moves from thread to thread, and for a
+    /// moment after it moves the card can still hold the last thread's
+    /// asks; a press then is nobody's (Codex's review, 8 Nov).
+    var hostedThreadId: String? {
+        guard let shownFor, shownFor == controller?.session?.threadId else { return nil }
+        return shownFor
+    }
+    private var shownFor: String?
     /// A card taller than `maxHeight` scrolls inside the box: three asks
     /// with their buttons pushed the agent's reply off the top.
     private let scroll = NSScrollView()
@@ -169,7 +183,8 @@ final class ComposerCardHost: NSView {
         return render
     }
 
-    func show(_ row: TranscriptRow, collapsed: Bool = false) {
+    func show(_ row: TranscriptRow, collapsed: Bool = false, threadId: String?) {
+        shownFor = threadId
         // The same card on another Mac's thread (the transcript's controller
         // is reused across threads): drawn again, without this Mac's pictures.
         if let shown, shown.local != (controller?.localPictures ?? false) { needsLayout = true }

@@ -584,14 +584,6 @@ enum Automation {
             target.concludeDragOperation(drag)
             target.draggingEnded(drag)
             return dropped ? "ok dropped on \(type(of: target))" : "error \(type(of: target)) turned it away"
-        case "browser":
-            // {"cmd":"browser","do":"click|right|scroll|key|type","x":,"y":,...}: real
-            // NSEvents to the Browser panel's page, in the page's own points,
-            // through the window as Mike's would go, without the pointer.
-            guard let window = mainWindow, let content = window.contentView,
-                  let view = all(AgentSurfaceView.self, in: content).last(where: { !$0.isHiddenOrHasHiddenAncestor })
-            else { return "error no browser panel" }
-            return view.automate(c, in: window)
         case "click":
             // A visible, enabled button in the transcript with this title,
             // or this accessibility label for an icon-only one. `tip` instead
@@ -1000,7 +992,8 @@ enum Automation {
             return "ok"
         case "project":
             // {"cmd":"project","id":"p_…"} opens a project's page in the
-            // detail area; {"cmd":"project","close":true} closes it.
+            // detail area; {"cmd":"project","close":true} closes it, and
+            // "newThread" true is the page's New Thread button.
             if c["close"] as? Bool == true {
                 app.openProjectId = nil
                 return "ok"
@@ -1010,6 +1003,11 @@ enum Automation {
             }
             guard app.project(id) != nil else { return "error no project \(id); there are \(app.projects.map(\.id).joined(separator: ", "))" }
             app.openProjectPage(id)
+            if c["newThread"] as? Bool == true, let project = app.project(id) {
+                app.newThread(in: project)
+                try? await Task.sleep(for: .milliseconds(200))
+                return "ok new thread in \(app.newThreadProjectId ?? "no project"), folder \(app.newThreadCwd ?? "default")"
+            }
             try? await Task.sleep(for: .milliseconds(200))
             return "ok"
         case "close-schedule":
@@ -1089,25 +1087,6 @@ enum Automation {
             // give AppKit a moment to redraw in the new one.
             try? await Task.sleep(for: .milliseconds(200))
             return "ok \(mode)"
-        case "voice-stage":
-            // Shows Voice mode's bear in a phase, with no microphone or
-            // engine (screenshots of the avatar); "off" puts it away.
-            guard let id = app.selection else { return "error no thread is open" }
-            // The experiment, for this look only: the mock's hello hasn't it.
-            app.experiments.insert(VoiceMode.experiment)
-            let words = c["text"] as? String ?? ""
-            let level = Float(number(c["level"]) ?? 0)
-            switch c["phase"] as? String {
-            case "listening": VoiceMode.shared.stage(.listening, threadId: id, level: level)
-            case "hearing": VoiceMode.shared.stage(.hearing(words), threadId: id, level: level)
-            case "thinking": VoiceMode.shared.stage(.thinking, threadId: id, level: level)
-            case "speaking": VoiceMode.shared.stage(.speaking, threadId: id, level: level)
-            case "starting": VoiceMode.shared.stage(.starting(words.isEmpty ? "Getting ready…" : words), threadId: id, level: level)
-            case "off": VoiceMode.shared.stage(.off, threadId: nil, level: 0)
-            default: return "error phase is listening, hearing, thinking, speaking, starting or off"
-            }
-            try? await Task.sleep(for: .milliseconds(300))
-            return "ok"
         case "zoom":
             // What ⌘=, ⌘- and ⌘0 do, or a percent from TextZoom.steps.
             let zoom = TextZoom.shared
@@ -1226,6 +1205,14 @@ enum Automation {
             return composer.debugHoverChip(number).map { "ok window \($0)" } ?? "error no chip \(number) with a card"
         case "select-text":
             return select(c, app: app)
+        case "app-menu":
+            // The Threadbear menu's items, as it opens: titles with their
+            // keys, separators as "-".
+            guard let menu = NSApp.mainMenu?.items.first?.submenu else { return "error no app menu" }
+            menu.update()
+            return "ok " + json(menu.items.map { item in
+                item.isSeparatorItem ? "-" : item.title + (item.keyEquivalent.isEmpty ? "" : " [\(item.keyEquivalent)]")
+            })
         case "den":
             // Threadbear > About Threadbear, through the menu item itself.
             guard let menu = NSApp.mainMenu?.items.first?.submenu,
@@ -1361,6 +1348,20 @@ enum Automation {
             return "ok \(window.windowNumber) \(Int(size.width))x\(Int(size.height))"
         case "settings":
             return await settings(c, app: app)
+        case "runners-front":
+            // The Runners panel open and the main window floating in front
+            // and key, for real events on a desktop nobody's using (Tinker
+            // Desk, app/README.md "A real drag"). Says the window's number
+            // and top left in screen points.
+            guard let window else { return "error no window" }
+            app.runnersShown = true
+            window.level = .floating
+            NSApp.activate()
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+            try? await Task.sleep(for: .milliseconds(400))
+            let top = (NSScreen.screens.first?.frame.height ?? 0) - window.frame.maxY
+            return "ok \(window.windowNumber) \(Int(window.frame.minX)) \(Int(top))"
         case "shortcuts":
             return await shortcuts(c)
         case "focus":

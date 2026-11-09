@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { EXPERIMENTS, EXPERIMENTS_DIR, experimentOn, experimentsOn, parseExperiment } from '../../src/experiments.ts';
+import { EXPERIMENTS, EXPERIMENTS_DIR, experimentOn, parseExperiment } from '../../src/experiments.ts';
 import { tmpDir } from '../helpers/fakes.ts';
 
 test('experiments: each has a unique id, a landing date, a title and the schedule that asks about it', () => {
@@ -30,16 +30,6 @@ test("experiments: runner.json's switch wins over the default, read afresh each 
   assert.equal(experimentOn(home, 'labReview'), true);
   fs.writeFileSync(path.join(home, 'runner.json'), JSON.stringify({ experiments: { labReview: 'yes' } }));
   assert.equal(experimentOn(home, 'labReview'), false, 'only a true or false counts');
-});
-
-test("experiments: hello's list is the ones on, for experiments that live in the app", () => {
-  const home = tmpDir();
-  assert.deepEqual(experimentsOn(home), EXPERIMENTS.filter((x) => x.on).map((x) => x.id));
-  fs.writeFileSync(path.join(home, 'runner.json'), JSON.stringify({ experiments: { voiceMode: true, labReview: false, notOne: true } }));
-  const on = experimentsOn(home);
-  assert.ok(on.includes('voiceMode'), 'Voice mode, which the Mac app checks');
-  assert.ok(!on.includes('labReview'));
-  assert.ok(!on.includes('notOne'), 'only experiments that have a file');
 });
 
 test('experiments: every experimentOn in the runner names an experiment that has a file', () => {

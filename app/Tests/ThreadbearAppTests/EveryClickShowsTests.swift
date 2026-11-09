@@ -26,14 +26,13 @@ final class EveryClickShowsTests: XCTestCase {
         "interrupt", "updateThread", "share", "tickAsk", "respond", "answerStartRequest", "approvePlan",
         "answerSecret", "checkClis", "updateCli", "setCliPolicy", "createSchedule", "updateSchedule",
         "deleteSchedule", "setRunnerOrder", "runSchedule", "createProject", "updateProject", "setProjectIcon",
-        "mergeProject", "deleteProject", "setThreadProjects", "runLibrarian", "updateLibrarian", "savePools",
+        "mergeProject", "deleteProject", "deleteThread", "setThreadProjects", "runLibrarian", "updateLibrarian", "savePools",
     ]
 
     /// Functions that show their click some other way, and how.
     private static let showsItsOwnWay: [String: String] = [
         "RemoteRunners.swift setRunnerOrder": "the rows move at once",
         "RemoteRunners.swift sendNewThread": "creatingThread: the Send button spins",
-        "AppModel+ThreadActions.swift startThreadSpoken": "said, not clicked: Voice shows Working on it at once (VoiceMode.send), and creatingThread spins Send",
         "ThreadSession.swift tickAsk": "the box changes at once",
         "ThreadSession.swift answerSecret": "async: the card awaits it and shows its own state",
         "PaneModel.swift removeHighlight": "the row goes at once",

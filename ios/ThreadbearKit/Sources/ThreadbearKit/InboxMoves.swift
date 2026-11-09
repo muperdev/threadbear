@@ -15,22 +15,15 @@ public extension InboxSections {
         return Set(new.placements.filter { old[$0.key] != $0.value }.keys)
     }
 
-    /// Starred, Inbox and Running as one flat run of list rows, not sections. A
-    /// List fades a row out of one section and into another, even with the same
-    /// id, where one flat run moves it, and a row gliding up from Running is the
-    /// whole point (Mike's mockup, 7 Nov).
-    func lines(folded: (PhoneSection) -> Bool) -> [InboxLine] {
-        var lines: [InboxLine] = []
-        func add(_ section: PhoneSection, _ threads: [PhoneThread]) {
-            guard !threads.isEmpty else { return }
-            lines.append(.heading(section))
-            if !folded(section) { lines += threads.map { .thread($0, under: section) } }
-        }
-        add(.starred, starred)
-        add(.inbox, inbox)
-        if inbox.isEmpty, isInboxZero { lines.append(.inboxZero) }
-        add(.running, running)
-        return lines
+    /// The threads under a heading both before and after, but a different one:
+    /// the rows that travel from one to the other (InboxView flies a picture of
+    /// each between them, as the List would only fade it). One that's turned up
+    /// or gone has nowhere to travel from or to, so it isn't here.
+    func moves(to new: InboxSections) -> [String: InboxMove] {
+        let old = placements
+        var moves: [String: InboxMove] = [:]
+        for (id, to) in new.placements { if let from = old[id], from != to { moves[id] = InboxMove(from: from, to: to) } }
+        return moves
     }
 
     private var placements: [String: PhoneSection] {
@@ -48,20 +41,14 @@ public extension InboxSections {
     var isInboxZero: Bool { inbox.isEmpty && needsYouCount == 0 }
 }
 
-/// One row in the flat top of the inbox (`InboxSections.lines`).
-public enum InboxLine: Identifiable, Sendable {
-    case heading(PhoneSection)
-    case thread(PhoneThread, under: PhoneSection)
-    /// "Nothing in the inbox", in the Inbox heading's place.
-    case inboxZero
+/// A thread's row going from one heading to another (`InboxSections.moves`).
+public struct InboxMove: Sendable, Equatable {
+    public var from: PhoneSection
+    public var to: PhoneSection
 
-    /// A thread's is its own, whichever heading it's under, so it moves.
-    public var id: String {
-        switch self {
-        case let .heading(section): "heading:\(section.rawValue)"
-        case let .thread(thread, _): thread.threadId
-        case .inboxZero: "inbox-zero"
-        }
+    public init(from: PhoneSection, to: PhoneSection) {
+        self.from = from
+        self.to = to
     }
 }
 

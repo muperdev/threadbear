@@ -26,13 +26,23 @@ import WebKit
 ///
 /// Over a sidebar row nothing's held back, as the row (RowSwipeController)
 /// needs the whole gesture: a swipe left is its archive, and it gives up a
-/// swipe right to Back while there's somewhere to go back to (`takesBack`).
+/// swipe the other way to Back or Forward while there's somewhere to go
+/// (`takesFingersRight`).
+///
+/// Which way is Back follows System Settings' natural scrolling, as Safari's
+/// does: the page moves with the content, so with natural scrolling fingers
+/// going right go Back, and without it fingers going left do. The first
+/// version always went Back to the right, backwards for Mike, who has natural
+/// scrolling off (8 Nov).
 @MainActor
 @Observable
 final class SwipeNavigation {
     static let shared = SwipeNavigation()
 
     private(set) var swipe = NavigationSwipe()
+    /// Natural scrolling, for the gesture under way: the content and the
+    /// fingers go the same way. The card fills the way the fingers go.
+    private(set) var natural = true
     @ObservationIgnored weak var app: AppModel?
     @ObservationIgnored private var monitor: Any?
     /// The events held back while deciding, to hand on if it's a scroll.
@@ -68,10 +78,12 @@ final class SwipeNavigation {
         }
     }
 
-    /// Whether a swipe right goes Back just now: a row deciding what a
-    /// swipe is asks, so the two never both take it.
-    var takesBack: Bool {
-        scrollSwipesOn() && (app?.canGoBack ?? false)
+    /// Whether fingers going right go Back or Forward just now: a row
+    /// deciding what a swipe is asks, so the two never both take it.
+    /// `inverted`: natural scrolling, where that's Back.
+    func takesFingersRight(inverted: Bool) -> Bool {
+        guard scrollSwipesOn(), let app else { return false }
+        return inverted ? app.canGoBack : app.canGoForward
     }
 
     /// Whether the event was ours (held back, or a page swipe's).
@@ -133,10 +145,16 @@ final class SwipeNavigation {
         eatingMomentum = false
         release()
         guard scrollSwipesOn() else { return swipe.reset() }
-        // A row only ever lets a swipe right by.
+        natural = event.isDirectionInvertedFromDevice
+        // A row only ever lets fingers going right by.
         let overRow = RowSwipeController.listening?.isHovered == true
-        let ways = ways(at: event.locationInWindow, in: window, inverted: event.isDirectionInvertedFromDevice, app: app)
-        swipe.begin(allowed: overRow ? ways.intersection([.back]) : ways, holds: !overRow)
+        let free = freeWays(at: event.locationInWindow, in: window, scrolls: true)
+        let ways = free.intersection(historyWays(app))
+        let fingersRight: NavigationSwipe.Direction = event.isDirectionInvertedFromDevice ? .back : .forward
+        // Over a row, a way with nowhere to go is the row's (it gives a
+        // little and stops); elsewhere the card says there's nowhere to go.
+        swipe.begin(allowed: overRow ? ways.intersection([fingersRight]) : ways,
+                    empty: overRow ? [] : free.subtracting(ways), holds: !overRow)
     }
 
     /// A movement with no gesture under way, or after a scroll that went
@@ -158,12 +176,11 @@ final class SwipeNavigation {
     private static let flickGap: TimeInterval = 0.1
 
     private func moved(_ event: NSEvent, in window: NSWindow) -> Bool {
-        // The fingers' way, right positive, whichever way the system
-        // scrolls: with natural scrolling the delta already goes with them.
-        let sign: CGFloat = event.isDirectionInvertedFromDevice ? 1 : -1
+        // The content's way, right positive (Back), as the system scrolls
+        // it: the fingers' way with natural scrolling, the other way without.
         let wasArmed = swipe.armed
         let verdict = withAnimation(nil) {
-            swipe.move(dx: Double(event.scrollingDeltaX * sign), dy: Double(event.scrollingDeltaY), elapsed: event.timestamp - lastEvent)
+            swipe.move(dx: Double(event.scrollingDeltaX), dy: Double(event.scrollingDeltaY), elapsed: event.timestamp - lastEvent)
         }
         if swipe.armed != wasArmed {
             // A tick under the fingers on crossing the line, as a row's.
@@ -214,7 +231,7 @@ final class SwipeNavigation {
     /// AppKit's swipe event, one per gesture: a positive deltaX is the
     /// fingers going left, which is Forward, as Safari has it.
     private func threeFingers(_ event: NSEvent, in window: NSWindow, app: AppModel) -> Bool {
-        let ways = ways(at: event.locationInWindow, in: window, inverted: nil, app: app)
+        let ways = freeWays(at: event.locationInWindow, in: window, scrolls: false).intersection(historyWays(app))
         if event.deltaX < 0, ways.contains(.back) { go(.back, app: app); return true }
         if event.deltaX > 0, ways.contains(.forward) { go(.forward, app: app); return true }
         return false
@@ -228,30 +245,32 @@ final class SwipeNavigation {
         }
     }
 
-    /// The ways a swipe at `point` can go: somewhere in the history that
-    /// way, and nothing under the pointer that scrolls sideways that way
-    /// first (a wide table, a row of chips), as Safari leaves a wide page
-    /// to scroll until it's at its edge. A web page in a panel keeps every
-    /// swipe, as it scrolls (and goes back) by itself. `inverted`: natural
-    /// scrolling, where fingers going right scroll a page towards its start;
-    /// nil for a three-finger swipe, which doesn't scroll anything, so what's
-    /// under it can't want it first unless it's a web page.
-    private func ways(at point: NSPoint, in window: NSWindow, inverted: Bool?, app: AppModel) -> Set<NavigationSwipe.Direction> {
+    private func historyWays(_ app: AppModel) -> Set<NavigationSwipe.Direction> {
         var ways: Set<NavigationSwipe.Direction> = []
         if app.canGoBack { ways.insert(.back) }
         if app.canGoForward { ways.insert(.forward) }
+        return ways
+    }
+
+    /// The ways a swipe at `point` is the window's rather than what's under
+    /// the pointer: nothing there scrolls sideways that way first (a wide
+    /// table, a row of chips), as Safari leaves a wide page to scroll until
+    /// it's at its edge. Back moves the content right, which shows what's to
+    /// its left, whichever way the system scrolls. A web page in a panel
+    /// keeps every swipe, as it scrolls (and goes back) by itself.
+    /// `scrolls`: false for a three-finger swipe, which doesn't scroll
+    /// anything, so only a web page can want it first.
+    private func freeWays(at point: NSPoint, in window: NSWindow, scrolls: Bool) -> Set<NavigationSwipe.Direction> {
+        var ways: Set<NavigationSwipe.Direction> = [.back, .forward]
         // The frame view has no superview, so the window's point is its own.
         var view = (window.contentView?.superview ?? window.contentView)?.hitTest(point)
         while let v = view, !ways.isEmpty {
-            if v is WKWebView || v is AgentSurfaceView { return [] }
-            if let inverted, let scroll = v as? NSScrollView, let document = scroll.documentView {
+            if v is WKWebView { return [] }
+            if scrolls, let scroll = v as? NSScrollView, let document = scroll.documentView {
                 let shown = scroll.contentView.bounds
                 if document.frame.width > shown.width + 1 {
-                    // Fingers going right show what's to the left, with
-                    // natural scrolling; the other way round without.
-                    let canShowLeft = shown.minX > 0.5, canShowRight = shown.maxX < document.frame.width - 0.5
-                    if inverted ? canShowLeft : canShowRight { ways.remove(.back) }
-                    if inverted ? canShowRight : canShowLeft { ways.remove(.forward) }
+                    if shown.minX > 0.5 { ways.remove(.back) }
+                    if shown.maxX < document.frame.width - 0.5 { ways.remove(.forward) }
                 }
             }
             view = v.superview
@@ -260,30 +279,83 @@ final class SwipeNavigation {
     }
 }
 
-/// The arrow at the window's edge while a page swipe is under way: it
-/// slides in with the fingers and fills once letting go will go there.
+/// The card in the middle of the window while a page swipe is under way:
+/// which thread or page letting go will open. The card fills as the fingers
+/// go, from the side they start on, and is blue at the line. Mike picked the
+/// card from four designs on 8 Nov for saying where Back goes, as it crosses
+/// views; its first bar filled left to right whichever way he swiped, which
+/// he found confusing, and he picked this fill from four more the same day.
 struct SwipeNavigationArrow: View {
-    private var swipe: NavigationSwipe { SwipeNavigation.shared.swipe }
+    @Environment(AppModel.self) private var app
+    private var nav: SwipeNavigation { SwipeNavigation.shared }
 
     var body: some View {
-        if let direction = swipe.direction {
+        if let direction = nav.swipe.direction {
             let back = direction == .back
-            let armed = swipe.armed
-            Image(systemName: back ? "chevron.left" : "chevron.right")
-                .font(.system(size: zoomed(15), weight: .semibold))
-                .foregroundStyle(armed ? Color.white : Color.secondary)
-                .frame(width: zoomed(36), height: zoomed(36))
-                .background(Circle().fill(armed ? Color.accentColor : Color(nsColor: .controlBackgroundColor)))
-                .overlay(Circle().strokeBorder(Color.primary.opacity(armed ? 0 : 0.1)))
-                .shadow(color: .black.opacity(0.18), radius: 6, y: 1)
-                .scaleEffect(armed && !Juice.reduceMotion ? 1.08 : 1)
-                .animation(Juice.hover, value: armed)
-                // From just off the edge to 16 points in.
-                .offset(x: (back ? 1 : -1) * (CGFloat(swipe.progress) * zoomed(52) - zoomed(36)))
-                .opacity(min(1, swipe.progress * 3))
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: back ? .leading : .trailing)
+            // Nowhere to go: said, rather than nothing showing at all.
+            let place = app.destination(back: back) ?? (back ? "Nothing to go back to" : "Nothing to go forward to", nil)
+            card(back: back, place: place, empty: nav.swipe.isEmpty || app.destination(back: back) == nil)
+                // In as soon as it's clear it's a swipe, not with the line.
+                // A nowhere-to-go card only gives a little, so it's solid at once.
+                .opacity(nav.swipe.isEmpty ? 1 : min(1, 0.4 + nav.swipe.progress * 2))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
         }
+    }
+
+    private func card(back: Bool, place: (title: String, detail: String?), empty: Bool) -> some View {
+        let armed = nav.swipe.armed
+        let accent = Color(nsColor: .controlAccentColor)
+        let shape = RoundedRectangle(cornerRadius: zoomed(14), style: .continuous)
+        // Back moves the content right; the fingers go that way too with
+        // natural scrolling, the other way without.
+        let fingersLeft = back != nav.natural
+        return HStack(spacing: zoomed(12)) {
+            Image(systemName: back ? "chevron.left" : "chevron.right")
+                .font(.system(size: zoomed(14), weight: .semibold))
+                .foregroundStyle(armed ? Color.white : Color.secondary)
+                .frame(width: zoomed(34), height: zoomed(34))
+                .background(Circle().fill(armed ? accent : Color.primary.opacity(0.08)))
+            VStack(alignment: .leading, spacing: zoomed(2)) {
+                if !empty {
+                    Text(back ? "Back to" : "Forward to")
+                        .font(.system(size: TypeScale.label))
+                        .foregroundStyle(.secondary)
+                }
+                Text(place.title)
+                    .font(.system(size: zoomed(14), weight: empty ? .regular : .semibold))
+                    .foregroundStyle(empty ? Color.secondary : Color.primary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let detail = place.detail {
+                    Text(detail)
+                        .font(.system(size: TypeScale.label))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, zoomed(18))
+        .padding(.vertical, zoomed(16))
+        .frame(width: zoomed(340))
+        .background {
+            // The fill, from the side the fingers start on.
+            GeometryReader { geo in
+                Rectangle()
+                    .fill(armed ? accent.opacity(0.32) : Color.primary.opacity(0.07))
+                    .frame(width: geo.size.width * nav.swipe.progress)
+                    .frame(maxWidth: .infinity, alignment: fingersLeft ? .trailing : .leading)
+            }
+            .clipShape(shape)
+        }
+        .background {
+            // Solid: the transcript mustn't show through behind the name.
+            shape.fill(Color(nsColor: .windowBackgroundColor))
+                .shadow(color: .black.opacity(0.4), radius: zoomed(20), y: zoomed(6))
+        }
+        .overlay(shape.strokeBorder(armed ? accent : Color(nsColor: .separatorColor), lineWidth: armed ? 1 : 0.5))
+        .animation(Juice.hover, value: armed)
     }
 }

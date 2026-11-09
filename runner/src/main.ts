@@ -3,12 +3,14 @@
 // THREADBEAR_PORT pointing at temp places.
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { readShareImage } from './share-images.ts';
 import { loadConfig, ensureHome, readToken, paths, recordListening, defaultHome, DEFAULT_CWD, RUNNER_VERSION } from './config.ts';
 import { startHousekeeping } from './housekeeping.ts';
 import { RELEASE, markGoodLater, onSupervisorGone, ownCheckout, readRelease, readState, requestHandover, supervised, takeRollbackNotice, tellLaunchListening } from './release.ts';
 import { PatchTrust } from './patch-trust.ts';
 import type { RunnerUpdates } from './runner.ts';
-import { Peers, PrimaryLink, ThreadRouter, drainChildrenName, peersElsewhere, phoneCommands, primaryElsewhere, projectRouter, removeDrainInfo, scheduleRouter, writeDrainInfo, type CrossRunnerHooks, type Elsewhere } from './handover.ts';
+import { Peers, PrimaryLink, ThreadRouter, drainChildrenName, peersElsewhere, phoneCommands, primaryElsewhere, primaryRemote, projectRouter, removeDrainInfo, scheduleRouter, writeDrainInfo, type CrossRunnerHooks, type Elsewhere } from './handover.ts';
 import { RunnerUpdater, releaseTreeAt } from './update.ts';
 import { RELEASE_NOTES_SYSTEM, SETTLE_MS, Upstream } from './upstream.ts';
 import { BringIn } from './bring-in.ts';
@@ -47,7 +49,7 @@ import { Relay } from './relay.ts';
 import { RpcServer } from './rpc.ts';
 import { realClock } from './clock.ts';
 import { acquireLock } from './lock.ts';
-import { removeTempFiles } from './fsutil.ts';
+import { isDirectory, removeTempFiles } from './fsutil.ts';
 import { Models } from './models/index.ts';
 import { SettingsService, modelMethods, settingsMethods } from './settings.ts';
 import { InstructionsStore, instructionsMethods } from './instructions.ts';
@@ -177,11 +179,13 @@ async function main(): Promise<void> {
   // Once a wait has run out (the backend not answering), the next minute's
   // calls use what's there rather than each waiting again.
   let remoteWaitSpentAt = 0;
+  let drainRemote: RemoteControl | undefined;
   const remoteControl = (): RemoteControl | undefined => {
+    // A draining runner has stopped its sync, so its kept turns reach
+    // other runners' threads through the primary instead (primaryRemote).
+    if (draining) return primaryLink ? (drainRemote ??= primaryRemote(primaryLink)) : undefined;
     const relay = relayRef;
-    // A draining runner has stopped its sync, so its list would go stale:
-    // its last turns see this runner's and the primary's threads only.
-    if (!relay || draining || !sync.relaySource()) return undefined;
+    if (!relay || !sync.relaySource()) return undefined;
     return {
       list: async () => {
         let r = sync.remoteThreads();
@@ -618,7 +622,13 @@ async function main(): Promise<void> {
   // tb updates (docs/protocol.md, "Mike's releases").
   methods['upstream.status'] = () => ({ upstream: upstream.status() });
   // Other runners' threads, for the Mac app's sidebar (step 6 part 2).
-  methods['remoteThreads.list'] = () => relayRef?.overlay(sync.remoteThreads()) ?? sync.remoteThreads();
+  // `forTools`: a draining runner's agent tools (handover.ts primaryRemote),
+  // given what this runner's own tools get, the wait for the rows included.
+  methods['remoteThreads.list'] = (p) => {
+    const tools = p.forTools === true ? remoteControl() : undefined;
+    if (tools) return tools.list();
+    return relayRef?.overlay(sync.remoteThreads()) ?? sync.remoteThreads();
+  };
   // Every runner's machine figures, for the Mac app's Runners panel.
   methods['runners.stats'] = async () => ({ stats: await sync.runnerStats() });
   // Mike's runner order (docs/protocol.md, "Other runners' threads"): every
@@ -639,6 +649,8 @@ async function main(): Promise<void> {
   const relay = (relayRef = new Relay({
     source: () => sync.relaySource(),
     remote: () => sync.remoteNow(),
+    // Pictures for another runner's thread: only what media.import put in the inbox.
+    readPicture: (file) => readShareImage(file, paths.inbox(cfg.home)),
     subscribed: (threadId) => rpcServer?.isSubscribed(threadId) ?? false,
     publish: (n) => rpcServer?.notifyClients(n),
     clock: realClock,
@@ -676,6 +688,15 @@ async function main(): Promise<void> {
     },
     respondThere: async (threadId, approvalId, decision, message) => {
       await relay.call(threadId, 'approvals.respond', { threadId, approvalId, decision, ...(message ? { message } : {}) });
+    },
+    home: () => os.homedir(),
+    realDir: (p) => {
+      try {
+        const real = fs.realpathSync(p);
+        return isDirectory(real) ? real : undefined;
+      } catch {
+        return undefined;
+      }
     },
   });
   crossHooks = {

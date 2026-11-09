@@ -226,7 +226,10 @@ final class LocalPreviewSiteTests: XCTestCase {
     }
 
     /// 4 MB of `<` with no `>` held the old regex at every `<` to the end
-    /// of the page: hours. Each of these takes well under a second now.
+    /// of the page: hours. Each of these takes a few seconds at most in a
+    /// debug build now. The budget is this thread's CPU time and generous, as
+    /// what it's guarding against is hours, and a 5 second limit on the clock
+    /// failed with nothing wrong on a busy check host (7 Nov).
     func testHasScriptsIsQuickOnPathologicalPages() {
         let size = LocalPreviewSite.scriptScanBytes
         let pages: [(String, Bool)] = [
@@ -238,9 +241,11 @@ final class LocalPreviewSiteTests: XCTestCase {
             ("<b onx" + String(repeating: " ", count: size - 16) + "y", false),
         ]
         for (page, expected) in pages {
-            let started = Date()
-            XCTAssertEqual(LocalPreviewSite.hasScripts(Data(page.utf8)), expected)
-            XCTAssertLessThan(Date().timeIntervalSince(started), 5, "\(page.prefix(8))...")
+            let data = Data(page.utf8)
+            let seconds = cpuSeconds {
+                XCTAssertEqual(LocalPreviewSite.hasScripts(data), expected)
+            }
+            XCTAssertLessThan(seconds, 30, "\(page.prefix(8))...")
         }
     }
 
@@ -300,10 +305,11 @@ final class LocalPreviewSiteTests: XCTestCase {
             "url(\"" + String(repeating: " ", count: size) + "\"" + String(repeating: " ", count: size),
         ]
         for text in texts {
-            let started = Date()
-            _ = LocalPreviewSite.htmlReferences(in: text)
-            _ = LocalPreviewSite.cssReferences(in: text)
-            XCTAssertLessThan(Date().timeIntervalSince(started), 10, "\(text.prefix(12))...")
+            let seconds = cpuSeconds {
+                _ = LocalPreviewSite.htmlReferences(in: text)
+                _ = LocalPreviewSite.cssReferences(in: text)
+            }
+            XCTAssertLessThan(seconds, 30, "\(text.prefix(12))...")
         }
     }
 

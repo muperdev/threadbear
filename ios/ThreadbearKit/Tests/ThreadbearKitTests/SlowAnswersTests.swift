@@ -21,7 +21,7 @@ import Testing
         let id = try await fake.respond(threadId: "a1", approvalId: "ap1", decision: .allow)
         #expect(try await status(fake, id)?.state == .pending)
         #expect(try await pending(fake, "a1") != nil)
-        try await Task.sleep(for: .milliseconds(400))
+        try await eventually { try await status(fake, id)?.state == .done }
         #expect(try await status(fake, id)?.state == .done)
         #expect(try await pending(fake, "a1") == nil)
     }
@@ -31,7 +31,7 @@ import Testing
         fake.answerDelay = .milliseconds(100)
         fake.answersFail = true
         let id = try await fake.respond(threadId: "a1", approvalId: "ap1", decision: .allow)
-        try await Task.sleep(for: .milliseconds(400))
+        try await eventually { try await status(fake, id)?.state == .failed }
         #expect(try await status(fake, id)?.state == .failed)
         #expect(try await pending(fake, "a1") != nil)
     }

@@ -140,8 +140,13 @@ final class ReviewWindowController: NSWindowController, NSWindowDelegate {
         super.init(window: window)
         window.delegate = self
         // The app, for a page's Open in Browser (LocalPagePreview).
+        // A window of its own doesn't inherit the main window's openURL, and
+        // the agent's notes in it are Markdown with links: they go through
+        // OpenGate as links from the thread (Codex's review, 8 Nov).
         window.contentView = NSHostingView(rootView: ReviewWindow(session: session, back: back, close: { [weak self] in self?.close() })
-            .environment(app).allowsWindowActivationEvents())
+            .environment(app)
+            .environment(\.openURL, OpenGate.urlAction(files: .thread(session.threadId)))
+            .allowsWindowActivationEvents())
         // Up in the title bar rather than a row of their own, so the images
         // and the choices get that height. Wide enough for all of them, as an
         // accessory doesn't resize when some come and go.
@@ -225,12 +230,23 @@ final class ReviewNativeWindow: NSWindow {
                 if session.mode == .single { session.showAll() } else { session.browse(0) }
                 return
             case 53 where session.mode == .single: // Esc: out of a zoom, then out to all of them
-                if session.zoomed { session.zoom(.fit) } else { session.showAll() }
+                if stageIsZoomed { session.zoom(.fit) } else { session.showAll() }
                 return
             default: break
             }
         }
         super.keyDown(with: event)
+    }
+
+    /// Whether the stage is zoomed in right now. `session.zoomed` hears a
+    /// moment later (the stage tells it on the next turn of the main
+    /// queue), so Esc straight after a zoom, with the app busy, went out
+    /// to all of them rather than out of the zoom.
+    private var stageIsZoomed: Bool {
+        func zoomed(_ view: NSView) -> Bool {
+            (view as? ReviewImageScroll)?.isZoomedNow == true || view.subviews.contains(where: zoomed)
+        }
+        return contentView.map(zoomed) ?? false
     }
 }
 
@@ -996,6 +1012,8 @@ final class ReviewImageScroll: NSScrollView {
     private var dragOrigin = NSPoint.zero
     var onClick: (() -> Void)?
     var onZoom: ((Bool) -> Void)?
+    /// What `onZoom` will say, before it's said.
+    var isZoomedNow: Bool { zoomable && magnification > fitScale * 1.001 }
 
     // The most zoomed in: 4 pixels on screen to one in the image.
     private static let furthest: CGFloat = 4

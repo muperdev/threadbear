@@ -100,21 +100,6 @@ File references are where to look.
   `mac-screen.json` in the data folder
   remembers what it's said about dialogs on the screen (below).
 
-Voice mode is an experiment, off by default: while it's off (`voiceMode`
-in `runner.json`'s `experiments`) there's no button, nothing below happens
-and macOS never asks for the microphone. On, the first time you use it
-(Settings > Voice, or the waveform button beside Send), it downloads Kyutai's pocket-tts (v4.0.1, its
-Apple silicon build, checked against its SHA-256 before it's used) from
-its GitHub release into `~/Library/Application Support/Threadbear/voice/`,
-with its log `serve.log` and a `serve.<app's pid>.pid` (which process to
-stop if the app crashed) beside it. pocket-tts then downloads its English
-model and voices from Hugging Face into `~/.cache/huggingface` (about
-240 MB; another language is another model). macOS asks once for the
-microphone, and may download its own speech recognition files for the
-language (`app/Sources/Threadbear/Voice/`). `~/Library/Logs/Threadbear/voice.log`
-notes what Voice did (which microphone, whether echo cancellation
-started, errors), never what was said, and is started afresh past 256 KB.
-
 ## What runs in the background
 
 - **Landing work** (`runner/src/worktrees.ts`): `tb land` keeps an empty
@@ -210,16 +195,6 @@ started, errors), never what was said, and is started afresh past 256 KB.
   those files and the scripts they reach to hash them, runs `git ls-files`
   in the folder to find skills in folders under it, and keeps what you
   trusted in the same `patch-trust.json`.
-- **Voice** (`app/Sources/Threadbear/Voice/VoiceServer.swift`): only
-  while Voice is in use and for 5 minutes after, the app runs
-  `pocket-tts serve` on a free port on 127.0.0.1 (not reachable from other
-  machines), sends it each reply's sentences and plays what comes back.
-  It stops when the app quits. If the app crashed instead, the next launch
-  reads that pid file and stops it, once it's checked that process really is
-  this pocket-tts. While Voice is on, the microphone is on,
-  and what you say is turned into text on this Mac by macOS's own speech
-  recognition (SpeechAnalyzer); the audio isn't saved or sent anywhere.
-  The text goes to the thread as your message.
 - **Menus on macOS 27.2** (`app/Sources/Threadbear/DragSpace.swift`): every
   5 seconds, and before a button opens a menu, the app asks the window
   server which Spaces its own windows are on, and takes them off the drag
@@ -267,7 +242,7 @@ deletes the item. The microphone is only on while the mic is red.
 
 | Service | Whose | What goes there |
 |---|---|---|
-| Your Convex deployment | yours | Thread titles and status, all message text (each message cut at 8,000 characters), one line per tool call, projects, schedules, your logins' emails and usage, whether you're at the Mac, whether this machine is low on memory or disk, and the pictures you paste into a message, up to 10 MB each, so your own website can show them. Those go up as they are, in your deployment's file storage: unlike text, nothing can scrub a secret out of a picture, so a screenshot of something sensitive goes too. `"sync": { "pastedPictures": false }` in `runner.json` keeps them on this Mac. While someone has the website's Runners view open, this machine's CPU, memory and disk use, its processor model, operating system and time since it started, every 10 seconds; with nobody looking, none of that is sent. Photos you send from the phone, deleted once the Mac has fetched them. Pictures and videos agents put in their replies or pin, at most 10 MB each, for the phone to show. Other images only for threads you share by link. Other tool output and files stay on the Mac. Text has known secrets taken out first: see below. |
+| Your Convex deployment | yours | Thread titles and status, all message text (each message cut at 8,000 characters), one line per tool call, projects, schedules, your logins' emails and usage, whether you're at the Mac, whether this machine is low on memory or disk, and the pictures you paste into a message, up to 10 MB each, so your own website can show them. Those go up as they are, in your deployment's file storage: unlike text, nothing can scrub a secret out of a picture, so a screenshot of something sensitive goes too. `"sync": { "pastedPictures": false }` in `runner.json` keeps them on this Mac. While someone has the website's Runners view open, this machine's CPU, memory and disk use, its processor model, operating system and time since it started, every 10 seconds; with nobody looking, none of that is sent. Photos you send from the phone, and pictures you send from the Mac app to a thread on another of your Macs, deleted once that Mac has fetched them. Pictures and videos agents put in their replies or pin, at most 10 MB each, for the phone to show. Other images only for threads you share by link. Other tool output and files stay on the Mac. Text has known secrets taken out first: see below. |
 | Convex (the Convex panel) | yours | Only for a thread in a Convex project, when its Convex panel opens: the runner's Convex CLI asks api.convex.dev for the project's deployments and a deploy key, the runner asks the deployment whether a kept key still works (`/api/check_admin_key`), and the panel loads Convex's embedded dashboard (dashboard-embedded.convex.dev) with that key. Sign in to Convex goes to auth.convex.dev. (`runner/src/convex-keys.ts`) |
 | Your other Macs, over ssh | yours | Only when you run `tb runner add <name> --ssh <host>` or `tb runner check --ssh <host>` on your first Mac: it reads that Mac's Threadbear `runner.json`, writes its id and the deployment's address there if it hasn't them, writes its new key into that Mac's `secrets/convex-key`, and looks whether that Mac has a deploy key, Convex panel keys or a Convex login (names only, never a key), through your own ssh setup with agent and port forwarding off (`runner/src/runner-keys.ts`). `tb runner audit` asks this Mac's runner for its threads' last seqs and your deployment for what the main key made. `tb runner rotate-owner` sets env vars on your deployment with your deploy key, and, if you give it a Convex team access token for that run (`CONVEX_TEAM_TOKEN`, never kept), asks api.convex.dev for the deployment's deploy keys (their names and dates) before it rotates. |
 | GitHub | Mike's repo | Release tags fetched every 6 hours; the fork at setup |
@@ -276,7 +251,6 @@ deletes the item. The microphone is only on while the mic is red.
 | Mike's push relay | Mike's | Only when a paired iPhone gets a notification. It's sent from your Convex deployment, not the Mac. The text is encrypted for the phone; the relay sees the device token and thread id (`convex/push.ts`, `docs/push-relay.md`). The first time, your deployment registers with it, giving its own address; the relay keeps that address and checks it by posting a one-time code back to your deployment's `/relay/verify` (`convex/http.ts`). |
 | A Connectors gateway | whoever runs it | Only if one is set in `runner.json` or `~/.claude.json`. Its `/health` every few minutes (and once more at the end of a turn where a call to one of its services failed, to see if it needs signing in), and for a project with a Notion page, a Notion read or two every 5 minutes for its task board (`runner/src/notion-tasks.ts`), signed with the header the `headersHelper` command in that `connectors` entry prints, which it runs for each read |
 | Collabute | Collabute's, or the server set in Settings > Dictation | Only once you sign in for dictation: the sign-in (Collabute's OAuth device flow, its approval page in your browser), a token refresh when the last one has run out, and for each dictation a short-lived speech-to-text token from Collabute (`/api/mcp/voice-token`), then your voice, while the mic is red, straight to the speech-to-text service that token is for (Vercel's AI Gateway), which sends back the words. Nothing else of yours is sent, and nothing is recorded or kept (`app/Sources/Threadbear/Dictation/`). |
-| GitHub, Hugging Face | Kyutai's | Only with the `voiceMode` experiment on, the first time Voice is used: the pocket-tts download, then its model and voices. Nothing of yours is sent. |
 | Sentry | Mike's | Nothing from your copy. Only a copy whose `origin` is Mike's own repo reports errors or uploads the app's debug symbols (`runner/src/sentry.ts`, `app/Sources/Threadbear/CrashReporting.swift`, `app/build-app.sh`). The App Store iPhone app sends anonymous crash reports. |
 
 An HTML file opened in the side pane (a mockup or report an agent made,
@@ -302,21 +276,17 @@ if you have BrowserBear, to ask whether an agent's Chrome tab is already
 on that page (`app/Sources/Threadbear/BrowserBear.swift`). Only the link
 goes there.
 
-The Browser panel also uses that private socket to list connected Chrome profiles
-and the pages agents associate with threads. In an existing profile, frames and
-your mouse and keys go through BrowserBear's extension; the page uses Chrome's
-original sign-ins. Threadbear does not read Chrome's cookie database or copy
-credentials. Frames stay on this Mac, in memory, and are not sent to Convex.
-BrowserBear stores thread/tab/profile/target associations and cached page titles in `panel-tabs.json` in
-its own folder (0600); it verifies the target before reconnecting after a service
-restart. Closing a panel releases its viewport and focus overrides. Chrome's
-native-window button pauses panel capture and input for native dialogs.
+The Browser panel also uses that private socket to list the pages agents
+associate with threads, ask for a small still of each and bring a page's real
+window to the front (`app/Sources/Threadbear/Views/AgentBrowserPanel.swift`).
+Threadbear does not read Chrome's cookie database or copy credentials, and
+stills stay on this Mac, in memory, not sent to Convex. BrowserBear stores
+thread/tab/profile associations in `panel-tabs.json` in its own folder (0600).
 
-The optional separate agent Chrome (`browserbear ... --profile agent`) keeps its
-existing path: the panel reads `agent/tabs.json` in BrowserBear's folder and connects
-to that Chrome's local debugging port. It is real Google Chrome with its own profile
-folder; any program on this Mac could reach that port, so it holds only what you
-sign it in to (`app/Sources/Threadbear/Views/AgentBrowserPanel.swift`).
+The agents' own browser (`browserbear ... --profile agent`) is Helium where it's
+installed, else Google Chrome, with its own profile folder; the panel reads
+`agent/tabs.json` in BrowserBear's folder for its pages. Any program on this Mac
+could reach its local debugging port, so it holds only what you sign it in to.
 
 Nothing else: no analytics, no ads, no tracking.
 

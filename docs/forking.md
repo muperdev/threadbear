@@ -25,7 +25,10 @@ Mike's copy (reporting to his Sentry, uploading his debug symbols).
 | Mike's deployments in docs | `docs/convex-backend.md`, `docs/website.md`, `docs/push-relay.md` | Names of Mike's Convex deployments, for his own use. The code never reads them; yours come from setup. |
 
 Code comments that say "Mike's releases" or tell a story from Mike's
-setup are kept on purpose, as the history of why a line is there.
+setup are kept on purpose, as the history of why a line is there. Text
+the app shows or sends to an agent says "the user" instead, except where
+it means Mike himself (his releases, the About credit);
+`runner/test/unit/fork-view.test.ts` checks that too.
 
 ## 2. Where each feature lives, and how to take it out
 
@@ -102,7 +105,7 @@ gone from your fork, not just quiet.
 | The Terminal panel (⌘J) | `app/Sources/Threadbear/Views/TerminalPanel.swift`, with cases in `WindowDock.swift`, `ThreadbearApp.swift` (View menu), `Automation.swift` (`terminal`), `toggleTerminal` in Core `Support/Shortcuts.swift`; the SwiftTerm package in `app/Package.swift` | Nothing runs until ⌘J | Self-contained: delete the file, its cases and the package. |
 | BrowserBear link hand-off | `app/Sources/Threadbear/BrowserBear.swift`, called from `PaneModel.swift` | Inert unless BrowserBear (Mike's own tool) is running | Self-contained: one file, one call. |
 | Dictation with Collabute (the mic beside Send) | app `Dictation/` (`Dictation`, `DictationStream`, `DictationButton`, `CollabuteAccount`), `Views/DictationSettings.swift`, Core `Support/CollabuteDictation.swift`; the button in `ComposerControls.swift` (and `handle:` from `ComposerView.swift`), the tab in `SettingsView.swift` and `SettingsTab`. Its default server is Collabute's (`CollabuteAuth.defaultServer`), which needs that gateway's `/api/mcp/voice-token` | Settings > Dictation > Show the mic | Self-contained: drop those files and lines. |
-| The Browser panel | `app/Sources/Threadbear/Views/AgentBrowserPanel.swift`, and `BrowserBearPipe.swift`, with cases in `PanelsView.swift`, `WindowDock.swift`, `PanelRequests.swift` and `Automation.swift` | Inert without BrowserBear; existing profiles use its private socket, separate agent Chrome retains its CDP path | Self-contained. |
+| The Browser panel | `app/Sources/Threadbear/Views/AgentBrowserPanel.swift`, and `BrowserBearPipe.swift`, with cases in `PanelsView.swift`, `WindowDock.swift`, and `PanelRequests.swift` | Inert without BrowserBear; lists pages, stills and Show window over its private socket | Self-contained. |
 
 ### Core, no switch
 

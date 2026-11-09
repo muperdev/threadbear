@@ -23,7 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { atomicWriteFileSync } from './fsutil.ts';
-import { dropPartialStart, safeStart } from './safe-cut.ts';
+import { safeStart, safeStartOfPartial } from './safe-cut.ts';
 
 // How long a check may run unless its schedule says (checkTimeoutSecs),
 // and the most it can say: a Slack read through `codex exec` took 77 s by
@@ -197,19 +197,25 @@ export function runCheck(p: { command: string; cwd: string; home: string; schedu
         child.kill('SIGKILL');
       }
       // Says how to give it longer, for the agent that reads it.
-      finish({ ok: false, output: clip(cutFront ? dropPartialStart(out) : out), why: `it took longer than ${Math.round((p.timeoutMs ?? CHECK_TIMEOUT_MS) / 1000)} seconds; the schedule's checkTimeoutSecs can give it up to ${MAX_CHECK_TIMEOUT_SECS}` });
+      finish({ ok: false, output: clip(out, cutFront), why: `it took longer than ${Math.round((p.timeoutMs ?? CHECK_TIMEOUT_MS) / 1000)} seconds; the schedule's checkTimeoutSecs can give it up to ${MAX_CHECK_TIMEOUT_SECS}` });
     }, p.timeoutMs ?? CHECK_TIMEOUT_MS);
-    child.on('error', (e) => finish({ ok: false, output: clip(cutFront ? dropPartialStart(out) : out), why: e.message }));
+    child.on('error', (e) => finish({ ok: false, output: clip(out, cutFront), why: e.message }));
     child.on('close', (code, signal) => {
-      if (code === 0) finish({ ok: true, output: clip(cutFront ? dropPartialStart(out) : out) });
-      else finish({ ok: false, output: clip(cutFront ? dropPartialStart(out) : out), why: signal ? `it was stopped by ${signal}` : `it exited with ${code}` });
+      if (code === 0) finish({ ok: true, output: clip(out, cutFront) });
+      else finish({ ok: false, output: clip(out, cutFront), why: signal ? `it was stopped by ${signal}` : `it exited with ${code}` });
     });
   });
 }
 
-function clip(s: string): string {
+// Its last part, begun where no secret is cut in two (safe-cut.ts). One whose
+// start was let go of (cutFront) is never begun in the run it was let go in,
+// and the place is found in the buffer as kept, before anything's trimmed:
+// it's always CHECK_OUTPUT_CHARS in, so that much before it is looked at.
+// Trimmed first, spaces at the end pulled a password's middle to the front
+// with its start gone (Codex's review, 8 Nov).
+function clip(s: string, cutFront: boolean): string {
+  if (cutFront) return '…' + s.slice(safeStartOfPartial(s, Math.max(0, s.length - CHECK_OUTPUT_CHARS))).trim();
   const t = s.trim();
-  // Its last part, begun where no secret is cut in two (safe-cut.ts).
   return t.length > CHECK_OUTPUT_CHARS ? '…' + t.slice(safeStart(t, t.length - CHECK_OUTPUT_CHARS)) : t;
 }
 

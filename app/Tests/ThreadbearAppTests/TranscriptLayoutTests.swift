@@ -349,7 +349,7 @@ extension TranscriptLayoutTests {
         host.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
         host.wantsLayer = true
         window.contentView?.addSubview(host)
-        host.show(row)
+        host.show(row, threadId: nil)
         host.layoutSubtreeIfNeeded()
         return (window, host, controller)
     }

@@ -37,7 +37,7 @@ public final class FakeBackend: Backend, @unchecked Sendable {
     /// for the new thread sheet's runner picker. Left out of the usual samples.
     /// `queued`: with the runner offline, a3 already has two messages
     /// waiting for it, for the screenshots.
-    public init(now: Date = .now, turnDelay: Duration = .seconds(2), runnerOnline: Bool = true, listDelay: Duration = .zero, pictures: Bool = false, long: Bool = false, secret: Bool = false, diagrams: Bool = false, runners: Bool = false, queued: Bool = false) {
+    public init(now: Date = .now, turnDelay: Duration = .seconds(2), runnerOnline: Bool = true, listDelay: Duration = .zero, pictures: Bool = false, long: Bool = false, secret: Bool = false, diagrams: Bool = false, runners: Bool = false, queued: Bool = false, many: Bool = false) {
         let sample = Self.sample(now: now)
         threadsById = Dictionary(uniqueKeysWithValues: sample.threads.map { ($0.threadId, $0) })
         messagesById = sample.messages
@@ -58,6 +58,9 @@ public final class FakeBackend: Backend, @unchecked Sendable {
             let thread = Self.diagramThread(now: now)
             threadsById[thread.thread.threadId] = thread.thread
             messagesById[thread.thread.threadId] = thread.messages
+        }
+        if many {
+            for thread in Self.manyThreads(now: now) { threadsById[thread.threadId] = thread }
         }
         if secret {
             let thread = Self.secretThread(now: now)
@@ -81,6 +84,44 @@ public final class FakeBackend: Backend, @unchecked Sendable {
             ]
             for send in waitingByThread["a3"]! { commands[send.commandId] = CommandStatus(state: .pending) }
         }
+    }
+
+    // MARK: A long inbox
+
+    /// `-ThreadbearManyThreads`: a couple more starred, a screenful or two of
+    /// inbox and a few more running, for scrolling a long inbox and seeing its
+    /// headings stick at the top. Left out of the usual samples.
+    static func manyThreads(now: Date) -> [PhoneThread] {
+        let site = [ProjectRef(id: "p_site", title: "Website")]
+        let garden = [ProjectRef(id: "p_garden", title: "Garden planner")]
+        let titles = ["Fix the flaky login test", "Bigger tap targets on the map", "Why is the build slow?",
+                      "Move the images to a CDN", "Dark mode for the charts", "Write up the release notes",
+                      "Rate limit the signup form", "Sort the plants by season", "Clean up the old migrations",
+                      "Typo on the pricing page", "Cache the weather lookups", "Add a sitemap",
+                      "Try the new font", "Export the garden as a PDF", "Look into the memory spike",
+                      "Shorter onboarding", "Retry failed uploads", "Check the broken links",
+                      "Make the footer less shouty", "Speed up the search index", "Tidy the colour tokens",
+                      "Watering reminders", "Fix the date on old posts", "Keyboard shortcuts for the editor"]
+        var threads: [PhoneThread] = []
+        for (i, title) in titles.enumerated() {
+            threads.append(PhoneThread(threadId: "m\(i)", title: title, cwd: i % 2 == 0 ? "~/code/website" : "~/code/garden-planner",
+                                       unread: i % 5 == 0, preview: "Done.", lastActivityAt: now.addingTimeInterval(-Double(30 + i * 47) * 60),
+                                       projects: i % 3 == 0 ? nil : (i % 2 == 0 ? site : garden)))
+        }
+        for (i, (title, working)) in [("Upgrade the test runner", "Running the tests"), ("Resize the hero images", "Editing images.ts"),
+                                       ("Find the slow query", "Reading the logs"), ("Split up the settings page", "Editing Settings.tsx"),
+                                       ("Add plant photos", "Downloading samples"),
+                                       ("Bump the dependencies", "Running npm install"), ("Fix the RSS feed", "Editing feed.ts"),
+                                       ("Profile the startup time", "Running the profiler"), ("Translate the help pages", "Editing help.md")].enumerated() {
+            threads.append(PhoneThread(threadId: "mr\(i)", title: title, cwd: "~/code/website", status: .running, preview: "On it.",
+                                       lastActivityAt: now.addingTimeInterval(-Double(2 + i * 3) * 60), projects: site, working: working))
+        }
+        for (i, title) in ["Ideas for the spring update", "Keep an eye on the error rate"].enumerated() {
+            threads.append(PhoneThread(threadId: "ms\(i)", title: title, cwd: "~/code/garden-planner", preview: "Noted.",
+                                       lastActivityAt: now.addingTimeInterval(-Double(90 + i * 60) * 60),
+                                       starredAt: now.addingTimeInterval(-Double(i + 1) * 86_400), projects: garden))
+        }
+        return threads
     }
 
     // MARK: A thread asking for a secret
@@ -153,14 +194,14 @@ public final class FakeBackend: Backend, @unchecked Sendable {
     // MARK: A thread with pictures
 
     /// `-ThreadbearPictures`: one thread with each way a picture can come:
-    /// wide in a reply, tall in a reply, animated, pinned, and one only on the
+    /// photos sent with Mike's message, wide in a reply, tall in a reply, animated, pinned, and one only on the
     /// Mac.
     private static func pictureThread(now: Date) -> (thread: PhoneThread, messages: [PhoneMessage], images: [MessageImage]) {
         let ago = { (minutes: Double) in now.addingTimeInterval(-minutes * 60) }
         let thread = PhoneThread(threadId: "pics", title: "Back panel screw layout", cwd: "~/dev/workbench", preview: "Here's where the screws go.", lastActivityAt: ago(2))
         let wide = "/Users/you/guide/back-screws.png", tall = "/Users/you/guide/case-side.png", moving = "/Users/you/guide/which-way.gif"
         let messages = [
-            PhoneMessage(seq: 1, role: .user, text: "Where do the back screws go?", at: ago(9)),
+            PhoneMessage(seq: 1, role: .user, text: "Where do the back screws go? This is the sheet that came with it.\n\n[2 pictures]", origin: "phone", at: ago(9)),
             PhoneMessage(seq: 2, role: .tool, text: "Wrote guide/back-screws.png", toolKind: "write", at: ago(7)),
             PhoneMessage(seq: 3, role: .tool, text: "threadbear: pin", toolKind: "mcp", at: ago(6)),
             PhoneMessage(seq: 4, role: .assistant, text: """
@@ -185,6 +226,9 @@ public final class FakeBackend: Backend, @unchecked Sendable {
             """, at: ago(2)),
         ]
         let images = [
+            // The two photos sent with the question, as the runner puts them up.
+            MessageImage(seq: 1, src: "picture:1", url: samplePicture("sent-1", width: 1200, height: 1600, hue: 0.12), width: 1200, height: 1600),
+            MessageImage(seq: 1, src: "picture:2", url: samplePicture("sent-2", width: 1600, height: 1200, hue: 0.75), width: 1600, height: 1200),
             MessageImage(seq: 3, pinned: true, url: samplePicture("pinned", width: 900, height: 900, hue: 0.33), width: 900, height: 900),
             MessageImage(seq: 4, src: wide, url: samplePicture("wide", width: 1600, height: 900, hue: 0.58), width: 1600, height: 900),
             MessageImage(seq: 4, src: tall, url: samplePicture("tall", width: 800, height: 2000, hue: 0.08), width: 800, height: 2000),
@@ -384,6 +428,10 @@ public final class FakeBackend: Backend, @unchecked Sendable {
         watch { [unowned self] in lock.withLock { scheduleList } }
     }
 
+    public func wakes() -> AsyncThrowingStream<[PhoneSchedule], Error> {
+        watch { [unowned self] in lock.withLock { scheduleList.filter(\.isActive) } }
+    }
+
     public func counts() -> AsyncThrowingStream<PhoneCounts, Error> {
         watch { [unowned self] in
             let all = lock.withLock { Array(threadsById.values) }
@@ -405,10 +453,22 @@ public final class FakeBackend: Backend, @unchecked Sendable {
         }
     }
 
+    public func olderMessages(_ threadId: String, beforeSeq: Int, limit: Int) async throws -> MessagePage {
+        // As over the network, for the long thread.
+        if threadId == "long" { try await Task.sleep(for: .milliseconds(700)) }
+        let before = lock.withLock { (messagesById[threadId] ?? []).filter { $0.seq < beforeSeq } }
+        let page = Array(before.suffix(limit))
+        let from = page.first?.seq ?? beforeSeq
+        let images = lock.withLock { (imagesById[threadId] ?? []).filter { $0.seq >= from && $0.seq < beforeSeq } }
+        return MessagePage(messages: page, hasMore: before.count > limit, images: images)
+    }
+
     public func messages(_ threadId: String, limit: Int) -> AsyncThrowingStream<MessagePage, Error> {
         let page = watch { [unowned self] in
             let all = lock.withLock { messagesById[threadId] ?? [] }
             let images = lock.withLock { imagesById[threadId] ?? [] }
+            // At most what the server sends (phone:messages' PAGE_MAX).
+            let limit = min(limit, MessageHistory.liveMax)
             return MessagePage(messages: Array(all.suffix(limit)), hasMore: all.count > limit, images: images)
         }
         guard threadId == "long" else { return page }
@@ -549,6 +609,27 @@ public final class FakeBackend: Backend, @unchecked Sendable {
         }
         return newCommand(threadId: started)
     }
+
+    /// A Claude thread's list, as a runner would send it, for the palette
+    /// in the simulator and the screenshots.
+    public func slashCommands(threadId: String) async throws -> String {
+        let id = "cmd_" + UUID().uuidString.prefix(8)
+        lock.withLock { commands[id] = CommandStatus(state: .done, commands: Self.sampleCommands) }
+        return id
+    }
+
+    public static let sampleCommands: [SlashCommand] = [
+        SlashCommand(name: "model", description: "Switch this thread's model", argumentHint: "[model]", source: "threadbear"),
+        SlashCommand(name: "effort", description: "Set this thread's effort level", argumentHint: "[low|medium|high|xhigh|max]", source: "threadbear"),
+        SlashCommand(name: "clear", description: "Clear conversation history and free up context", source: "cli", scope: "system"),
+        SlashCommand(name: "compact", description: "Clear conversation history but keep a summary in context", argumentHint: "<optional custom summarization instructions>", source: "cli", scope: "system"),
+        SlashCommand(name: "context", description: "Show current context usage", source: "cli", scope: "system"),
+        SlashCommand(name: "cost", description: "Show the total cost and duration of the current session", source: "cli", aliases: ["usage", "stats"], scope: "system"),
+        SlashCommand(name: "code-review", description: "Review the current diff, or a PR number, branch or path, for correctness bugs, at the effort level given first.", argumentHint: "[low|medium|high] [target]", source: "skill", scope: "user"),
+        SlashCommand(name: "computercub", description: "Drive Mac apps and the parts of Chrome extensions can't reach, with the `computercub` command.", source: "skill", scope: "user"),
+        SlashCommand(name: "deslop", description: "A second-pass cleanup over AI-written code using the repo's style guide.", source: "skill", scope: "user"),
+        SlashCommand(name: "ship", description: "Drive a branch to merge-ready: PR, checks, bot comments.", source: "skill", scope: "user"),
+    ]
 
     /// Runs `land` when the runner would take the answer: now, or after
     /// `answerDelay`, or never if it's refusing them.

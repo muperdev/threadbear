@@ -559,6 +559,7 @@ is an error. Commands marked "the open thread" act on `id` when it's given
 | `search` | `text` (`""` clears it), `projects` | the search at the top of the inbox, as typing in it does; `sidebar` then lists only its matches. With `projects: true`, the Projects page's search instead; the result lists the cards it leaves, in order |
 | `scroll` | `to` (`top`, `bottom`) or `row`, `offset` | |
 | `hints` | `on` (default true) | shows the keys as if ⌘ were held, or hides them |
+| `app-menu` | | the Threadbear menu's items as it opens: titles with their keys, `-` for a separator |
 | `setup` | `show`, `hidden` | Finish setting up: opens or closes its panel, or hides or unhides it; says what's left, `[x]` on each item done, and whether the icon and panel are up |
 | `tour` | `do` (`start`, `next`, `back`, `end`, `pools`), `skippable`, `intros` | the first-run tour (Help > Take the Tour): `start` is the first-run one, with no Skip, unless `skippable`; `pools` shows the pools card as a change to the runner's pools would; `intros` turns the first-open cards on; says the step, its title, whether its hands-on task is done and the frame it lights up, or `off`. A scripted app never starts it by itself; its Welcome folder is in the instance's data folder |
 | `hover` | `id` (sidebar) or `row` (transcript); neither clears | draws a row as if the pointer were on it |
@@ -660,7 +661,8 @@ streams) and text typed into the composer reaching the draft.
 controls, but a SwiftUI gesture ignores a window that isn't key (a `DragGesture`
 never fires, 7 Nov). For those, on Tinker Desk's desktop and never Mike's:
 `{"cmd":"settings","tab":"runners","front":true}` floats the Settings window
-on top and says its number and top left, and `Tools/realdrag.swift` (compile it
+on top and says its number and top left (`{"cmd":"runners-front"}` does the
+same for the main window with the Runners panel open), and `Tools/realdrag.swift` (compile it
 with `swiftc`, run it through `desk`) posts a real drag. Click a blank part of
 the window with it first to make the window key. Look at the whole desktop
 once if nothing happens: other threads' windows and permission dialogs sit

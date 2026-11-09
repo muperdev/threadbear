@@ -7,8 +7,9 @@ import ThreadbearCore
 
 /// The transcript table. Owns Quick Look control for image clicks and the
 /// row context menu.
-final class TranscriptTableView: NSTableView {
+final class TranscriptTableView: NSTableView, TranscriptThreadHost {
     weak var controller: TranscriptController?
+    var hostedThreadId: String? { controller?.session?.threadId }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
@@ -910,6 +911,12 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
 
     func isAnswering(_ approvalId: String) -> Bool { session?.answering.contains(approvalId) == true }
 
+    func untickedCalls(_ approvalId: String) -> Set<String> { session?.untickedCalls[approvalId] ?? [] }
+
+    func toggleQueuedCall(approvalId: String, itemId: String) {
+        session?.toggleQueuedCall(approvalId: approvalId, itemId: itemId)
+    }
+
     /// Lays out an approval or question card again as its answer goes
     /// (ThreadSession.answering). Its height doesn't change.
     func refreshCard(_ approvalId: String) {
@@ -977,10 +984,8 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
 
     func askPicturesAllowed(_ card: AsksCard) -> Bool {
         guard let session, let app = session.app, let thread = app.threads[session.threadId], thread.asksSeq == card.seq else { return false }
-        // A picture this Mac's runner keeps would be a path another
-        // runner hasn't got (as in the composer).
-        if let name = app.runnerName(of: thread) {
-            app.errorMessage = "Pictures can't go to \(name) from this Mac yet."
+        if let why = app.picturesRefusal(for: thread) {
+            app.errorMessage = why
             return false
         }
         return true

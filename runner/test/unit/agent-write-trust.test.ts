@@ -299,7 +299,8 @@ function session(mode: PermissionMode, runsAsCode?: (file: string) => CodeWrite)
 test("F1: the adapter sends each write with the mode it went through on, recorded at the call, not read when the result comes", async () => {
   const a = session('ask');
   const file = path.join(a.dir, 'notes.txt');
-  assert.equal(a.state.options.hooks.PreToolUse[0].matcher, 'Edit|MultiEdit|Write');
+  // Every edit tool goes through the hook (it also covers queued calls, docs/protocol.md).
+  for (const tool of ['Edit', 'MultiEdit', 'Write']) assert.match(tool, new RegExp(`^(${a.state.options.hooks.PreToolUse[0].matcher})$`));
   await a.hook('w1', file, 'default');
   await a.s.setPermissionMode('full');
   assert.equal((await a.wrote('w1', file))?.mode, 'ask', 'approved in Ask, so not Full, whatever the thread is on now');
@@ -743,7 +744,7 @@ test("Threadbear's own patches don't make every edit ask, from a project folder 
   // would give the test a real worktree of this repo.
   for (const cwd of [elsewhere, REPO]) {
     const runsAsCode = (file: string) => h.runner.writeRunsAsCode({ ...thread, cwd } as unknown as ThreadRecord, file);
-    assert.equal(runsAsCode(path.join(REPO, 'app/Sources/ThreadbearCore/Voice/SpokenApprovals.swift')), false, cwd);
+    assert.equal(runsAsCode(path.join(REPO, 'app/Sources/ThreadbearCore/Protocol/Models.swift')), false, cwd);
     assert.equal(runsAsCode(path.join(REPO, 'runner/src/instructions.ts')), false, cwd);
     assert.equal(runsAsCode(path.join(elsewhere, 'notes.md')), false, cwd);
     // What they really do run still asks, and says it runs.

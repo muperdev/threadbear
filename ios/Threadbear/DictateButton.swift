@@ -84,12 +84,12 @@ struct ListeningLabel: View {
         TimelineView(.periodic(from: .now, by: 1.0 / 15)) { context in
             HStack(spacing: 8) {
                 HStack(alignment: .center, spacing: 2) {
-                    ForEach(Array(dictation.level.history.enumerated()), id: \.offset) { _, value in
+                    ForEach(Array(dictation.level.shown.enumerated()), id: \.offset) { _, value in
                         Capsule().frame(width: 2, height: 3 + CGFloat(value) * 15)
                     }
                 }
                 .frame(height: 18)
-                .animation(.linear(duration: 1.0 / 15), value: dictation.level.history)
+                .animation(.linear(duration: 1.0 / 15), value: dictation.level.shown)
                 Text(elapsed(at: context.date)).monospacedDigit()
                 Image(systemName: "stop.fill").imageScale(.small)
             }

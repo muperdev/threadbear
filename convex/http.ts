@@ -84,6 +84,34 @@ http.route({
   }),
 });
 
+// A picture the main Mac's runner sends to another runner's thread
+// (relay:pictureUploadUrl hands out this URL with a one-use ticket): stored
+// here and recorded (relayUploads), so a command can name it and one that
+// never went out is found and deleted after a day.
+http.route({
+  path: '/relay/upload',
+  method: 'POST',
+  handler: httpAction(async (ctx, request) => {
+    const ticket = new URL(request.url).searchParams.get('ticket') ?? '';
+    const refuse = (status: number, error: string) => new Response(JSON.stringify({ error }), { status, headers: { 'Content-Type': 'application/json' } });
+    if (!(await ctx.runQuery(internal.relay.relayTicketOk, { ticket }))) return refuse(403, 'bad or used upload ticket');
+    if (Number(request.headers.get('content-length') ?? 0) > MAX_RUNNER_UPLOAD_BYTES) return refuse(413, 'too big');
+    const blob = await request.blob();
+    if (blob.size > MAX_RUNNER_UPLOAD_BYTES) return refuse(413, 'too big');
+    const storageId = await ctx.storage.store(blob);
+    // Not recorded (refused, or the mutation threw), it would be found by
+    // nothing, so it goes now (Codex's review, 8 Nov).
+    let redeemed = false;
+    try {
+      redeemed = await ctx.runMutation(internal.relay.redeemRelayUpload, { ticket, storageId, bytes: blob.size });
+    } finally {
+      if (!redeemed) await ctx.storage.delete(storageId);
+    }
+    if (!redeemed) return refuse(403, 'upload refused: a bad or used ticket');
+    return new Response(JSON.stringify({ storageId }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }),
+});
+
 // A phone's photo (phone:imageUploadUrl hands out this URL with a one-use
 // ticket): stored here and recorded as that phone token's (phoneUploads), so
 // only its own commands can send it and only it can discard it, and one

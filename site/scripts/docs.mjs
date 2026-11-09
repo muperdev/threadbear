@@ -3,7 +3,13 @@
 // `## ` headings into a page each and turns the Markdown into HTML. There's no Markdown
 // dependency (the site has none), so it handles only what the guide uses: headings, paragraphs,
 // lists, **bold**, `code`, code blocks and [links](...). Anything else shows as written, so a
-// new kind of Markdown in the guide needs a line here.
+// new kind of Markdown in the guide needs a line here. A video is a comment on a line of its own,
+// `<!-- video: /video/x.mp4 poster: /video/x.webp title: What it shows -->`: invisible in the guide
+// itself (on GitHub, and to agents), a player on the site. A picture is the same, with its caption:
+// `<!-- picture: /docs-img/x.webp alt: What it shows -->`. An .mp4 there plays silently on a loop,
+// with the .webp beside it as its first frame, like the homepage's clips; a /phone-... picture
+// is drawn phone-sized, a /tall-... one (a Settings window) no taller than a phone, and the
+// bear's poses (/img/bear-...) small and unframed.
 //
 // Each section's address comes from the comment on the line under its heading, like
 // `<!-- slug: threads -->`, so renaming a heading doesn't move its page. A section without one
@@ -82,7 +88,13 @@ function inline(text, slugs) {
 
 /** Block Markdown to HTML, for the subset the guide uses. `### ` headings become <h2>s with ids. */
 export function markdown(md, slugs) {
-  const lines = md.replace(/<!--[\s\S]*?-->/g, "").split("\n");
+  const VIDEO = "\u0000video ";
+  const PICTURE = "\u0000picture ";
+  const lines = md
+    .replace(/^<!--\s*video:\s*(\S+)\s+poster:\s*(\S+)\s+title:\s*(.+?)\s*-->$/gm, (_, src, poster, title) => `${VIDEO}${JSON.stringify({ src, poster, title })}`)
+    .replace(/^<!--\s*picture:\s*(\S+)\s+alt:\s*(.+?)\s*-->$/gm, (_, src, alt) => `${PICTURE}${JSON.stringify({ src, alt })}`)
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .split("\n");
   const out = [];
   let i = 0;
   const blank = (l) => l === undefined || l.trim() === "";
@@ -90,6 +102,23 @@ export function markdown(md, slugs) {
   while (i < lines.length) {
     const line = lines[i];
     if (blank(line)) { i++; continue; }
+    if (line.startsWith(PICTURE)) {
+      const p = JSON.parse(line.slice(PICTURE.length));
+      // A phone screen is drawn phone-sized, and one of the bear's poses (img/bear-*) small, with no frame.
+      const phone = /\/phone-[^/]*$/.test(p.src) ? " phone" : /\/tall-[^/]*$/.test(p.src) ? " tall" : /\/bear-[^/]*$/.test(p.src) ? " bear" : "";
+      const media = p.src.endsWith(".mp4")
+        ? `<video autoplay muted loop playsinline preload="metadata" src="${escape(p.src)}" poster="${escape(p.src.replace(/\.mp4$/, ".webp"))}" aria-label="${escape(p.alt)}"></video>`
+        : `<img src="${escape(p.src)}" alt="${escape(p.alt)}" loading="lazy" decoding="async">`;
+      out.push(`<figure class="docs-shot${phone}">${media}<figcaption>${inline(p.alt, slugs)}</figcaption></figure>`);
+      i++;
+      continue;
+    }
+    if (line.startsWith(VIDEO)) {
+      const v = JSON.parse(line.slice(VIDEO.length));
+      out.push(`<figure class="docs-video"><video controls playsinline preload="none" src="${escape(v.src)}" poster="${escape(v.poster)}" width="1920" height="1080" aria-label="${escape(v.title)}"></video></figure>`);
+      i++;
+      continue;
+    }
     // A heading inside a section (### or deeper; ## starts a new page).
     const heading = line.match(/^(#{3,6}) (.+)$/);
     if (heading) {

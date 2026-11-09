@@ -296,7 +296,8 @@ export function checkSummary(t: Obj): string[] {
     const r = t.panelRequest;
     const ok = r && isStr(r.id) && isStr(r.panel) && isStr(r.title) && isIso(r.at) &&
       (r.where === undefined || ['tab', 'left', 'right', 'top', 'bottom', 'window'].includes(r.where)) &&
-      Object.keys(r).every((k) => ['id', 'panel', 'title', 'where', 'at'].includes(k));
+      (r.highlight === undefined || (isStr(r.highlight) && r.panel === 'highlights')) &&
+      Object.keys(r).every((k) => ['id', 'panel', 'title', 'where', 'highlight', 'at'].includes(k));
     if (!ok) problems.push('panelRequest');
   }
   if (t.share !== undefined) {

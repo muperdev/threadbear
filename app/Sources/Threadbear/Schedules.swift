@@ -25,7 +25,10 @@ struct ScheduleEditorState: Identifiable, Equatable {
     var poolId: String?
     var model: String?
     var effort: String?
-    var ask = false
+    /// The composer's mode as it was, Auto too: the editor has no control
+    /// for it, so turning Auto into Ask left a schedule's threads waiting
+    /// on every edit with nobody there to see why.
+    var permissionMode: PermissionMode = .full
     /// Another runner it runs on (`runners.list`); nil is this one. Only
     /// for a new thread each time. There the folder is a path on that
     /// runner's Mac, typed as is ("" for its default folder), and the
@@ -184,8 +187,7 @@ extension AppModel {
         state.poolId = settings.pool?.id
         state.model = settings.model
         state.effort = settings.effort
-        // The editor only offers Ask or Full; Auto carries over as the safer one.
-        state.ask = settings.permissionMode != .full
+        state.permissionMode = settings.permissionMode
         scheduleEditor = state
         loadRunners()
     }
@@ -230,13 +232,13 @@ extension AppModel {
                 let cwd = state.cwd.trimmingCharacters(in: .whitespacesAndNewlines)
                 saved = try await client.createSchedule(NewScheduleRequest(
                     text: text, title: title.isEmpty ? nil : title, when: state.when,
-                    cwd: cwd.isEmpty ? nil : cwd, permissionMode: state.ask ? .ask : .full, runnerId: state.runnerId
+                    cwd: cwd.isEmpty ? nil : cwd, permissionMode: state.permissionMode, runnerId: state.runnerId
                 ))
             } else {
                 saved = try await client.createSchedule(NewScheduleRequest(
                     text: text, title: title.isEmpty ? nil : title, when: state.when, threadId: state.threadId,
                     cwd: state.cwd, accountId: state.accountId, poolId: state.poolId, model: state.model, effort: state.effort,
-                    permissionMode: state.ask ? .ask : .full
+                    permissionMode: state.permissionMode
                 ))
             }
             replace(saved)

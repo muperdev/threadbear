@@ -53,11 +53,19 @@ const timed = <T>(fn: () => T): { ms: number; out: T } => {
 // quadratic regexes this replaces took thousands of times one pass
 // (minutes at these sizes). At full speed, each parse below takes well
 // under 100 ms.
+// Up to three tries: a busy Mac (a build or another suite running) can
+// stall one timing for a second, which failed the runner's build of main
+// on 6 Nov with this test passing alone. Quadratic work is slow every
+// time, so one quick try is enough to show it's linear.
 function assertLinear<T>(label: string, ref: () => unknown, fn: () => T, factor = 50): T {
-  const base = Math.min(timed(ref).ms, timed(ref).ms, timed(ref).ms);
-  const { ms, out } = timed(fn);
-  assert.ok(ms < factor * base + 50, `${label}: ${Math.round(ms)} ms, against ${Math.round(base)} ms for one pass`);
-  return out;
+  let last = '';
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const base = Math.min(timed(ref).ms, timed(ref).ms, timed(ref).ms);
+    const { ms, out } = timed(fn);
+    if (ms < factor * base + 50) return out;
+    last = `${label}: ${Math.round(ms)} ms, against ${Math.round(base)} ms for one pass`;
+  }
+  assert.fail(`${last} (three tries)`);
 }
 
 // The same for a shell script's parse, measured against itself on an eighth

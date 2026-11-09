@@ -130,3 +130,6 @@ The recording has to start with no prompts in the way, so the script runs the
 agent in an empty folder with GitHub logged out and its permissions named, in a
 full-screen Terminal. Claude Code hides setup's output, so the video's list of
 steps comes from running `./threadbear setup` again afterwards, in that Terminal.
+
+The docs page plays `site/public/video/self-hosting.mp4`: that recording,
+narrated by the Threadbear bear, with the tailnet name blurred.

@@ -8,7 +8,6 @@ import type { Action, EventBody } from '../protocol.ts';
 import type { ThreadRecord } from '../store.ts';
 import { BIN_DIR, threadEnv } from '../restart.ts';
 import { cleanUpWorktree, makeWorktree, sameSubfolder, worktreeGone } from '../worktrees.ts';
-import { isDirectory } from '../fsutil.ts';
 import { automaticTrust, findWorktreePatch, isInside, readWorktreePatch, runCommand, type PatchSet, worktreePatchFiles } from '../patches.ts';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -138,12 +137,14 @@ export const worktreesPart = {
   // landed) and has now come back carries on in the main checkout. Returns
   // a line for the agent, whose system prompt still names the worktree.
   // The thread's worktree has gone since its CLI last ran, so its next
-  // start moves it to the main checkout (leaveRemovedWorktree). A spare's
-  // folder is still there, but it's another thread's (or will be), so the
-  // thread never carries on in it.
+  // start moves it to the main checkout (leaveRemovedWorktree).
+  // Whether a folder is at that path now says nothing: slot folders are
+  // reused, so one there is a spare, another thread's or a borrowed one.
+  // On 8 Nov a removed slot-10 was made again by borrow-worktree.sh, and
+  // the thread brought back carried on in it, beside the borrower's work.
   leavesRemovedWorktree(this: Runner, rec: ThreadRecord): boolean {
     const w = rec.worktree;
-    return Boolean(w?.removedAt && isInside(rec.cwd, w.path) && (w.spare || !isDirectory(rec.cwd)));
+    return Boolean(w?.removedAt && isInside(rec.cwd, w.path));
   },
 
   leaveRemovedWorktree(this: Runner, st: ThreadState, turnId: string): string | undefined {
@@ -245,7 +246,9 @@ export const worktreesPart = {
       // thread, brought back, never carries on in it (leavesRemovedWorktree).
       if (result.spare || result.taken) w.spare = true;
       if (deleted) return;
-      const text = result.taken
+      const text = result.branchLeft
+        ? `Removed this thread's worktree, but its branch ${w.branch} stays: ${result.branchLeft}. Everything on it is on main, so git -C ${w.mainCheckout} branch -D ${w.branch} loses nothing.`
+        : result.taken
         ? `This thread's worktree had already gone, and its folder ${w.path} is another checkout's now, so it was left alone. Its branch ${w.branch} is gone too.`
         : w.spare
           ? `Deleted this thread's branch ${w.branch} (everything on it is on main) and kept its worktree, build caches and all, for the next thread.`

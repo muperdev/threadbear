@@ -22,6 +22,12 @@ struct ProjectPage: View {
                             .font(.system(size: TypeScale.label))
                             .foregroundStyle(Color(nsColor: Theme.faintText))
                     }
+                    Spacer(minLength: zoomed(12))
+                    Button { app.newThread(in: project) } label: {
+                        Label("New Thread", systemImage: "square.and.pencil")
+                    }
+                    .controlSize(.large)
+                    .tip("Start a thread in this project, in its folder, with its goals from the first message")
                 }
                 TextSection(project: project, field: .goals)
                 TextSection(project: project, field: .state)
@@ -548,12 +554,17 @@ private struct ThreadsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PageHeading(title: "Threads", detail: threads.isEmpty ? nil : "\(threads.count)")
+            PageHeading(title: "Threads", detail: threads.isEmpty ? nil : "\(threads.count)") {
+                Button("New thread…") { app.newThread(in: project) }
+                    .buttonStyle(.borderless)
+                    .tip("Start a thread in this project")
+                    .font(.system(size: TypeScale.detail))
+            }
             ForEach(threads) { thread in
                 ProjectThreadRow(project: project, thread: thread)
             }
             if threads.isEmpty {
-                Text("No threads in it yet. The librarian puts threads here as they work in its folders, or add one from a thread's ... menu.")
+                Text("No threads in it yet. Start one with New Thread, add one from a thread's ... menu, or the librarian puts threads here as they work in its folders.")
                     .font(.system(size: TypeScale.label))
                     .foregroundStyle(Color(nsColor: Theme.faintText))
             }

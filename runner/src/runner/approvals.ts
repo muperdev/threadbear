@@ -4,7 +4,7 @@
 // is the Runner; runner.ts puts them on its prototype.
 import type { Runner } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
-import type { ApprovalDecision, EventBody, PermissionMode } from '../protocol.ts';
+import type { ApprovalDecision, EventBody, PermissionMode, QueuedAnswers } from '../protocol.ts';
 import { ErrorCode, RpcError } from '../protocol.ts';
 import type { QuestionAnswer, QuestionRequest, ToolApprovalAnswer, ToolApprovalRequest } from '../adapters/types.ts';
 import { approvalTitle, type AgentApprovalRequest } from '../threadbear-mcp.ts';
@@ -29,6 +29,14 @@ export function settleDeclined(p: PendingApproval, decision: 'deny' | 'expired',
   else p.resolve({ status: decision === 'deny' ? 'declined' : 'expired', message });
 }
 
+// The answers for calls that were queued on the card, or nothing.
+function listedAnswers(listed: Set<string> | undefined, answers: QueuedAnswers | undefined): QueuedAnswers | undefined {
+  if (!listed || !answers) return undefined;
+  const out: QueuedAnswers = {};
+  for (const id of listed) if (answers[id] === 'allow' || answers[id] === 'deny') out[id] = answers[id];
+  return Object.keys(out).length ? out : undefined;
+}
+
 // What Go ahead says to an agent whose plan isn't waiting on a call.
 export const PLAN_GO_AHEAD = 'Go ahead with the plan.';
 
@@ -39,6 +47,8 @@ export const approvalsPart = {
     decision: ApprovalDecision;
     message?: string;
     answers?: Record<string, string>;
+    // Answers to the calls queued on the card (docs/protocol.md, "Queued calls").
+    queued?: QueuedAnswers;
     // From the phone or another Mac's view of this runner, through the
     // backend (sync.ts), which show only a line of a card's input.
     remote?: boolean;
@@ -89,7 +99,9 @@ export const approvalsPart = {
       this.resolveApproval(st, pending.approvalId, params.decision, params.message);
       // An approved plan goes ahead in the mode resolveApproval just left plan mode for.
       const mode = pending.plan && params.decision !== 'deny' ? st.rec.permissionMode : undefined;
-      pending.resolve({ decision: params.decision, message: params.message, ...(mode ? { mode } : {}) });
+      // Only calls the card listed, and never from a view that didn't show them.
+      const queued = params.remote ? undefined : listedAnswers(pending.queued, params.queued);
+      pending.resolve({ decision: params.decision, message: params.message, ...(mode ? { mode } : {}), ...(queued ? { queued } : {}) });
     }
     return {};
   },
@@ -157,7 +169,9 @@ export const approvalsPart = {
       // if a client sends it: it would save a rule Mike was never offered.
       const answer = req.canAlwaysAllow ? resolve : (a: ToolApprovalAnswer) => resolve(a.decision === 'allowAlways' ? { ...a, decision: 'allow' } : a);
       const macOnly = !remoteCardShowsAll(req.name, req.input, st.rec.cwd, req.title);
-      this.addApproval(st, { approvalId, kind: 'tool', title: String(body.title), main: Boolean(req.toolUseId), ...(plan ? { plan } : {}), ...(macOnly ? { macOnly } : {}), resolve: answer }, body, req.signal);
+      const queued = req.toolUseId && req.queued?.length ? new Set(req.queued.map((c) => c.itemId)) : undefined;
+      this.addApproval(st, { approvalId, kind: 'tool', title: String(body.title), main: Boolean(req.toolUseId), ...(plan ? { plan } : {}), ...(macOnly ? { macOnly } : {}), ...(req.toolUseId ? { itemId: req.toolUseId } : {}), ...(queued ? { queued } : {}), resolve: answer }, body, req.signal);
+      if (queued) this.emit(st, { type: 'approval.queued', approvalId, calls: req.queued! }, st.rt.turn?.turnId);
     });
   },
 
@@ -177,7 +191,7 @@ export const approvalsPart = {
   },
 
   requestQuestion(this: Runner, st: ThreadState, gen: number, req: QuestionRequest): Promise<QuestionAnswer> {
-    if (!this.turnForRequest(st, gen, Boolean(req.toolUseId))) return Promise.resolve({ answers: null, message: 'Threadbear closed this question before Mike saw it: the thread is shutting down.' });
+    if (!this.turnForRequest(st, gen, Boolean(req.toolUseId))) return Promise.resolve({ answers: null, message: 'Threadbear closed this question before the user saw it: the thread is shutting down.' });
     const approvalId = crypto.randomUUID();
     const body: EventBody = { type: 'question.requested', approvalId, questions: req.questions };
     if (req.toolUseId) body.itemId = req.toolUseId;

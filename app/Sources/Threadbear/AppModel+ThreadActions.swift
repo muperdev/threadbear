@@ -9,8 +9,7 @@ extension AppModel {
     // MARK: Thread actions
 
     func newThread() {
-        // Voice talks with the thread on screen: leaving it ends it.
-        if VoiceMode.shared.isOn, VoiceMode.shared.threadId != VoiceMode.newThread { VoiceMode.shared.stop() }
+        newThreadProjectId = nil
         selection = nil
         openProjectId = nil
         showsProjectsHome = false
@@ -19,6 +18,23 @@ extension AppModel {
         stopShowingSubagent()
         sidebarMode = .inbox
         focusComposer("new")
+    }
+
+    /// New Thread on a project's page: the new-thread box, in the project's
+    /// first folder (the default folder if it has none), the thread joining
+    /// the project as it's made. The folder can still be changed there.
+    func newThread(in project: Project) {
+        newThread()
+        guard selection == nil else { return }
+        // A project is this Mac's runner's: back to it the way the machine
+        // menu goes, so another Mac's login and folder don't come along. Even
+        // when it's on this Mac already: picked, so a default Mac coming
+        // online doesn't take the draft over.
+        chooseNewThreadRunner(nil)
+        newThreadProjectId = project.id
+        // Its first folder, or the default one: never a folder left from
+        // another draft.
+        newThreadCwd = project.folders.first
     }
 
     /// Collapses the thread's card of asks, or brings it back. The cursor
@@ -68,10 +84,8 @@ extension AppModel {
     /// imported as the composer's are and added to that ask's answer.
     func addNoteImages(thread: ThreadSummary, ask: Int, urls: [URL]) {
         guard !urls.isEmpty else { return }
-        // A picture this Mac's runner keeps would be a path another
-        // runner hasn't got (as in the composer).
-        if let name = runnerName(of: thread) {
-            errorMessage = "Pictures can't go to \(name) from this Mac yet."
+        if let why = picturesRefusal(for: thread) {
+            errorMessage = why
             return
         }
         let threadId = thread.id
@@ -242,6 +256,12 @@ extension AppModel {
         guard !trimmed.isEmpty || !images.isEmpty else { return }
         // A second Return while the first new thread is still being made.
         if threadId == nil, creatingThread { return }
+        // Pictures pasted before the direct link was turned on, or before
+        // the draft moved to another runner: they'd go as paths on this Mac.
+        if !images.isEmpty, threadId == nil || thread != nil, let why = picturesRefusal(for: thread) {
+            errorMessage = why
+            return
+        }
         // A new thread on another runner goes over that runner's connection.
         if threadId == nil, let runnerId = newThreadRunnerId {
             return sendNewThread(on: runnerId, text: trimmed, draft: stored)
@@ -264,7 +284,8 @@ extension AppModel {
             }
         } else {
             let account = newThreadAccountId
-            let request = newThreadRequest(text: trimmed, images: draft.images)
+            var request = newThreadRequest(text: trimmed, images: draft.images)
+            if let project = newThreadProjectId, projects.contains(where: { $0.id == project }) { request.projectIds = [project] }
             creatingThread = true
             Task {
                 defer { creatingThread = false }
@@ -280,12 +301,13 @@ extension AppModel {
                     // from the defaults again, on whichever account then
                     // has the most room. The model and effort stick.
                     newThreadCwd = nil
+                    newThreadProjectId = nil
                     newThreadPermission = .full
                     newThreadAccount = nil
                     newThreadPool = nil
                     newThreadProvider = nil
                     threads[thread.id] = thread
-                    select(thread.id)
+                    showStartedThread(thread.id)
                     // "This Mac" was for this thread; the next starts on
                     // the default runner again.
                     newThreadRunnerPicked = false
@@ -294,50 +316,6 @@ extension AppModel {
                     // The draft never left the box.
                     show(error)
                 }
-            }
-        }
-    }
-
-    /// What Mike said in Voice mode, sent as his message without touching
-    /// whatever is typed in the composer (VoiceMode).
-    func sendSpoken(threadId: String, text: String) {
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        guard let client = client(for: threadId), isRemote(threadId) || connection == .connected else {
-            showConnectionError(notConnectedText(threadId, "that wasn't sent"))
-            return
-        }
-        ActivityRecorder.shared.sent(threadId: threadId, images: 0, answers: 0)
-        post(threadId: threadId, text: text, images: [], answers: [], client: client)
-    }
-
-    /// Starts a new thread with what Mike said in Voice on the new-thread
-    /// composer, with its folder, login and model as the composer has
-    /// them. `then` gets its id before it's selected (so Voice carries on
-    /// in it), or nil if it couldn't be made.
-    func startThreadSpoken(_ text: String, then: @escaping (String?) -> Void) {
-        guard let client, connection == .connected, !creatingThread else { then(nil); return }
-        let account = newThreadAccountId
-        let request = newThreadRequest(text: text, images: [])
-        creatingThread = true
-        Task {
-            defer { creatingThread = false }
-            do {
-                let thread = try await client.createThread(request)
-                // What the new-thread composer's picks were for, as for a
-                // typed first message (send): the next one starts afresh.
-                rememberLastAccount(request.poolId == nil ? account : thread.accountId)
-                newThreadCwd = nil
-                newThreadPermission = .full
-                newThreadAccount = nil
-                newThreadPool = nil
-                newThreadProvider = nil
-                threads[thread.id] = thread
-                then(thread.id)
-                select(thread.id)
-            } catch {
-                then(nil)
-                show(error)
             }
         }
     }
@@ -674,6 +652,27 @@ extension AppModel {
     /// Stars it, or takes the star off (the Starred section above the Inbox).
     func setStarred(_ threadId: String, _ starred: Bool) {
         update(threadId, ThreadUpdate(starred: starred))
+    }
+
+    /// Delete from the sidebar, only for an archived chat, after asking:
+    /// the runner moves its folder to its trash.
+    func deleteThread(_ threadId: String) {
+        guard !isBusy(BusyKey.deleteThread(threadId)), let thread = threads[threadId], thread.isArchived,
+              let client = client(for: threadId) else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Delete \u{201C}\(thread.title)\u{201D}?"
+        alert.informativeText = "This removes the chat from Threadbear and moves it to the runner's trash. It can't be undone in the app."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        // It may have been unarchived while the alert was up.
+        guard alert.runModal() == .alertFirstButtonReturn, threads[threadId]?.isArchived == true else { return }
+        whileBusy(BusyKey.deleteThread(threadId), note: "Deleting chat…") { [self] in
+            do {
+                try await client.deleteThread(threadId)
+                forget(threadId)
+            } catch { show(error) }
+        }
     }
 
     /// Archive (Mike calls it settling): leaves the inbox, stops its CLI.

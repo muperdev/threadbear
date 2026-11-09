@@ -356,7 +356,7 @@ extension Automation {
     }
 
     /// Two fingers across the middle of the window (`{"dx": 150, "dy": 0}`,
-    /// right and down positive; right is Back), through the handler
+    /// the content's way, right and down positive; right is Back), through the handler
     /// SwipeNavigation's monitor calls. A made-up event has no window of its
     /// own, so, as for `mouse-button`, it's handed the main one. `"lift":
     /// false` leaves the fingers down, for a shot of the arrow; a later
@@ -366,7 +366,7 @@ extension Automation {
         let dx = number(c["dx"]) ?? 0, dy = number(c["dy"]) ?? 0
         let steps = max(1, Int(number(c["steps"]) ?? 8))
         func page(_ x: Double, _ y: Double, _ phase: RowSwipeEvents.Phase) {
-            guard let event = RowSwipeEvents.event(dx: x, dy: y, phase: phase, middle: true) else { return }
+            guard let event = RowSwipeEvents.event(dx: x, dy: y, phase: phase, middle: true, content: true) else { return }
             _ = SwipeNavigation.shared.handle(event, in: window)
         }
         if SwipeNavigation.shared.swipe.phase == .idle { page(0, 0, .began) }

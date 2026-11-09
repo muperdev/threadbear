@@ -11,6 +11,10 @@ struct Composer: View {
     /// The thread's patch link buttons, in a row over the box as the Mac
     /// has its chips over its composer.
     var links: [PhoneLink] = []
+    /// The thread it replies to, and its CLI, for the slash command
+    /// palette; none for a box with no thread yet.
+    var threadId: String? = nil
+    var provider: String = "claude"
     /// Returns whether it went, so a failed send keeps the text.
     var onSend: (String, [PickedPhoto]) async -> Bool
     @State private var photos: [PickedPhoto] = []
@@ -24,6 +28,12 @@ struct Composer: View {
 
     var body: some View {
         VStack(spacing: 6) {
+            // Over the box while what's typed is a command being typed.
+            if let threadId, model.canUseSlashCommands, !hearing, let query = SlashPalette.query(in: text) {
+                SlashPaletteList(threadId: threadId, provider: provider, query: query) { command in
+                    text = SlashPalette.fill(command, forArguments: !(command.argumentHint ?? "").trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
             if !links.isEmpty {
                 LinkChips(links: links)
             }
@@ -93,6 +103,23 @@ struct Composer: View {
             let args = ProcessInfo.processInfo.arguments
             if args.contains("-ThreadbearDictating") { dictation.fakeListening() }
             if args.contains("-ThreadbearTypingOut") { dictation.fakeTypingOut() }
+            // Whisper finishing: the words land as the bar goes, as after a real
+            // dictation, so a shot shows the box grown to fit them.
+            if args.contains("-ThreadbearTypedOut") {
+                dictation.fakeTypingOut()
+                try? await Task.sleep(for: .seconds(1.5))
+                text = "Can you also make the date picker work on the small phones, and check it in landscape while you are there"
+                dictation.fakeTypedOut()
+            }
+            // Apple's dictation: words typing in above the bar as he talks, then stop.
+            if args.contains("-ThreadbearHeardLive") {
+                dictation.fakeListening()
+                text = "Can you also make"
+                try? await Task.sleep(for: .seconds(0.6))
+                text = "Can you also make the date picker work on the small phones, and check it in landscape while you are there"
+                try? await Task.sleep(for: .seconds(0.6))
+                dictation.fakeStopped()
+            }
         }
         #endif
         .task {
@@ -176,7 +203,7 @@ private struct ComposerListeningBar: View {
                 HStack(spacing: 12) {
                     TimelineView(.periodic(from: .now, by: 1.0 / 15)) { context in
                         HStack(spacing: 12) {
-                            Waveform(levels: dictation.level.history)
+                            Waveform(levels: dictation.level.shown)
                             Text(elapsed(at: context.date)).monospacedDigit()
                         }
                     }

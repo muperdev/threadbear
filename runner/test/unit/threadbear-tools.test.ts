@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { ErrorCode, RpcError } from '../../src/protocol.ts';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -1752,4 +1753,46 @@ test("without the backend (sync off, or a runner key) the tools list only this r
   // And a backend that fails leaves the local list working.
   const broken = toolsWith(h, me.id, { list: async () => { throw new Error('offline'); }, call: async () => { throw new Error('offline'); } });
   assert.match((await broken('list_threads')).text, /Local only/);
+});
+
+// A whole id that isn't here is looked for on the other runners without
+// listing every thread here: on a draining runner that list comes over the
+// link from the primary (THREADBEAR-F), and the brief of a thread started
+// from another runner names its thread by its whole id (8 Nov).
+test("another runner's thread by its whole id doesn't list every thread here", async () => {
+  const h = makeHarness();
+  const { thread: me } = start(h, 'Report back');
+  const f = farRelay();
+  let lists = 0;
+  const counted = new Proxy(h.runner, {
+    get(target, prop, recv) {
+      const v = Reflect.get(target, prop, recv);
+      if (prop === 'list') return (...a: unknown[]) => { lists++; return (v as (...x: unknown[]) => unknown).apply(target, a); };
+      return typeof v === 'function' ? v.bind(target) : v;
+    },
+  });
+  const tools = buildThreadbearTools(counted, me.id, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, { remote: () => f.control, sleep: async () => undefined });
+  const send = tools.find((x) => x.name === 'send_message')!;
+  lists = 0;
+  const r = (await send.handler({ threadId: f.FAR, text: 'Both spikes run.' } as never, {})) as { content: { text: string }[]; isError?: boolean };
+  assert.equal(Boolean(r.isError), false, r.content[0].text);
+  assert.match(r.content[0].text, /Sent to ba5bb5ec .* on Cloud/);
+  assert.equal(lists, 0);
+});
+
+test('a whole id whose lookup fails for another reason says so, not "No thread"', async () => {
+  const h = makeHarness();
+  const { thread: me } = start(h, 'Report back');
+  const other = start(h, 'Here all along').thread;
+  const flaky = new Proxy(h.runner, {
+    get(target, prop, recv) {
+      if (prop === 'get') return (id: string) => (id === other.id ? Promise.reject(new RpcError(ErrorCode.busy, "The other runner couldn't be reached; try again in a moment.")) : target.get(id));
+      const v = Reflect.get(target, prop, recv);
+      return typeof v === 'function' ? v.bind(target) : v;
+    },
+  });
+  const tools = buildThreadbearTools(flaky, me.id, () => Date.parse('2026-10-26T12:00:00Z'), undefined, undefined, undefined, { remote: () => farRelay().control, sleep: async () => undefined });
+  const r = (await tools.find((x) => x.name === 'send_message')!.handler({ threadId: other.id, text: 'hi' } as never, {})) as { content: { text: string }[]; isError?: boolean };
+  assert.equal(r.isError, true);
+  assert.match(r.content[0].text, /try again in a moment/);
 });

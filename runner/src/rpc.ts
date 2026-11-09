@@ -551,6 +551,7 @@ export class RpcServer {
           // agent's create_thread), so any client may ask for it.
           ...(p.confined === true ? { confined: true } : {}),
           ...optStartedBy(p),
+          ...optProjectIds(p),
         });
         return { thread: res.thread, turnId: res.turnId };
       }
@@ -694,12 +695,23 @@ export class RpcServer {
             answers[k] = Array.isArray(v) ? v.map(String).join(', ') : String(v);
           }
         }
+        // Answers to the calls queued on the card (docs/protocol.md, "Queued calls").
+        let queued: Record<string, 'allow' | 'deny'> | undefined;
+        if (p.queued !== undefined) {
+          if (!p.queued || typeof p.queued !== 'object' || Array.isArray(p.queued)) throw bad('queued must be an object');
+          queued = {};
+          for (const [k, v] of Object.entries(p.queued)) {
+            if (v !== 'allow' && v !== 'deny') throw bad('each queued answer is "allow" or "deny"');
+            queued[k] = v;
+          }
+        }
         return r.respondApproval({
           threadId: reqString(p, 'threadId'),
           approvalId: reqString(p, 'approvalId'),
           decision,
           message: optString(p, 'message'),
           answers,
+          ...(queued ? { queued } : {}),
           // A draining runner passing on the phone's answer (handover.ts):
           // it only ever narrows what counts, so any client may say it.
           ...(p.remote === true ? { remote: true } : {}),
@@ -906,4 +918,12 @@ function optImages(p: Record<string, unknown>): ImageRef[] | undefined {
     if (!x || typeof x !== 'object' || typeof (x as ImageRef).path !== 'string') throw bad('each image needs a path');
     return x as ImageRef;
   });
+}
+
+// threads.create's projectIds: project ids, the thread joining each before its first turn.
+function optProjectIds(p: Record<string, unknown>): { projectIds?: string[] } {
+  const v = p.projectIds;
+  if (v === undefined || v === null) return {};
+  if (!Array.isArray(v) || v.some((x) => typeof x !== 'string' || !x)) throw bad('projectIds must be a list of project ids');
+  return v.length ? { projectIds: v as string[] } : {};
 }

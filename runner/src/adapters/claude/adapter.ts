@@ -3,7 +3,7 @@ import { CONFINED_NO_SANDBOX, sandboxSpawner, type SandboxConfig } from '../../s
 import os from 'node:os';
 import { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import type { HookInput, McpServerConfig, ModelInfo, Options, PermissionResult, Query, SDKUserMessage, PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
-import type { Account, EffortLevel, ModelChoice, PermissionMode, Question } from '../../protocol.ts';
+import type { Account, EffortLevel, ModelChoice, PermissionMode, Question, QueuedAnswers, QueuedCall } from '../../protocol.ts';
 import { isEffortLevel } from '../../protocol.ts';
 import fs from 'node:fs';
 import type { AgentAdapter, AgentSession, RewindRequest, RewindResult, SessionSink, StartSessionOptions, UserInput } from '../types.ts';
@@ -327,6 +327,31 @@ export function cardClosedMessage(why: string | undefined): string {
   return `Threadbear closed this permission request before anyone answered it${why ? ` (${why.replace(/\.$/, '')})` : ''}. The user did not decline it, so don't tell them they did. The tool didn't run.`;
 }
 
+// Tools that ask in Ask mode unless a rule allows them, for guessing which
+// of a reply's calls will ask (docs/protocol.md, "Queued calls"). Another
+// server's tools ask too (wouldAsk). A guess that's wrong costs little: a
+// listed call a rule lets through runs as it would have if Mike allowed
+// it, and one he denied is refused all the same (onQueuedCall).
+const ASKS_IN_ASK = new Set([...EDIT_TOOLS, 'NotebookEdit', 'Bash', 'WebFetch']);
+
+// The PreToolUse hook's tools: edits (onEditCall) and anything that can
+// queue (wouldAsk). A regex, as the CLI reads it.
+const QUEUE_HOOK_MATCHER = [...ASKS_IN_ASK, 'mcp__.*'].join('|');
+
+// A queued call as a card listed it: its tool, its whole input and
+// whether it wrote code then. An allow holds only for exactly that.
+type QueuedGrant = { name: string; input: string; code: CodeWrite };
+// A card the agent's own call is waiting on: what it lists, and what each
+// of those was as it listed it (its own, so another card listing the same
+// call can't change what an answer here covers: Codex review).
+type WaitingCard = { toolUseId: string; queued: QueuedCall[]; grants: Map<string, QueuedGrant> };
+
+// What the agent is told about a queued call Mike denied on the card. The
+// CLI words a hook's refusal as "PreToolUse:Write hook error: ...", and an
+// agent told only "denied" passed it on as a permission hook having
+// blocked it (8 Nov 2026), so this says whose decision it was.
+export const QUEUED_DENIED = 'The user said no to this call on its permission card. It is their decision, not an error or a hook failing, so don\'t retry it: ask them how to proceed.';
+
 class ClaudeSession implements AgentSession {
   private opts: StartSessionOptions;
   private sink: SessionSink;
@@ -350,6 +375,18 @@ class ClaudeSession implements AgentSession {
   private resolveExit!: () => void;
   private stderrTail: string[] = [];
   private seenTools = new Set<string>();
+  // The agent's own tool calls that have no result yet, as the CLI sent
+  // them, in order: what can queue behind a card (docs/protocol.md,
+  // "Queued calls").
+  private openCalls = new Map<string, { name: string; input: Record<string, unknown> }>();
+  // The cards the agent's own calls are waiting on (one at a time, but a
+  // parallel call's card can open beside it), and what's queued on each.
+  private waitingCards = new Set<WaitingCard>();
+  // Mike's answers to queued calls, by tool use id, until each comes up.
+  private queuedAnswers = new Map<string, { decision: 'allow' | 'deny' } & QueuedGrant>();
+  // Calls that have reached the CLI's checks (the PreToolUse hook): they
+  // may already be running, so a tick on a card could no longer stop them.
+  private checkedCalls = new Set<string>();
   private toolWaiters = new Map<string, (() => void)[]>();
   // Whether this session has the threadbear server's end_turn, and whether
   // the turn now ending called it (a taken call, from the PostToolUse hook).
@@ -427,7 +464,11 @@ class ClaudeSession implements AgentSession {
         // mode it ran on is recorded, and where one that writes code is
         // made to ask outside Full access (onEditCall).
         PreToolUse: [
-          { matcher: [...EDIT_TOOLS].join('|'), hooks: [async (input) => this.onEditCall(input)] },
+          // The same hook refuses a queued call Mike denied on a card
+          // (onQueuedCall), before any allow rule or Auto's classifier could
+          // let it through: only tools that can queue, so the rest don't
+          // make a round trip per call.
+          { matcher: QUEUE_HOOK_MATCHER, hooks: [async (input) => this.onQueuedCall(input) ?? this.onEditCall(input)] },
           // A hook's ask comes before allow rules, so it's how a folder's
           // untrusted ones stop applying once the thread leaves Full
           // (askBeforeEveryTool). Only on a session that may need it.
@@ -537,6 +578,93 @@ class ClaudeSession implements AgentSession {
     return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: codeWriteReason(kind) } };
   }
 
+  private onQueuedCall(input: HookInput): { hookSpecificOutput: { hookEventName: 'PreToolUse'; permissionDecision: 'deny'; permissionDecisionReason: string } } | undefined {
+    const id = (input as { tool_use_id?: string }).tool_use_id;
+    if (typeof id !== 'string') return undefined;
+    this.callChecked(id);
+    if (this.queuedAnswers.get(id)?.decision !== 'deny') return undefined;
+    this.queuedAnswers.delete(id);
+    return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: QUEUED_DENIED } };
+  }
+
+  // A call past the point a card's tick could stop it (Codex review: a
+  // parallel MCP call an allow rule let through, listed on a card while it
+  // ran). It's no longer listed, and comes off a waiting card.
+  private callChecked(id: string): void {
+    this.checkedCalls.add(id);
+    while (this.checkedCalls.size > 500) this.checkedCalls.delete(this.checkedCalls.values().next().value!);
+    for (const card of this.waitingCards) {
+      if (!card.queued.some((c) => c.itemId === id)) continue;
+      card.queued = card.queued.filter((c) => c.itemId !== id);
+      this.sink.output({ kind: 'approvalQueue', toolUseId: card.toolUseId, calls: card.queued });
+    }
+  }
+
+  // Whether a call would come to a card in this mode, roughly (ASKS_IN_ASK).
+  private wouldAsk(name: string, input: Record<string, unknown>): boolean {
+    if (name === 'AskUserQuestion' || name === 'ExitPlanMode') return false;
+    if (this.deps.alwaysAsk?.has(name)) return true;
+    if (this.deps.neverAsk?.has(name)) return false;
+    if (this.mode === 'full' || this.mode === 'plan') return false;
+    if (this.askEvery) return true;
+    const target = EDIT_TOOLS.has(name) ? this.editTarget(input) : undefined;
+    if (target !== undefined && this.runsAsCode(target)) return true;
+    // Auto's classifier lets the rest through, or asks about the odd one,
+    // which then gets a card of its own.
+    if (this.mode === 'auto') return false;
+    return ASKS_IN_ASK.has(name) || name.startsWith('mcp__');
+  }
+
+  // The calls after `toolUseId` in its reply that will ask too, as their
+  // own cards would show them, leaving out any already answered or too
+  // long for a card (that one is refused when it comes up).
+  // `shown`: calls already on the card, left as they were listed (Codex
+  // review: listing one again could change what an allow covers, after
+  // the card had shown it otherwise).
+  private queueAfter(toolUseId: string, grants: Map<string, QueuedGrant>, shown?: Set<string>): QueuedCall[] {
+    const out: QueuedCall[] = [];
+    let after = false;
+    for (const [id, call] of this.openCalls) {
+      if (id === toolUseId) {
+        after = true;
+        continue;
+      }
+      if (!after || shown?.has(id) || this.queuedAnswers.has(id) || this.checkedCalls.has(id) || !this.wouldAsk(call.name, call.input)) continue;
+      const target = EDIT_TOOLS.has(call.name) ? this.editTarget(call.input) : undefined;
+      const code: CodeWrite = target !== undefined && this.runsAsCode(target);
+      const card = cardInput(call.input, call.name.startsWith('mcp__') || code ? 'all' : ['command']);
+      if (card.tooLong) continue;
+      const title = toolTitle(call.name, call.input, this.opts.cwd);
+      grants.set(id, { name: call.name, input: JSON.stringify(call.input), code });
+      out.push({ itemId: id, name: call.name, title: code ? `${title} (${codeWriteNote(code)})` : title, input: card.input });
+    }
+    return out;
+  }
+
+  // The agent's own tool_use blocks as the CLI sent them, whole (a
+  // tool.call's input can be cut), and the queue on a waiting card grown
+  // with any that came after its call.
+  private noteCalls(msg: Record<string, unknown>): void {
+    if (msg.type !== 'assistant' || msg.parent_tool_use_id) return;
+    const content = (msg.message as { content?: unknown } | undefined)?.content;
+    if (!Array.isArray(content)) return;
+    let added = false;
+    for (const b of content as { type?: string; id?: unknown; name?: unknown; input?: unknown }[]) {
+      if (b?.type !== 'tool_use' || typeof b.id !== 'string' || typeof b.name !== 'string' || this.openCalls.has(b.id)) continue;
+      this.openCalls.set(b.id, { name: b.name, input: b.input && typeof b.input === 'object' ? (b.input as Record<string, unknown>) : {} });
+      added = true;
+    }
+    while (this.openCalls.size > 200) this.openCalls.delete(this.openCalls.keys().next().value!);
+    if (!added) return;
+    for (const card of this.waitingCards) {
+      // Only new calls join; the ones already shown stay as they were.
+      const more = this.queueAfter(card.toolUseId, card.grants, new Set(card.queued.map((c) => c.itemId)));
+      if (!more.length) continue;
+      card.queued = [...card.queued, ...more];
+      this.sink.output({ kind: 'approvalQueue', toolUseId: card.toolUseId, calls: card.queued });
+    }
+  }
+
   // Keeps the strictest mode a call was seen on.
   private noteWriteMode(id: string, mode: PermissionMode): void {
     const was = this.writeModes.get(id);
@@ -577,7 +705,10 @@ class ClaudeSession implements AgentSession {
           this.wake.reset();
           this.owedReply = undefined;
           this.endTurnAsks.clear();
+          this.openCalls.clear();
+          this.checkedCalls.clear();
         }
+        this.noteCalls(msg as Record<string, unknown>);
         for (let out of this.normalizer.handle(msg as Record<string, unknown>)) {
           // The mode the call went through on, recorded at the call.
           if (out.kind === 'wrote') {
@@ -586,6 +717,9 @@ class ClaudeSession implements AgentSession {
           } else if (out.kind === 'event' && out.event.type === 'tool.result') {
             this.writeModes.delete(out.event.itemId);
             this.codeWrites.delete(out.event.itemId);
+            this.openCalls.delete(out.event.itemId);
+            this.queuedAnswers.delete(out.event.itemId);
+            this.checkedCalls.delete(out.event.itemId);
           }
           this.sink.output(out);
           // Words after end_turn's result, by the events' own order: the
@@ -670,6 +804,21 @@ class ClaudeSession implements AgentSession {
       if (ans.stopped) return { behavior: 'deny', message: ans.message || 'Interrupted.', interrupt: true, toolUseID: o.toolUseID };
       return { behavior: 'deny', message: ans.message || 'The user dismissed the question without answering.', toolUseID: o.toolUseID };
     }
+    // Answered on an earlier card, with the call it was queued behind.
+    const answered = sub ? undefined : this.queuedAnswers.get(o.toolUseID);
+    if (answered) {
+      this.queuedAnswers.delete(o.toolUseID);
+      if (answered.decision === 'deny') return { behavior: 'deny', message: QUEUED_DENIED, toolUseID: o.toolUseID, decisionClassification: 'user_reject' };
+      // Allowed only as it was shown (Codex review): a hook that changed
+      // its input, or an earlier call that made its file run as code (and
+      // so need every line shown), and it gets a card of its own.
+      const file = EDIT_TOOLS.has(name) ? this.editTarget(input) : undefined;
+      const codeNow = (file !== undefined && this.runsAsCode(file)) || this.codeWrites.has(o.toolUseID);
+      if (answered.name === name && answered.input === JSON.stringify(input) && (!codeNow || answered.code)) {
+        if (EDIT_TOOLS.has(name)) this.noteWriteMode(o.toolUseID, this.mode);
+        return { behavior: 'allow', updatedInput: input, toolUseID: o.toolUseID, decisionClassification: 'user_temporary' };
+      }
+    }
     if (this.deps.neverAsk?.has(name) && !this.deps.alwaysAsk?.has(name)) return { behavior: 'allow', updatedInput: input, toolUseID: o.toolUseID };
     if (this.mode === 'full' && !this.deps.alwaysAsk?.has(name)) return { behavior: 'allow', updatedInput: input, toolUseID: o.toolUseID };
     // "Plan first": the plan goes to Mike as a plan card, and this call
@@ -691,15 +840,29 @@ class ClaudeSession implements AgentSession {
     if (card.tooLong) return { behavior: 'deny', message: tooLongForCard(card.tooLong), toolUseID: o.toolUseID };
     if (!sub) for (const out of this.normalizer.beforeApproval(o.toolUseID, name, input)) this.sink.output(out);
     const title = toolTitle(name, input, this.opts.cwd);
-    const ans = await this.sink.requestApproval({
-      toolUseId: itemId,
-      name,
-      title: code ? `${title} (${codeWriteNote(code)})` : title,
-      input: card.input,
-      // "Always allow" would defeat a tool that's meant to ask every time.
-      canAlwaysAllow: !plan && !code && !o.suppressAlwaysAllowRule && !this.deps.alwaysAsk?.has(name),
-      signal: o.signal,
-    });
+    // The rest of the reply's calls that will ask, on the same card.
+    let waiting: WaitingCard | undefined;
+    if (!sub && !plan) {
+      const grants = new Map<string, QueuedGrant>();
+      waiting = { toolUseId: o.toolUseID, queued: this.queueAfter(o.toolUseID, grants), grants };
+      this.waitingCards.add(waiting);
+    }
+    let ans: Awaited<ReturnType<SessionSink['requestApproval']>>;
+    try {
+      ans = await this.sink.requestApproval({
+        toolUseId: itemId,
+        name,
+        title: code ? `${title} (${codeWriteNote(code)})` : title,
+        input: card.input,
+        // "Always allow" would defeat a tool that's meant to ask every time.
+        canAlwaysAllow: !plan && !code && !o.suppressAlwaysAllowRule && !this.deps.alwaysAsk?.has(name),
+        signal: o.signal,
+        ...(waiting?.queued.length ? { queued: waiting.queued } : {}),
+      });
+    } finally {
+      if (waiting) this.waitingCards.delete(waiting);
+    }
+    if (waiting && ans.queued && (ans.decision === 'allow' || ans.decision === 'allowAlways' || ans.decision === 'deny')) this.keepQueuedAnswers(waiting, ans.queued);
     // A client that offers it anyway gets this once, never a rule.
     const decision = code && ans.decision === 'allowAlways' ? 'allow' : ans.decision;
     switch (decision) {
@@ -740,6 +903,15 @@ class ClaudeSession implements AgentSession {
           toolUseID: o.toolUseID,
           decisionClassification: 'user_reject',
         };
+    }
+  }
+
+  // Only for calls that were on the card: an id it never listed is ignored.
+  private keepQueuedAnswers(card: WaitingCard, answers: QueuedAnswers): void {
+    for (const call of card.queued) {
+      const a = answers[call.itemId];
+      const shown = card.grants.get(call.itemId);
+      if (shown && (a === 'allow' || a === 'deny')) this.queuedAnswers.set(call.itemId, { decision: a, ...shown });
     }
   }
 

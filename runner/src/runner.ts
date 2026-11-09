@@ -80,7 +80,6 @@ import { cleanUpWorktree, makeWorktree, sameSubfolder, worktreeInstructions } fr
 import { stripModelSuffix, type AccountRegistry, type LearnedAccountInfo } from './accounts.ts';
 import { pickAccount as pickByRoom, resetTime, type UsageReading } from './usage.ts';
 import { DEFAULT_POOL_FOLDERS, RUNNER_VERSION, expandHome, paths, readRunnerJson, writeRunnerJson, type Config } from './config.ts';
-import { experimentsOn } from './experiments.ts';
 import { WAIT_SLACK_MS, blockedUntil, limitWhy, loginOk, nextLogin, pickInPool, poolAccounts, poolForFolder, poolProviders, readPools, roomWait, validatePools } from './pools.ts';
 import { copyImageInto, imageRefFor } from './media.ts';
 import { isDirectory } from './fsutil.ts';
@@ -249,7 +248,9 @@ export type PendingApproval =
   // view shows (tools.ts, remoteCardShowsAll), so only an allow from a
   // client that shows it all counts.
   // title: what it's asking, for telling the agent about a subagent's.
-  | { approvalId: string; kind: 'tool'; main: boolean; title?: string; plan?: string; macOnly?: boolean; resolve: (a: ToolApprovalAnswer) => void }
+  // itemId and queued: the agent's call and the calls waiting behind it
+  // on the same card (docs/protocol.md, "Queued calls"), by itemId.
+  | { approvalId: string; kind: 'tool'; main: boolean; title?: string; plan?: string; macOnly?: boolean; itemId?: string; queued?: Set<string>; resolve: (a: ToolApprovalAnswer) => void }
   | { approvalId: string; kind: 'question'; main: boolean; title?: string; questions: Question[]; resolve: (a: QuestionAnswer) => void }
   // An agent's ask_secret (docs/protocol.md, "Secrets"). The value never
   // passes through here: secrets.answer writes the file and hands this the
@@ -390,6 +391,10 @@ type Runtime = {
   // once that CLI has exited, so a second process never touches the thread
   // while the live one still has it loaded.
   archivePending?: boolean;
+  // Its last save failed and it's waiting to be tried again (flush), and
+  // whether nothing has changed since, so the retry tells nobody.
+  saveFailed?: boolean;
+  saveRetry?: boolean;
   // The archived thread's worktree cleanup while it runs: a handover waits
   // for it before saving the record, or its result is lost (THREADBEAR-16).
   cleaning?: Promise<void>;
@@ -421,7 +426,7 @@ type Runtime = {
   // built-in panels stand in.
   // `base` is the set as the files give it; `set` is that with live state
   // applied (applyLive), which is what the app sees. `live`: base has any.
-  patches?: { cwd: string; key: string; at: number; base: PatchSet; set: PatchSet; refreshing: boolean; loaded: boolean; live?: boolean };
+  patches?: { cwd: string; key: string; at: number; base: PatchSet; set: PatchSet; refreshing: boolean; again?: boolean; loaded: boolean; live?: boolean };
   runningActions?: Set<string>;
   // Turns in a row that a hook's message started, per hook. A hook that
   // keeps failing stops being told to the agent after HOOK_TELL_LIMIT, so
@@ -478,6 +483,9 @@ export const DRAIN_SETTLE_MS = 30 * 60_000;
 // How long subagents hold a kept thread after its last turn. Long, since
 // they end by themselves; only a stuck one should ever reach it.
 export const DRAIN_AGENT_MS = 4 * 60 * 60_000;
+// How soon a thread.json that failed to save is tried again. Until it's
+// saved, a crash or a handover would lose what changed (THREADBEAR-9).
+export const SAVE_RETRY_MS = 5000;
 
 export type RunnerDeps = {
   // The release it runs, when not this code's own (tests).
@@ -643,6 +651,7 @@ export class Runner {
   listeners = new Set<(n: Notification) => void>();
   dirty = new Set<string>();
   flushScheduled = false;
+  saveRetryTimer?: TimerHandle;
   snoozeTimer?: TimerHandle;
   stopping = false;
   // Set while this runner drains after a handover (docs/protocol.md,
@@ -1179,7 +1188,7 @@ export class Runner {
 
   // --------------------------------------------------------------- queries
 
-  hello(): { runnerVersion: string; protocol: number; accounts: Account[]; pools: Pool[]; defaults: RunnerDefaults; clis?: CliStatus[]; experiments?: string[] } {
+  hello(): { runnerVersion: string; protocol: number; accounts: Account[]; pools: Pool[]; defaults: RunnerDefaults; clis?: CliStatus[] } {
     const accounts = this.accounts.list();
     const pools = this.pools(accounts);
     const defaults: RunnerDefaults = { cwd: this.cfg.defaults.cwd, accountId: this.defaultAccountId(accounts) };
@@ -1190,8 +1199,7 @@ export class Runner {
     if (claudeModel) defaults.model = claudeModel;
     if (this.cfg.defaults.models) defaults.models = { ...this.cfg.defaults.models };
     if (this.cfg.defaults.efforts) defaults.efforts = { ...this.cfg.defaults.efforts };
-    // Experiments on here, for the ones that live in the app (Voice mode).
-    const out: ReturnType<Runner['hello']> = { runnerVersion: RUNNER_VERSION, protocol: PROTOCOL_VERSION, accounts, pools, defaults, experiments: experimentsOn(this.cfg.home) };
+    const out: ReturnType<Runner['hello']> = { runnerVersion: RUNNER_VERSION, protocol: PROTOCOL_VERSION, accounts, pools, defaults };
     const clis = this.cliList();
     if (clis) out.clis = clis;
     return out;
@@ -2105,6 +2113,13 @@ export class Runner {
         this.emit(st, { type: 'plan.proposed', itemId: o.itemId, text: o.text }, rt.turn?.turnId);
         this.markDirty(st);
         break;
+      case 'approvalQueue': {
+        const pending = [...rt.approvals.values()].find((p) => p.kind === 'tool' && p.itemId === o.toolUseId);
+        if (pending?.kind !== 'tool') break;
+        pending.queued = new Set(o.calls.map((c) => c.itemId));
+        this.emit(st, { type: 'approval.queued', approvalId: pending.approvalId, calls: o.calls }, rt.turn?.turnId);
+        break;
+      }
       case 'allowRules': {
         const rules = new Set(rec.allowRules ?? []);
         for (const r of o.rules) rules.add(r);
@@ -3001,10 +3016,11 @@ export class Runner {
   // folder the cleanup would remove or hand on, and on 7 Nov a typecheck
   // lost its files that way, "failed", and woke the thread just archived.
   // Waiting also means a real failure finds the worktree still there, as
-  // sendTo brings the thread back before the cleanup looks.
+  // sendTo brings the thread back before the cleanup looks. A patch action
+  // still running holds it the same way (runAction comes back here).
   archiveWhenGone(st: ThreadState): void {
     const { rec, rt } = st;
-    if (!rt.archivePending || rt.session || rt.closing || rt.deleted || rt.hooksRunning) return;
+    if (!rt.archivePending || rt.session || rt.closing || rt.deleted || rt.hooksRunning || rt.runningActions?.size) return;
     rt.archivePending = false;
     if (rec.archivedAt) {
       this.archiveNative(st);
@@ -3174,6 +3190,7 @@ export class Runner {
 
   markDirty(st: ThreadState): void {
     if (st.rt.deleted) return;
+    st.rt.saveRetry = false;
     this.dirty.add(st.rec.id);
     if (this.flushScheduled) return;
     this.flushScheduled = true;
@@ -3181,20 +3198,37 @@ export class Runner {
   }
 
   // Saves changed thread.json files and sends thread.updated for them.
+  // One that fails stays dirty and is tried again in a moment, rather than
+  // waiting for the thread's next change (THREADBEAR-9: a new runner's
+  // start once swept away a draining runner's temp file mid-save).
   flush(): void {
     this.flushScheduled = false;
+    this.saveRetryTimer?.cancel();
+    this.saveRetryTimer = undefined;
     const ids = [...this.dirty];
     this.dirty.clear();
+    let failed = false;
     for (const id of ids) {
       const st = this.threads.get(id);
       if (!st) continue;
+      const retry = st.rt.saveRetry;
       try {
         this.store.save(st.rec);
+        st.rt.saveFailed = false;
+        st.rt.saveRetry = false;
       } catch (e) {
-        this.log.error('could not save thread', { threadId: id, error: String(e) });
+        this.dirty.add(id);
+        failed = true;
+        st.rt.saveRetry = true;
+        // Said once until it saves, as it reaches Sentry.
+        if (!st.rt.saveFailed) this.log.error('could not save thread', { threadId: id, error: String(e) });
+        st.rt.saveFailed = true;
+        // A retry with nothing new: the app already has this summary.
+        if (retry) continue;
       }
       this.notify({ method: 'thread.updated', params: { thread: this.summary(st) } });
     }
+    if (failed && !this.stopping) this.saveRetryTimer = this.clock.setTimeout(() => this.flush(), SAVE_RETRY_MS);
   }
 
   summary(st: ThreadState): ThreadSummary {

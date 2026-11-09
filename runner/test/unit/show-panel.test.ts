@@ -123,3 +123,43 @@ test('a bad place is refused', async () => {
   const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-3', cwd: tmpDir() });
   await assert.rejects(h.runner.showPanel(thread.id, { panel: 'usage', where: 'middle' as never }), /where is tab, left, right, top, bottom or window/);
 });
+
+// pin with show (8 Nov 2026): a request naming the highlight, every time,
+// not a flag on the item, which only did anything the first time.
+test('pin with show asks the app to open that highlight, again on a second pin of the same file', async () => {
+  const h = makeHarness();
+  const dir = tmpDir();
+  fs.writeFileSync(path.join(dir, 'page.html'), '<p>hi</p>');
+  const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-3', cwd: dir });
+  const pin = buildThreadbearTools(h.runner, thread.id).find((x) => x.name === 'pin')!;
+  const call = async (args: Record<string, unknown>) => {
+    const r = (await pin.handler(args as never, {})) as { content: { text: string }[]; isError?: boolean };
+    return r.content.map((c) => c.text).join('\n');
+  };
+  const id = `file:${path.join(dir, 'page.html')}`;
+
+  // Not looking: it waits on the thread for when he opens it.
+  const first = call({ path: 'page.html', title: 'Preview check', show: true });
+  await tick();
+  const asked = h.runner.get(thread.id);
+  assert.deepEqual(checkSummary(asked as never), []);
+  assert.deepEqual([asked.panelRequest?.panel, asked.panelRequest?.highlight, asked.panelRequest?.title], ['highlights', id, 'Preview check']);
+  h.clock.advance(PANEL_ACK_WAIT_MS);
+  assert.match(await first, /Pinned \(file:.*page\.html\)\. It opens in the side pane when the user next looks at this thread/);
+  assert.equal(h.runner.highlights(thread.id).highlights[0]!.show, undefined, 'no flag on the item');
+
+  // Pinned again (the agent changed the page): a new request, and the app showing it says so.
+  const firstRequest = h.runner.get(thread.id).panelRequest!.id;
+  const second = call({ path: 'page.html', show: true });
+  await tick();
+  const request = h.runner.get(thread.id).panelRequest!;
+  assert.notEqual(request.id, firstRequest);
+  assert.equal(request.highlight, id);
+  h.runner.panelShown(thread.id, request.id);
+  assert.match(await second, /and open in the side pane in front of the user now/);
+  assert.equal(h.runner.get(thread.id).panelRequest, undefined);
+
+  // Without show, nothing's asked.
+  assert.match(await call({ path: 'page.html' }), /^Pinned \(file:.*\)\.$/);
+  assert.equal(h.runner.get(thread.id).panelRequest, undefined);
+});

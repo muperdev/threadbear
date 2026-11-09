@@ -899,6 +899,7 @@ Persisted event types (stored in `events.ndjson`, returned by `threads.events`):
 | `approval.requested` | `approvalId`, `itemId?` (absent for a subagent's tools, which have no `tool.call`), `name`, `title`, `input`, `options: ("allow" \| "allowAlways" \| "deny")[]`. A subagent's card (no `itemId`) needs no turn: it can come with no `turnId`, and it outlives the turn it came in ("A subagent's card") |
 | `question.requested` | `approvalId`, `itemId?` (absent for a subagent's), `questions: {question, header?, multiSelect, options: {label, description?}[]}[]` |
 | `secret.requested` | `approvalId`, `itemId?`, `label`, `reason`, `placeholder?`: an agent's `ask_secret` (Secrets). Answered with `secrets.answer`, never `approvals.respond` |
+| `approval.queued` | `approvalId`, `calls: {itemId, name, title, input}[]`: the agent's other tool calls from the same reply that are waiting behind this card and expected to ask too, in order, each with its input as a card would show it. A later one replaces the list (it grows as more calls stream in). A client that doesn't know it shows the card on its own, and each queued call asks with a card of its own later ("Queued calls") |
 | `approval.resolved` | `approvalId`, `decision` (`allow` \| `allowAlways` \| `deny` \| `answered` \| `expired`), `message?` |
 | `plan.updated` | `entries: {text, status: "pending" \| "in_progress" \| "completed"}[]` |
 | `plan.proposed` | `itemId`, `text` (Markdown): a "Plan first" plan waiting for Mike (see "Plan first") |
@@ -948,10 +949,10 @@ the summary and then the reply.
 
 | method | params | result |
 |---|---|---|
-| `hello` | `{ client: string, version: string, build?: { commit, short, tree }, pid?: number }` (`build`: the Mac app's own build, see App restarts; a draining runner's link to the primary says `client: "threadbear-drain"` with its `pid`, for the log) | `{ runnerVersion, protocol: 1, accounts: Account[], pools?: Pool[], defaults: { cwd, accountId, poolId?, model?, models?: { claude?, codex? }, efforts?: { claude?: EffortLevel, codex?: EffortLevel } }, clis?: CliStatus[], updates?: RunnerUpdates, experiments?: string[] }`. `updates` is under Runner updates; `pools` and `defaults.poolId` under Pools. `defaults.accountId` is the account a `threads.create` with no `accountId` uses: the one with the most room among the last-used account's provider (skipping blocked ones, ones under 10% and ones with a note), worked out again as usage changes; a client keeps its own copy of the rule rather than asking again. `defaults.models[provider]` is the model a new thread on that provider gets when it names none (`runner.json`'s `defaults.models`; a dev runner sets the cheapest); `defaults.model` is the same for Claude, kept for older apps. Absent means the account's own default (`accounts[].defaultModel` names it, when known). `defaults.efforts[provider]` likewise for effort; absent means the model's own level. `runnerVersion` is `<package version>+<release id>` when the runner runs from a release, else `<package version>+source`. `experiments` lists the ids of the runner's experiments that are on (`runner.json`'s `experiments`, or an experiment's own default), for ones that live in the app, like `voiceMode`; absent from an older runner, which means none |
+| `hello` | `{ client: string, version: string, build?: { commit, short, tree }, pid?: number }` (`build`: the Mac app's own build, see App restarts; a draining runner's link to the primary says `client: "threadbear-drain"` with its `pid`, for the log) | `{ runnerVersion, protocol: 1, accounts: Account[], pools?: Pool[], defaults: { cwd, accountId, poolId?, model?, models?: { claude?, codex? }, efforts?: { claude?: EffortLevel, codex?: EffortLevel } }, clis?: CliStatus[], updates?: RunnerUpdates }`. `updates` is under Runner updates; `pools` and `defaults.poolId` under Pools. `defaults.accountId` is the account a `threads.create` with no `accountId` uses: the one with the most room among the last-used account's provider (skipping blocked ones, ones under 10% and ones with a note), worked out again as usage changes; a client keeps its own copy of the rule rather than asking again. `defaults.models[provider]` is the model a new thread on that provider gets when it names none (`runner.json`'s `defaults.models`; a dev runner sets the cheapest); `defaults.model` is the same for Claude, kept for older apps. Absent means the account's own default (`accounts[].defaultModel` names it, when known). `defaults.efforts[provider]` likewise for effort; absent means the model's own level. `runnerVersion` is `<package version>+<release id>` when the runner runs from a release, else `<package version>+source` |
 | `threads.list` | `{ include?: ("inbox" \| "snoozed" \| "archived")[], ids?: string[] }` (default `["inbox"]`; `ids` keeps only those threads, unknown ones left out; an older runner ignores it, so pick yours out of the answer) | `{ threads: ThreadSummary[] }` newest activity first |
 | `threads.search` | `{ query: string, limit?: number }` | `{ threads: ThreadSummary[] }` matches title and preview across all threads, archived included |
-| `threads.create` | `{ text: string, images?: ImageRef[], cwd?: string, accountId?: string, poolId?: string, model?: string, effort?: EffortLevel, fastMode?: boolean, permissionMode?: "full" \| "ask", title?: string, worktree?: boolean, startedBy?: { kind, label, icon?, threadId?, why? } }` | `{ thread: ThreadSummary }` (the first turn starts straight away). In a repo that asks for worktrees (see Worktrees) the thread gets one of its own before its first turn; `worktree: false` starts it in the folder as it is. The thread's `provider` is its account's. With no `model`, the thread gets `defaults.models[provider]` from `hello`, or `defaults.model` for Claude, or else the account's own default. With no `effort`, `defaults.efforts[provider]`, or else the model's own level. See "Models and effort across providers". `fastMode: true` asks for fast mode (see Fast mode) |
+| `threads.create` | `{ text: string, images?: ImageRef[], cwd?: string, accountId?: string, poolId?: string, model?: string, effort?: EffortLevel, fastMode?: boolean, permissionMode?: "full" \| "ask", title?: string, worktree?: boolean, startedBy?: { kind, label, icon?, threadId?, why? }, projectIds?: string[] }` | `{ thread: ThreadSummary }` (the first turn starts straight away). `projectIds` (New Thread on a project's page) puts it in those projects before its first turn, pinned as Mike's, so that turn already has their brief; an unknown project is `-32602` and makes no thread. In a repo that asks for worktrees (see Worktrees) the thread gets one of its own before its first turn; `worktree: false` starts it in the folder as it is. The thread's `provider` is its account's. With no `model`, the thread gets `defaults.models[provider]` from `hello`, or `defaults.model` for Claude, or else the account's own default. With no `effort`, `defaults.efforts[provider]`, or else the model's own level. See "Models and effort across providers". `fastMode: true` asks for fast mode (see Fast mode) |
 | `threads.samples` | `{ cwd: string, remove?: boolean }` | `{ threads: ThreadSummary[] }`. The app's first-run tour's sample threads (`runner/src/samples.ts`): made up exchanges written as finished turns with no CLI, in `cwd` (the app's `~/ThreadbearThreads/Welcome`, where it writes an example patch), with `sample: true`; the first needs you, with a card of asks, and one is left unread. Asking again deletes any there are and makes them afresh (writing the patch again if it's gone, and trusting it as written). `remove: true` deletes them all, archived and hibernating ones too, and returns none. `threads.send` to a sample is `-32602` |
 | `threads.send` | `{ threadId, text, images?: ImageRef[], answers?: AskAnswer[], origin?: "phone", queue?: boolean }` | `{ turnId, queued?: true }`. `queue: true` (the Mac app's Cmd+Enter) never steers into a running turn: while one runs the message waits in the queue, as below, and starts its own turn once that one ends; with no turn running it starts one as usual. `queued: true` says the message went into the queue rather than into a running turn or a turn of its own, with `turnId` the id its turn will have, for `threads.unqueue`; an older runner leaves it out (and ignores `queue`, steering as usual), so a client offers removing a queued message only when it's there. Another runner's thread through the backend (Sync) passes `queue` on and answers with no `turnId` to unqueue. `text` can place the `images` among its words with `[Picture N]` markers (Pictures in a message). `origin: "phone"` is only for a phone command the primary passes on to a draining runner (Sync, "Commands"), so the message keeps its origin there; any other `origin` is `-32602`. If a turn is running and its CLI is live, the message goes into that turn straight away (a `user.message` under the running `turnId`, which is returned): the agent takes it at its next step, or right after its reply if that was already finishing, and the turn doesn't complete until it has been answered. If the thread was moved to another login (usually another provider) during the running turn, a message from Mike (or the phone) doesn't steer into the old CLI: the turn is stopped (`system.note` "Stopped here so <model> can take over.") and the message starts the next turn on the new login, with the handoff, as T3 Code does. If the agent is waiting on a card for its own tool call (an approval or a question, with an `itemId`), a message from Mike declines that card first (`approval.resolved` with `deny` and a `message` telling the agent he wrote instead), as the CLI reads nothing else until the card is answered; a background subagent's card is left open. Otherwise (the CLI is still starting or leaving, messages are already waiting, a move or fresh CLI is due on the next turn, Stop has been pressed, or the turn was opened only for a card) the message is queued and starts its own turn when the running one ends |
 | `threads.interrupt` | `{ threadId }` | `{}` |
@@ -968,7 +969,7 @@ the summary and then the reply.
 | `threads.markSeen` | `{ threadId, seq }` | `{ thread: ThreadSummary }` |
 | `threads.tickAsk` | `{ threadId, asksSeq, index, ticked: boolean }` | `{ thread: ThreadSummary }`. Ticks or unticks one of the open card's asks (Needs you), with an `asks.ticked` event. Sends nothing to the agent. `-32602` when `asksSeq` isn't the open card's or `index` is out of range |
 | `threads.share` | `{ threadId, access: "off" \| "link", newLink?: boolean }` | `{ thread: ThreadSummary }`. Whether anyone with the link can read the thread on the website (see Sharing). `newLink` makes a fresh slug, which stops the old link. Another access is `-32602` |
-| `approvals.respond` | `{ threadId, approvalId, decision: "allow" \| "allowAlways" \| "deny" \| "answered", message?: string, answers?: Record<string, string> }` | `{}`. `allowAlways` on a card that didn't offer it counts as `allow`. `allowAlways` allows matching requests for the rest of this thread only; it never changes the thread's permission mode or saves anything in the project. With `answered`, the app sends the chosen answers in one line as `message` too: the runner keeps it in `approval.resolved` (only `answers` goes to the CLI), so the transcript can show what was chosen |
+| `approvals.respond` | `{ threadId, approvalId, decision: "allow" \| "allowAlways" \| "deny" \| "answered", message?: string, answers?: Record<string, string>, queued?: Record<string, "allow" \| "deny"> }` | `{}`. `queued` answers calls from the card's `approval.queued` list, by `itemId`, in the same click ("Queued calls"); ids not on the list are ignored, as is the whole of it from the phone or another Mac's view (`remote`). `allowAlways` on a card that didn't offer it counts as `allow`. `allowAlways` allows matching requests for the rest of this thread only; it never changes the thread's permission mode or saves anything in the project. With `answered`, the app sends the chosen answers in one line as `message` too: the runner keeps it in `approval.resolved` (only `answers` goes to the CLI), so the transcript can show what was chosen |
 | `plans.approve` | `{ threadId, itemId }` | `{}`. Go ahead on a waiting plan (see "Plan first"); `-32602` if that plan isn't waiting |
 | `secrets.answer` | `{ threadId, approvalId, secret?: string, decline?: true }` | `{}`. Answers a `secret.requested` card (Secrets). The runner never logs, emits or mirrors `secret` |
 | `media.import` | `{ path: string }` | `{ image: ImageRef }` copies a file into `inbox/` and reads its size; HEIC becomes JPEG and TIFF or BMP becomes PNG |
@@ -991,10 +992,10 @@ the summary and then the reply.
 | `schedules.delete` | `{ scheduleId }` | `{}` |
 | `schedules.run` | `{ scheduleId }` | `{ schedule: Schedule, threadId?: string, turnId?: string, queued?: boolean }` runs it now, as if it were due, even when paused. A repeating schedule keeps its `nextRunAt`; a one-off is finished. For a schedule on another runner it answers at once with `queued: true` and no thread: that runner runs it when it next hears (`runRequestedAt` is set until then) |
 | `runners.list` | `{}` | `{ runners: RunnerInfo[] }`, this runner first, then the rest by name. Without a backend, just this runner |
-| `requests.get` | `{ threadId, approvalId }` | `{ request, target?, runners }`: another runner's request for a new thread (Asking another runner), exactly as it was filed (`relay:runnerRequest`), the runner it names if this runner can find it (`{ id, name, self }`), and every runner to pick from instead. Main Mac's runner only; `-32602` for no such request on that thread |
+| `requests.get` | `{ threadId, approvalId }` | `{ request, target?, runners, fingerprint, missingFolder? }`: another runner's request for a new thread (Asking another runner), exactly as it was filed (`relay:runnerRequest`) but for a folder starting on this Mac, which is the folder it would start in here ("The folder" there), the runner it names if this runner can find it (`{ id, name, self }`), and every runner to pick from instead. `missingFolder` is the folder as filed when it would start here and isn't a folder on this Mac. Main Mac's runner only; `-32602` for no such request on that thread |
 | `requests.answer` | `{ threadId, approvalId, allow: boolean, runnerId?: string }` | `{ thread?: { id, runnerId, runnerName } }`. `allow` starts the filed request (on `runnerId` if given, else the runner it named), marks it allowed and answers its card; otherwise marks it denied and declines the card. `-32602` once the card has closed (answered, expired, declined from the phone) or the request was already answered. Main Mac's runner only |
 | `runners.stats` | `{}` | `{ stats: RunnerMachineStats[] }`: each runner's latest machine figures, `{ runnerId, at, cpuPercent, cores, memUsed, memTotal, diskFree, diskTotal, load1?, uptimeSec, machine?, os? }` (bytes; `uptimeSec` is the machine's). Asking marks them wanted (`sync:watchRunnersFromMac`, at most every 20 s), so every runner reports every 10 s until nobody has asked for 45 s. The Mac app asks only while a runner's details are open in the Runners panel and its window can be seen. Empty with sync off, on an older backend, or on a runner key. A runner older than this answers `-32601`. The app leaves out a row with a figure past `setRunnerStats`'s limits, as one stored before those were checked would be |
-| `remoteThreads.list` | `{}` | `RemoteThreads`: other runners' threads for the sidebar (see "Other runners' threads"). Empty with sync off, or before the backend (API 12) has answered. A runner older than this answers `-32601` |
+| `remoteThreads.list` | `{ forTools?: boolean }` | `RemoteThreads`: other runners' threads for the sidebar (see "Other runners' threads"). `forTools` is a draining runner's agent tools asking the primary: it answers as for its own tools, waiting up to 3 seconds for the backend's rows (Agent tools). Empty with sync off, or before the backend (API 12) has answered. A runner older than this answers `-32601` |
 | `runners.setOrder` | `{ runnerIds: string[] }` | `{}`. Mike's runner order, every runner's id with this one's: the same order the phone sets (`phone:setRunnerOrder`), which a phone's new thread follows, saved with `sync:setRunnerOrder` (backend API 58, the owner key only). It comes back as `RemoteThreads.order` in `remoteThreads.updated`. `-32602` for a list that isn't one of strings; an error on a runner key or an older backend. A runner older than this answers `-32601` |
 | `files.read` | `{ path: string, maxBytes?: number, known?: { size, modifiedAt } }` | `{ path, size, modifiedAt, mediaType, data, truncated }` (`data` base64, at most `maxBytes`, default 16 MB, never over 48 MB; `truncated` when the file is longer), or `{ path, unchanged: true, size, modifiedAt }` when `known` matches the file. A file on this runner's Mac, for a Mac app showing one of its threads from another Mac (see "Other runners' threads"). `-32602` for a relative path, a missing file or a folder |
 | `files.list` | `{ path: string }` | `{ path, entries: [{ name, isFolder, hidden, size?, modifiedAt? }], truncated }` (`size` for a file only; `isFolder` follows a symlink; `hidden` is a dotfile; at most 5000 entries, in no set order, `truncated` when the folder has more; a `size` that isn't a whole number of bytes is read as none). A folder on this runner's Mac, for the side pane's folder browser on another Mac (see "Other runners' threads"). `-32602` for a relative path, a missing folder or a file |
@@ -1912,7 +1913,9 @@ thread to another login when the one it's on runs out of room.
   to the API partway through that turn. This thread carries on by itself
   once it's back."). The runner probes the provider's API host (a TCP
   connection to api.anthropic.com or chatgpt.com on 443, or a CONNECT
-  through `HTTPS_PROXY`) 5, 10, 20, 40 seconds apart and then every
+  through `HTTPS_PROXY`, over TLS with its certificate checked when that's
+  an `https://` URL; each probe gets 5 seconds in all and reads at most
+  1 KB of the proxy's answer) 5, 10, 20, 40 seconds apart and then every
   minute, and once it answers sends a runner-origin message: "The
   connection to the API dropped partway through that turn and is back
   now. Carry on from where you left off." A carry-on that can't get
@@ -1950,8 +1953,10 @@ where the cursor is (where it was dropped, for a drop), drawn as a chip
 with the picture's thumbnail, and his bubble draws the markers as chips
 too. The pictures still show over the text, as before. The iPhone
 app's composer does the same with photos pasted, taken or chosen, and
-its bubbles draw any `[Picture N]` as a chip with the photo symbol, as
-the phone isn't given a message's pictures. The runner sends pictures pasted
+its bubbles draw any `[Picture N]` as a chip with the photo symbol. From
+8 Nov 2026 the phone also draws the pictures the runner sent up (below)
+over the bubble, and drops the runner's "[2 pictures]" line once every
+picture it counts is there (ThreadPictures.words). The runner sends pictures pasted
 into a message to the backend as they're sent, unless `sync.pastedPictures` is
 false in `runner.json`, each with `src` `picture:N`; the website draws them in
 place of the marker, and a chip where one didn't go up. An ask's
@@ -1970,6 +1975,47 @@ order.
 
 An older runner hands the agent the markers as words, with every picture
 before them; an older app shows them as words.
+
+## Queued calls
+
+Claude Code asks about one tool call at a time, and only asks about the
+next once the last is answered. A reply with eight edits that all ask
+meant eight cards in a row, each taking the last one's place half a
+second after Allow, which looked like the same card coming back (Mike,
+8 Nov 2026). So one card shows them all.
+
+- **What's queued.** While a card waits for the agent's own call, the
+  runner lists the calls that came after it in the same reply, have no
+  result yet and are expected to ask: in Ask mode edits, writes,
+  commands, web fetches and other servers' tools; in Auto mode only
+  edits of files that run as code; in Full only tools that always ask.
+  The threadbear tools that never ask, questions and plans are never
+  queued, nor is a call too long for a card. `approval.queued` carries
+  the list, and again whenever a call joins it (they stream in while the
+  card waits). Claude only: Codex asks about its own calls one at a time.
+- **Answering.** `approvals.respond` with `queued` answers them in the
+  same click. The card's own call takes `decision`; each queued one its
+  entry, `allow` or `deny`. A queued call left out of `queued` asks with
+  a card of its own when its turn comes, as before. A card with a queue
+  offers no Always allow for the queue: only the card's own call can
+  make a rule.
+- **When the call comes up.** An allowed one goes through with no card.
+  A denied one is refused before it runs (a PreToolUse hook, so even a
+  call that wouldn't have asked, an allow rule's or Auto's classifier's,
+  doesn't run), and the agent is told Mike denied it.
+- **Other clients.** The phone and another Mac's view of the runner
+  don't get the list: they answer the card's own call, and the rest ask
+  one by one.
+- **Never on a start request.** Another runner's request for a thread
+  (`threadbear.start_thread`, "Asking another runner") always shows as
+  this Mac's runner read it, and is answered with `requests.answer`
+  alone. The app ignores an `approval.queued` for that card, and leaves
+  any such call out of another card's list (it asks with its own card),
+  as both come from the runner that owns the thread, which may be one
+  the app doesn't trust with this Mac. For the same reason one approval
+  id is one card: an `approval.requested` under an id the app already
+  shows replaces that card while it waits, unless it's a start request,
+  and changes nothing once it's answered.
 
 ## Plan first
 
@@ -2048,7 +2094,10 @@ wait for the next message).
 and folder, with Claude's terminal-only ones left out. Claude's come from
 the live session's `supportedCommands()`, or a CLI started with no prompt
 in the folder (a second or two); Codex's are its `skills/list`. Cached for
-ten minutes per login and folder.
+ten minutes per login and folder. The phone asks for the same list through
+the backend: a `slashCommands` command (API 62, docs/convex-backend.md,
+`phone:slashCommands`), which the runner answers with this list as the
+command's result.
 
 ```ts
 type SlashCommand = {
@@ -2292,6 +2341,10 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
   `options`, their `does` notes `optionNotes` in the same order ("" for
   none); the card draws an ask with notes as rows, a circle, the label,
   "my pick" on the suggested one and the note under it, in a box. The
+  notes go up with the thread's row too (backend API 61), so a Mac
+  reading another runner's thread through the relay draws the same rows;
+  an older backend gets the asks without them, and the card falls back to
+  plain buttons. The
   preview is `headline`, else the reply's first line. A reply that ends
   in a "What I need from you" section (a heading, bold or bare) or a
   "Nothing needed from you" line, under an `end_turn` with no asks or
@@ -3017,7 +3070,11 @@ functions that get the same `{ cwd, threadId, matched, sh }` as `items`.
 `when` hides it unless it returns something true (a chip that only turns
 up when there's something to do); `badge` returns a count (a number, a
 numeric string or a list, whose length counts), sent as the item's
-`badge` when it's 1 or more and drawn on the chip or rail button. The
+`badge` when it's 1 or more and drawn on the chip or rail button. An
+action can also have `label`, which returns the chip's title for now (a
+string, at most 60 characters; "Merge #707"), so the title can carry what
+the chip acts on; nothing, or a throw, keeps the title it was given, and
+its id still comes from that title. The
 runner calls them each time it reads the patches, after every turn, and
 every 20 seconds for an inbox thread that has any. Commands that two of
 them run in the same folder run once per read, and the output is shared
@@ -3867,7 +3924,7 @@ type Highlight = {
   path?: string         // file: absolute
   how: "pinned" | "written" | "opened" | "mentioned" | "created" | "committed"
   note?: string         // a pin's reason, in the agent's words
-  show?: true           // a pin the agent asked to have shown straight away
+  show?: true           // no longer sent: an older runner's pin asked to be shown
   sha?: string          // commit: short sha
   branch?: string       // commit
   pushed?: true         // commit: a later git push in the thread sent its branch
@@ -3908,8 +3965,17 @@ time a client asks and then from where it got to:
 note?, show? }` (a path relative to its folder is fine; it must exist;
 a url is at most 2,000 characters).
 A pin of something already found is the same item, now pinned. `show`
-asks the app to open it in the pane now, so an agent shows Mike a
-mockup there instead of running `open`. Only the pane: a file shown this
+asks the app to open it in the pane, so an agent shows Mike a mockup
+there instead of running `open`. It's a `panelRequest` (see Showing
+panels) with `panel: "highlights"` and `highlight` naming the pin, so it
+opens when Mike is looking at the thread, now or later, and every pin
+with `show` asks again: the same page pinned after an edit comes up
+again. (It was a `show` flag on the item until 8 Nov 2026, which the app
+only acted on the first time it saw it, and never for a thread it hadn't
+fetched yet.) The app opens the pin over Highlights, fetching the
+thread's highlights first if it hasn't got that one, then calls
+`threads.panelShown`; one that's gone opens Highlights. The tool waits
+up to 2 seconds for that, as `show_panel` does, and says which. Only the pane: a file shown this
 way never opens in its app (a project file included), and a link only
 opens by itself if it's a web page, where a click on it would go. `unpin { id }` takes one off
 again. The tools' descriptions say when to use them.
@@ -4005,6 +4071,7 @@ type PanelRequest = {
   panel: string         // "highlights", "patches", "usage", "updates", "connectors", or one of the thread's panels' ids
   title: string         // the panel's name: "Highlights", "Convex"
   where?: "tab" | "left" | "right" | "top" | "bottom" | "window"
+  highlight?: string    // pin with show: the pin to open (panel is "highlights")
   at: string            // when the agent asked
 }
 ```
@@ -4034,58 +4101,41 @@ thread, and its `shown` field says whether the app already acknowledged it.
 The Mac app advertises `browserPanel: true` in `hello`; a Browser request
 returns unavailable for older apps that cannot promise this handoff path.
 
-BrowserBear uses this only for `handoff`, after checking that the exact Chrome
-tab/profile can be displayed. It marks the tab Your turn and keeps it in the
-Browser panel, including when the panel wasn't previously open. Without a
-connected Mac app or a displayable profile, it uses Chrome's native window.
-The Mac app also opens Browser when its selected thread has a tab marked Your
-turn. That waiting tab survives the one-shot request being cleared by a message,
-so a later return to the thread still shows the handoff. A new handoff selects
-its tab once; reopening preserves any tab the user picked afterwards.
+BrowserBear uses this only for `handoff` of a page in the agents' browser, which
+has no in-page pill: the page's window comes to the front and the Browser panel
+shows it marked Your turn with Done, including when the panel wasn't previously
+open. The Mac app also opens Browser when its selected thread has a tab marked
+Your turn. That waiting tab survives the one-shot request being cleared by a
+message, so a later return to the thread still shows the handoff.
 
 ### The Browser panel
 
 The Mac app's Browser panel uses BrowserBear's existing private Unix socket
-(`~/Library/Application Support/BrowserBear/browserbear.sock`). Its
-`panelState` command reports connected Chrome profiles and pages associated
-with threads by ordinary BrowserBear commands. Profile names and emails stay
-visible in the panel; choosing one opens a new tab in that exact profile.
-The page keeps its existing Chrome session. No cookies, passwords, OAuth
-tokens, or browser profile files are imported.
+(`~/Library/Application Support/BrowserBear/browserbear.sock`). It lists the
+pages a thread is using, each with a still and a Show window button. It doesn't
+stream pages or send input to them (since 8 Nov 2026): the page is used in its
+own real window, in the agents' browser (Helium) or in one of the user's Chrome
+profiles.
 
-A persistent socket begins with `{id,cmd:"panelAttach",thread,args:{tab,profile}}`.
-BrowserBear verifies the thread owns that tab and, on reconnection, that its
-CDP target identity still matches. `panelCdp` carries the page's input and
-display commands; `panelWindow` pauses the panel for Chrome's native window.
-Replies use `{id,ok,result|error}`. Events use `{method,params}`: page frames,
-dialogs and `panelError`. The tab and its exact profile instance identify the page. `panelResume` is an
-explicit return/reconnect action, and `panelShowChrome` opens its native window
-even when capture failed. Only one panel can control a given tab. Closing the
-connection stops capture and removes the panel's viewport and focus overrides.
-Chrome detaching the debugger stops the panel without reattaching it.
+- `panelState` reports connected Chrome profiles and the pages in them that
+  ordinary BrowserBear commands associated with threads. Pages in the agents'
+  browser come from `agent/tabs.json` in BrowserBear's folder, which also names
+  the browser (`browser`).
+- `{cmd:"panelStill",thread,args:{tab,profile,width}}` returns
+  `{data,at}`: a small base64 JPEG of the page, or `data: null` when there's
+  none just now. BrowserBear refreshes it at most every 3 s in the agents'
+  browser and every 20 s in a Chrome profile (its debugger keeps Chrome's
+  "started debugging" bar up), and never takes one of a page handed to the user
+  in their own Chrome.
+- `{cmd:"panelShow",thread,args:{tab,profile}}` brings the page's real window
+  to the front.
+- `markDone {tab}` is the Done button for a page waiting on `handoff --wait`.
 
-Frames are captured sequentially through the existing extension, with socket
-backpressure; they aren't stored or mirrored to Convex. BrowserBear stores
-thread/tab/profile/target associations and cached page titles in `panel-tabs.json` (0600) so a
-service restart can reconnect a page without trusting a reused tab number.
-Viewport changes and captures are serialized so resizing cannot race a frame;
-input and dialog answers bypass that render queue. Existing profiles render at
-least 360 CSS pixels wide, scaling the picture and input into narrower panels.
-Native-window and debugger Stop states persist across remounts and require an
-explicit return/reconnect. A user-owned tab requires an explicit Show this tab
-here action before the panel changes its viewport. With BrowserBear extension 0.3.6 or newer, popups are associated only by
-Chrome's exact opener tab identity in the same profile. Older extensions keep
-using the panel for ordinary pages, with new windows opening in Chrome.
-Dialogs already open at attach are replayed, and a heartbeat keeps a displayed
-JavaScript dialog attached until it is answered.
-The separate `--profile agent` Chrome retains its existing direct CDP path.
-Its host lists that Chrome's pages in `agent/tabs.json`. A tab's `sheet` is
-set (`{moved, since}`, else null) while one of Chrome's own windows is up
-over the page, such as the passkey sheet or a permission prompt, which the
-page's picture can't show. The host brings the page's window to the middle
-of the screen for it (`moved: true`) and parks it again once it closes.
-While any tab has one, the panel says so with a Show it button and lets
-Chrome keep the focus it takes. Both sides ignore fields they don't know.
+BrowserBear checks that the thread owns the page in that exact profile (the agents'
+browser is `agent-chrome`), as the same tab number can be in two. Replies use
+`{id,ok,result|error}`. No cookies, passwords, OAuth tokens or browser profile
+files are read or imported, and stills stay in memory on this Mac. Both sides
+ignore fields they don't know.
 
 ## Connectors
 
@@ -4308,7 +4358,12 @@ project in an `icons/` folder, then favicons and logos. Wide pictures,
 template (menu bar) icons, other image sets, and anything under
 `node_modules`, build output, docs or tests are passed over, as is one
 under a folder named for something else (`public/inventory/icon.svg` is
-the inventory's). The best is copied in, so the app never reads a repo. It
+the inventory's). A manifest's icon counts only if it's named like a
+picture and is a file of the repo's own, not a link out of it. The best is
+copied in, so the app never reads a repo, and only if its bytes say it's a
+picture; on Linux ImageMagick gets it with its decoder named (never one it
+picks, as its MSL and MVG ones are scripts), and an SVG is drawn only by
+rsvg-convert. It
 looks again a few seconds after a project is made or its folders change,
 and every hour at all of them, copying again when the file has changed or
 a better one has turned up. A project with no picture gets an SF Symbol:
@@ -4673,14 +4728,20 @@ default).
   which `relay:queueCommand` keeps only on an archive, and that runner
   records the archive as an agent's. From an older backend it's dropped and
   the archive reads as Mike's, as before.
-- `threads.send` (text and `answers`; pictures are `-32000`;
+- `threads.send` (text, `answers` and pictures, below;
   the answer has `queued: true` when that runner hasn't taken it in the 20
   seconds),
   `threads.interrupt`, `approvals.respond`, `secrets.answer` (sealed to the
   other runner's key from its row, as the phone seals it, so the value
   never reaches the backend in the clear), `threads.markSeen` (only when
   the row is unread), `threads.update` (`title`, `archived` with its `verdict`, `starred`,
-  `snoozedUntil`; anything else is `-32000`) and `threads.share` each queue
+  `snoozedUntil`; anything else is `-32000`), `threads.hibernateWhen` (an
+  `update` with `snooze: { said }`; that runner puts the thread away at once
+  and the command is done once its model has said when, so the answer is
+  `{ thread }` from the row, without `until`, `topic` or `why`, or the
+  reason as `-32000`; it carries `untilRestart: true` too, so a runner from
+  before 8 Nov 2026, which doesn't read the words, hibernates the thread
+  until it next starts rather than waking it) and `threads.share` each queue
   one command with `relay:queueCommand`, which sends a thread's command to
   the runner whose row the thread is, whatever runner it was asked for, and
   `sync:takeCommand` fails a thread's command (any one's, the phone's too)
@@ -4712,8 +4773,8 @@ default).
 - **New threads there.** (A request from a runner key, "Asking another
   runner", files Plan first as `ask`: its row has no room for the flag.)
   `threads.create` with `runnerId` is a `create`
-  command (text, `cwd`, `accountId`, `model`, `effort`, `permissionMode`;
-  pictures are `-32000`). Every mode goes, as a missing one is full access
+  command (text, `cwd`, `accountId`, `model`, `effort`, `permissionMode`
+  and pictures, below; with pictures the text can be empty). Every mode goes, as a missing one is full access
   there: Plan first as `permissionMode: "ask", plan: true`, which a runner or
   backend from before Plan first reads as Ask. A mode one of them doesn't
   know is refused, here, in the backend and by that runner, never dropped
@@ -4722,6 +4783,38 @@ default).
   sidebar list has it. `remoteThreads.logins { runnerId }` gives that runner's
   logins for the pickers, from the backend's `accounts` rows (no pools;
   `defaults.cwd` is the folder of its newest thread).
+- **Pictures** (backend API 63, 8 Nov 2026). A `threads.send` or
+  `threads.create` for another runner can carry `images`, as for this one:
+  the `ImageRef`s `media.import` made, in this runner's `inbox/`. A picture
+  anywhere else is `-32602` (a client can't have any other file here sent to
+  Convex by naming it), and so are more than 6 or one that isn't an image.
+  This runner uploads each to `/relay/upload` with a one-use ticket from
+  `relay:pictureUploadUrl` (at most 10 MB; the backend records it in
+  `relayUploads`) and queues the command with `images: [storageId, ...]` in
+  order; `relay:queueCommand` takes only those uploads, and only ones nothing
+  else names (a picture row, another command's), and stores
+  `images: [{ storageId, url }]`, the shape a phone's photos have, with
+  `commandFiles` rows. So the other runner fetches them as it does the
+  phone's (Sync, the `send` and `create` commands), even one from before
+  this, and `sync:finishCommand` deletes them once it's done, whether it went
+  or failed. If the command couldn't be queued, this runner calls
+  `relay:discardPictures` with the ids, which deletes only those uploads that
+  nothing names; whatever's left (a lost reply, a runner that quit between
+  the two) goes after a day with its `relayUploads` row (`sync:pruneFiles`).
+  That runner marks a send taken before it fetches the pictures, so a send
+  with pictures waits past taken for done and fails if the fetch does. It
+  answers within 100 seconds of being asked, as the app gives up on a send
+  at 120 and then puts the draft back while it may still go: no upload
+  starts after the first minute and they must all be up by 75 seconds, or
+  nothing is queued (the error says so), every wait after that ends by 100
+  seconds, and taken and still not done then counts as sent. A new thread
+  with pictures waits for done in the same 100 seconds. So a fetch there
+  that fails after 100 seconds (six pictures each taking over 7 seconds to
+  download) still looks sent here. A backend before 61 would drop them and send the words
+  alone, so this runner says the backend needs updating instead (it updates
+  with the runner), and an offline runner is said before anything uploads.
+  The direct link sends no pictures yet: the app says to turn it off to send
+  them through Convex.
 - **Answers from another runner.** `files.list` with `runnerId` and `path`
   is a `call` command, `{ method: "files.list", params: { path } }`, which
   that runner answers in the command's `result` (at most 500 entries; JSON
@@ -4760,7 +4853,26 @@ runner that's this one is the usual create.
   model, and the whole brief, with Start it and Don't. Return in an empty
   composer, which allows other cards, never starts one, and Start it does
   nothing until the request has been read. One naming a machine this Mac
-  doesn't know starts on this Mac, and the card says so. Start it is
+  doesn't know starts on this Mac, and the card says so.
+  **The folder.** The asking agent can't see this Mac's disk, so it
+  guesses its paths, usually right but for the home folder (it asked for
+  `/Users/mike/...` on 8 Nov when this Mac's was `/Users/m5-mike`). For
+  one starting on this Mac, a folder that isn't one here but is under
+  this Mac's home once its own home is taken off (`~/x`, `/Users/<name>/x`,
+  `/home/<name>/x`) starts in that one, as its real path, which must be
+  in this Mac's home with symlinks followed. `requests.get` gives that
+  folder, so the card shows where it really starts, and its fingerprint
+  holds it and its real path (whichever machine the card shows), so a
+  folder appearing or a link moving before Start it is "changed since
+  the card showed it", never a start somewhere else. The app reads the
+  request again after Start it fails, so a second click answers the card
+  as it is now. One
+  that's still not a folder here is `missingFolder` and the card says so;
+  Start it then starts nothing: it declines the card with a message
+  naming the folder and this Mac's home, which the asking agent is told
+  as the reason, so it can ask again with a folder that's here, then
+  marks the request denied and answers `-32602` saying so. A decline that
+  can't be sent leaves the request pending, to try again. Start it is
   `requests.answer` with the machine the card showed and the
   `fingerprint` `requests.get` gave (a hash of the whole filed request and
   when it was filed), so a request filed again under the same id with
@@ -4785,7 +4897,8 @@ runner that's this one is the usual create.
   card reads `relay:runnerRequest`: allowed with a result, the tool says
   where the thread started; denied, the user said no; still pending (an
   old phone's Allow, or anyone's), the answer is refused and the card
-  stays open. `deny` from anywhere declines it. A card that closes without
+  stays open. `deny` from anywhere declines it, and a message with it is
+  given to the agent as why it wasn't started. A card that closes without
   starting (declined, expired, Mike wrote instead) closes its request
   (`relay:closeRequest`, its own), so it stops counting against the five
   a runner key may have waiting and can't be started late.
@@ -4865,6 +4978,16 @@ the mirror back as state. The Mac app doesn't use it.
   removes any whose thread is gone (after the same two minutes) and writes
   again any it has stopped sharing, so a stop or a delete the mirror never
   got (a write lost after it landed, a crash) can't leave a link readable.
+  A thread ever shared has its row written as soon as sync starts, settling
+  or not, and a share change never waits for the settle. Until the mirror's
+  row has the link the thread has now (written, not just sent: a write that
+  failed or was left out doesn't count, and a row with a link counts as
+  there from when it's sent), none of that thread's messages go
+  up, by any path (a phone's page of earlier ones included), and its row is
+  tried again every minute; its whole history goes once the row is there.
+  `share:view` reads the
+  row's share, so a message going first was readable through a link
+  already stopped.
   Each write in flight is tracked as that write's own, so a flush that
   fails after its rows went never forgets another write's row on its way,
   and a row write that fails may have landed, so the next change to that
@@ -5353,7 +5476,12 @@ schedule on it, and mint phone tokens. Now there are two kinds of key, and
   - Messages: 12 KB a row and 48 MB a runner key in all. Past that its
     oldest anywhere go first, before a new one goes in, a few hundred a
     write; one there's still no room for waits (`skipped`) and is sent
-    again, so a new thread's are never the ones lost.
+    again, so a new thread's are never the ones lost. A row sent again
+    that grows (its buttons) is counted the same way (never evicting
+    itself), must still fit a row's 12 KB whole, and gives the bytes back
+    when it shrinks. Each runner key's count is checked against its rows
+    once, started by its heartbeat (`recountMessageBytes`), and only ever
+    raised by that.
   - A waiting question keeps exactly what its answer is matched on (its
     text, header and option labels); only option descriptions are cut, and
     if it still doesn't fit the card says to answer it on the Mac.
@@ -5540,6 +5668,8 @@ anyone's); "any runner" is any good key. Anything not sorted is owner only.
 | `remoteThread` | owner only | another runner's thread row, its open approval and card |
 | `queueCommand` | owner only | work for another runner: a thread's command goes to the runner the backend says has it |
 | `commandState` | owner only | |
+| `pictureUploadUrl` | owner only | a one-use `/relay/upload` URL for a picture going to another runner's thread, recorded in `relayUploads` |
+| `discardPictures` | owner only | deletes pictures uploaded through `pictureUploadUrl` for a command that wasn't queued, only ones nothing names |
 | `remoteAccounts` | owner only | another runner's logins |
 | `remoteBody` | owner only | one tool's output on another runner's thread (full sync) |
 | `fileRequest` | its own | a request for a thread on another runner, from one of its own threads (Asking another runner); never changed after; at most 5 waiting (one over two hours old doesn't count) and 50 kept, oldest going first, for a week at most |
@@ -5721,9 +5851,12 @@ say it's on that runner rather than that it's missing. A
 runner that isn't watching the list (no app connected lately) starts the
 watch and waits up to 3 seconds for its answer, rows and all (a refusal or
 an error ends the wait); one that runs out isn't waited for again for a
-minute. With sync off, a runner key, the backend failing, or
-on a draining runner (its sync has stopped), they see this runner's threads
-only.
+minute. A draining runner has stopped its sync, so its kept turns ask the
+primary instead: `remoteThreads.list` with `forTools: true` over its link
+for the list (the primary answers as for its own tools, the wait
+included), and the other calls passed on to the primary, whose relay
+takes them as it does the Mac app's. With sync off, a runner key or the backend failing, they see this
+runner's threads only.
 
 | Variable | Value |
 |---|---|
@@ -5755,6 +5888,10 @@ Either side may be upgraded first, so each tolerates the other:
 - An app older than Showing panels ignores `panelRequest`, so a request
   waits until Mike's next message clears it, and `show_panel` says it's
   waiting. A newer app never sees one from an older runner.
+- An app older than a pin's `highlight` request opens Highlights for it,
+  and no longer opens the pin by itself (the runner stopped sending
+  `show`). A newer app talking to an older runner never opens a shown pin
+  by itself; it's in Highlights.
 - An app older than pools sends `accountId` with every `threads.create`,
   so its threads are pinned as before, and it ignores `pools`, `poolId`,
   `waitingForRoom` and `pools.updated`. A newer app talking to a runner

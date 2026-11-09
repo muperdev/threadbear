@@ -290,6 +290,23 @@ test('a session hears about a project once: a live one at its next message, a fr
   assert.doesNotMatch(h.adapter.last.sent.at(-1)!.text, /Threadbear project/);
 });
 
+test("New Thread on a project's page: the thread starts in the project, pinned, and its first session has the brief", async () => {
+  const { h, repo, projects } = setup();
+  const app = repo('dev/app');
+  const p = projects.create({ title: 'Poddle', folders: [app], goals: 'A podcast player for Mike', by: 'mike' });
+  const { thread } = h.runner.create({ text: 'Start on the player', cwd: app, accountId: 'claude-3', projectIds: [p.id] });
+  assert.deepEqual(thread.projects?.map((m) => [m.title, m.pinned]), [['Poddle', true]]);
+  checkSummary(thread);
+  assert.deepEqual(projects.get(p.id).threadIds, [thread.id]);
+  await tick();
+  assert.match(h.adapter.last.opts.instructions ?? '', /## Poddle \(p_[0-9a-f]+\)\nFolders: ~\/dev\/app\nGoals: A podcast player for Mike/);
+  assert.equal(h.adapter.last.sent.at(-1)!.text, 'Start on the player');
+  // A project that isn't there makes no thread at all.
+  const before = h.runner.list().length;
+  assert.throws(() => h.runner.create({ text: 'x', cwd: app, accountId: 'claude-3', projectIds: ['p_nope'] }));
+  assert.equal(h.runner.list().length, before);
+});
+
 test('the brief stays short however many projects there are', () => {
   const { projects, create, h } = setup();
   const { thread } = create();

@@ -14,6 +14,7 @@ enum BusyKey {
     static func copying(_ threadId: String) -> String { "copying/\(threadId)" }
     /// The same path on two Macs is two files.
     static func fetching(_ path: String, runner: String?, action: FileLinkAction) -> String { "fetching/\(action)/\(runner ?? "")/\(path)" }
+    static func deleteThread(_ id: String) -> String { "deleteThread/\(id)" }
     static func projectIcon(_ id: String) -> String { "projectIcon/\(id)" }
     static func projectTasks(_ id: String) -> String { "projectTasks/\(id)" }
     static func runSchedule(_ id: String) -> String { "runSchedule/\(id)" }

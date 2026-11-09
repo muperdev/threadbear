@@ -262,25 +262,6 @@ final class OpenGateTests: XCTestCase {
         XCTAssertEqual(SignIn.fileSafe("../../evil id"), "______evil_id")
     }
 
-    // MARK: Page dialogs
-
-    func testAPagesDialogIsDrawnOverThePageUnderItsSite() {
-        let surface = AgentSurfaceView(port: 0, tab: AgentTab(tabId: 1, url: "https://evil.example/", title: "Evil"), thread: "t1")
-        surface.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
-        var answers: [[String: Any]] = []
-        surface.answerDialog = { answers.append($0) }
-        surface.showDialog(["type": "prompt", "message": "Threadbear needs your password", "url": "https://evil.example/login", "defaultPrompt": ""])
-        XCTAssertEqual(surface.shownDialog?.heading, "evil.example says")
-        XCTAssertTrue(surface.dialogView.map { $0.superview === surface } == true, "in the page's own view, not a sheet on the window")
-        XCTAssertTrue(NSApp.windows.allSatisfy { $0.attachedSheet == nil })
-        // Dialog after dialog: past three in ten seconds, answered no unseen.
-        for _ in 0..<4 {
-            surface.closeDialog()
-            surface.showDialog(["type": "alert", "message": "again", "url": "https://evil.example/"])
-        }
-        XCTAssertEqual(answers.last?["accept"] as? Bool, false)
-    }
-
     // MARK: Codex review, round one
 
     /// Only what's known to be a document opens unasked: an app can claim

@@ -52,10 +52,10 @@ final class SwipeNavigationTests: XCTestCase {
     private func gesture(_ swipes: SwipeNavigation, _ moves: [(Double, Double)]) -> [Bool] {
         var taken: [Bool] = []
         for (i, move) in moves.enumerated() {
-            guard let event = RowSwipeEvents.event(dx: move.0, dy: move.1, phase: i == 0 ? .began : .changed) else { XCTFail("no event"); return taken }
+            guard let event = RowSwipeEvents.event(dx: move.0, dy: move.1, phase: i == 0 ? .began : .changed, content: true) else { XCTFail("no event"); return taken }
             taken.append(swipes.handle(event, in: window))
         }
-        if let end = RowSwipeEvents.event(dx: 0, phase: .ended) { taken.append(swipes.handle(end, in: window)) }
+        if let end = RowSwipeEvents.event(dx: 0, phase: .ended, content: true) { taken.append(swipes.handle(end, in: window)) }
         return taken
     }
 
@@ -73,11 +73,11 @@ final class SwipeNavigationTests: XCTestCase {
     func testTheArrowFollowsAndFillsAtTheLine() async {
         let app = await app()
         let swipes = swipeNavigation(app)
-        func move(_ dx: Double, _ phase: RowSwipeEvents.Phase) { _ = RowSwipeEvents.event(dx: dx, phase: phase).map { swipes.handle($0, in: window) } }
+        func move(_ dx: Double, _ phase: RowSwipeEvents.Phase) { _ = RowSwipeEvents.event(dx: dx, phase: phase, content: true).map { swipes.handle($0, in: window) } }
         move(8, .began)
         XCTAssertEqual(swipes.swipe.direction, .back)
         XCTAssertFalse(swipes.swipe.armed)
-        move(120, .changed)
+        move(160, .changed)
         XCTAssertTrue(swipes.swipe.armed)
         XCTAssertEqual(app.selection, "b", "not until the fingers lift")
         move(0, .ended)
@@ -92,12 +92,21 @@ final class SwipeNavigationTests: XCTestCase {
         XCTAssertEqual(app.selection, "b")
     }
 
-    /// Nothing to go forward to: a swipe left is left to whatever's under it.
-    func testNowhereToGoLeavesTheEventsAlone() async {
+    /// Nothing to go forward to: the card says so (Mike took nothing
+    /// showing for Forward not working, 8 Nov), and it goes nowhere.
+    func testNowhereToGoSaysSo() async {
         let app = await app()
         let swipes = swipeNavigation(app)
-        let taken = gesture(swipes, [(-8, 0), (-40, 0), (-40, 0)])
-        XCTAssertEqual(taken, [false, false, false, false])
+        func send(_ dx: Double, _ phase: RowSwipeEvents.Phase) -> Bool {
+            RowSwipeEvents.event(dx: dx, phase: phase, content: true).map { swipes.handle($0, in: window) } ?? false
+        }
+        XCTAssertTrue(send(-8, .began))
+        XCTAssertEqual(swipes.swipe.direction, .forward)
+        XCTAssertTrue(swipes.swipe.isEmpty)
+        XCTAssertNil(app.destination(back: false))
+        XCTAssertTrue(send(-300, .changed))
+        XCTAssertFalse(swipes.swipe.armed)
+        _ = send(0, .ended)
         XCTAssertEqual(app.selection, "b")
     }
 
@@ -122,10 +131,21 @@ final class SwipeNavigationTests: XCTestCase {
         XCTAssertTrue(swipes.handle(momentum, in: window))
     }
 
+    /// Fingers going right are Back with natural scrolling and Forward
+    /// without, as in Safari: a row gives up whichever that is.
+    func testWhichWayIsBackFollowsNaturalScrolling() async {
+        let app = await app()
+        let swipes = swipeNavigation(app)
+        XCTAssertTrue(swipes.takesFingersRight(inverted: true), "natural: Back, and there's somewhere to go back to")
+        XCTAssertFalse(swipes.takesFingersRight(inverted: false), "not natural: Forward, and there's nowhere to go")
+        app.goBack()
+        XCTAssertTrue(swipes.takesFingersRight(inverted: false))
+    }
+
     func testOffInSystemSettings() async {
         let app = await app()
         let swipes = swipeNavigation(app, on: false)
-        XCTAssertFalse(swipes.takesBack)
+        XCTAssertFalse(swipes.takesFingersRight(inverted: true))
         gesture(swipes, [(8, 0), (40, 0), (80, 0)])
         XCTAssertEqual(app.selection, "b")
     }
@@ -137,7 +157,7 @@ final class SwipeNavigationTests: XCTestCase {
         let app = await app()
         let swipes = swipeNavigation(app)
         func send(_ dx: Double, _ dy: Double, _ phase: RowSwipeEvents.Phase) -> Bool {
-            RowSwipeEvents.event(dx: dx, dy: dy, phase: phase).map { swipes.handle($0, in: window) } ?? false
+            RowSwipeEvents.event(dx: dx, dy: dy, phase: phase, content: true).map { swipes.handle($0, in: window) } ?? false
         }
         XCTAssertTrue(send(0, 0, .mayBegin))
         XCTAssertTrue(send(0, 0, .began))
@@ -163,7 +183,7 @@ final class SwipeNavigationTests: XCTestCase {
         let app = await app()
         let swipes = swipeNavigation(app)
         func send(_ dx: Double, _ dy: Double, _ phase: RowSwipeEvents.Phase, at time: TimeInterval) -> Bool {
-            guard let cg = RowSwipeEvents.event(dx: dx, dy: dy, phase: phase)?.cgEvent else { return false }
+            guard let cg = RowSwipeEvents.event(dx: dx, dy: dy, phase: phase, content: true)?.cgEvent else { return false }
             cg.timestamp = CGEventTimestamp(time * 1_000_000_000)
             return NSEvent(cgEvent: cg).map { swipes.handle($0, in: window) } ?? false
         }
@@ -185,7 +205,7 @@ final class SwipeNavigationTests: XCTestCase {
         let app = await app()
         let swipes = swipeNavigation(app)
         let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200), styleMask: [.titled], backing: .buffered, defer: true)
-        guard let down = RowSwipeEvents.event(dx: 8, phase: .began), let more = RowSwipeEvents.event(dx: 8, phase: .changed) else { return XCTFail("no event") }
+        guard let down = RowSwipeEvents.event(dx: 8, phase: .began, content: true), let more = RowSwipeEvents.event(dx: 8, phase: .changed, content: true) else { return XCTFail("no event") }
         XCTAssertTrue(swipes.handle(down, in: window))
         XCTAssertEqual(swipes.swipe.direction, .back)
         XCTAssertFalse(swipes.handle(more, in: other))
@@ -227,7 +247,7 @@ final class SwipeNavigationTests: XCTestCase {
         let app = await app()
         let swipes = swipeNavigation(app)
         let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200), styleMask: [.titled], backing: .buffered, defer: true)
-        guard let event = RowSwipeEvents.event(dx: 8, phase: .began) else { return XCTFail("no event") }
+        guard let event = RowSwipeEvents.event(dx: 8, phase: .began, content: true) else { return XCTFail("no event") }
         XCTAssertFalse(swipes.handle(event, in: other))
     }
 }

@@ -9,7 +9,6 @@ import ThreadbearCore
 /// for a thread on another Mac.
 struct ComposerControls: View {
     @Environment(AppModel.self) private var app
-    @AppStorage(VoiceMode.enabledKey) private var voiceEnabled = true
     @AppStorage(Dictation.enabledKey) private var dictationEnabled = true
     let thread: ThreadSummary?
     let running: Bool
@@ -177,12 +176,6 @@ struct ComposerControls: View {
             // Dictation can hide it).
             if dictationEnabled, let handle {
                 DictationButton(draftKey: thread?.id ?? "new", handle: handle, size: SendButton.size)
-                    .layoutPriority(1)
-            }
-            // Voice for the thread, or on a new thread's composer, where
-            // what's said first starts it (Settings > Voice can hide it).
-            if voiceEnabled, VoiceMode.available, !draftAway {
-                VoiceButton(threadId: thread?.id ?? VoiceMode.newThread, size: SendButton.size)
                     .layoutPriority(1)
             }
             SendButton(running: running, canSend: canSend, sending: sending, stopping: thread.map { app.isBusy(BusyKey.stop($0.id)) } ?? false, onSend: onSend, onStop: { app.interrupt(thread?.id) })

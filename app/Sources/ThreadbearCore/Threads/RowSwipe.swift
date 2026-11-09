@@ -27,8 +27,9 @@ public struct RowSwipe: Sendable, Equatable {
     private var sumX = 0.0
     private var sumY = 0.0
     private var lastDX: Double = 0
-    /// A swipe right is Back's (SwipeNavigation in the app) while there's somewhere
-    /// to go back to, rather than the row giving a little and stopping.
+    /// A swipe right is Back's or Forward's (SwipeNavigation in the app,
+    /// which way depending on natural scrolling) while there's somewhere to
+    /// go, rather than the row giving a little and stopping.
     private var rightTaken = false
 
     /// Movement before a gesture is called across or up and down.
@@ -72,7 +73,7 @@ public struct RowSwipe: Sendable, Equatable {
     }
 
     /// Fingers touched the trackpad. `rightTaken`: a swipe right goes
-    /// Back, so it isn't the row's.
+    /// Back or Forward, so it isn't the row's.
     public mutating func begin(rightTaken: Bool = false) {
         phase = .deciding
         self.rightTaken = rightTaken

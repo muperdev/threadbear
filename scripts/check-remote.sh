@@ -36,6 +36,8 @@
 #
 # A host with too little disk left is passed over (MIN_FREE_GIB, below).
 #
+# A host that stops answering partway is dropped for the next (`watched`).
+#
 # Exit 255: no host that can run it could be reached (check.sh then runs here).
 # Hosts that were reached but have no room are exit 1, with their free space:
 # the M5 isn't the place for it either, and clearing the host is the fix.
@@ -101,7 +103,7 @@ if [ "${1:-}" = "--on-host" ]; then
     cache="$base/deps/$name-$hash/node_modules"
     if [ ! -d "$cache" ]; then
       echo "npm ci in $dir (its lockfile is new here)"
-      (cd "$src/$dir" && npm ci --no-audit --no-fund --loglevel=error >/dev/null) || { echo "npm ci failed in $dir" >&2; exit 1; }
+      (cd "$src/$dir" && "$NODE" "$src/scripts/limit-step.mjs" --silence 1800 --total 1800 -- npm ci --no-audit --no-fund --loglevel=error >/dev/null) || { echo "npm ci failed in $dir" >&2; exit 1; }
       mkdir -p "$(dirname "$cache")"
       mv "$src/$dir/node_modules" "$cache"
     fi
@@ -120,8 +122,16 @@ if [ "${1:-}" = "--on-host" ]; then
   done
 
   cd "$src" || exit 1
-  THREADBEAR_CHECK_CHANGED_FILE="$src/.check-changed" THREADBEAR_NODE="$NODE" ./check.sh --local "$@"
-  exit $?
+  # Under a limit of its own as well: this Mac giving up on it (a dropped
+  # connection, its MAX_SECS) doesn't stop it here, and it holds this host's
+  # lock while it runs (Codex's review). Its Swift steps have shorter ones.
+  THREADBEAR_CHECK_CHANGED_FILE="$src/.check-changed" THREADBEAR_NODE="$NODE" \
+    "$NODE" "$src/scripts/limit-step.mjs" --silence 3600 --total "${THREADBEAR_CHECK_HOST_MAX_SECS:-7200}" -- ./check.sh --local "$@"
+  code=$?
+  # limit-step's 124 is what this Mac takes for a host that dropped out, which
+  # would run the whole check again elsewhere: it's a failed check (1).
+  [ "$code" != 124 ] || code=1
+  exit "$code"
 fi
 
 # ---- On this Mac
@@ -171,6 +181,105 @@ else
   echo "Not sharing one ssh connection per host: $sock_dir isn't a short folder of this user's own (mode 700)." >&2
   SSH+=(-o ControlMaster=no -o ControlPath=none)
 fi
+
+# A host that stops answering mustn't hold the check, and with it the landing
+# lock, forever. On 8 Nov Tinker Desk stopped taking ssh connections, and a
+# check sat in its ssh for 79 minutes with no output: neither ServerAlive nor
+# the shared connection gave up. So while anything here talks to a host,
+# `watched` pings it every PING_SECS on a connection of its own (no shared
+# socket, which may be the thing that's stuck), and after PING_MISSES pings in
+# a row that can't even log in, it kills what was talking to the host and
+# says the host dropped out (exit 124). The run then goes to the next host,
+# or to this Mac like any host that can't be reached. MAX_SECS caps the
+# whole run, waiting in line included, as a last resort: each Swift step
+# already has a limit of its own (check.sh, limit-step.mjs). The THREADBEAR_
+# names are for the tests.
+PING_SECS="${THREADBEAR_CHECK_PING_SECS:-30}"
+PING_MISSES="${THREADBEAR_CHECK_PING_MISSES:-4}"
+MAX_SECS="${THREADBEAR_CHECK_MAX_SECS:-10800}"
+DEADLINE=$(( $(date +%s) + MAX_SECS ))
+PING=(ssh -o BatchMode=yes -o ConnectTimeout=20 -o ControlMaster=no -o ControlPath=none)
+
+# kill_tree <pid>: it and everything under it, all found before any is
+# signalled, so none is handed to launchd and missed (one of those could keep
+# the run's output open). Asked first, then made to, after 5 s, if any ignored
+# that (Codex's review).
+tree_of() {
+  local kid
+  echo "$1"
+  for kid in $(pgrep -P "$1" 2>/dev/null); do tree_of "$kid"; done
+}
+kill_tree() {
+  local pids p left n=0
+  pids="$(tree_of "$1")"
+  kill $pids 2>/dev/null
+  while [ "$n" -lt 25 ]; do
+    left=""
+    for p in $pids; do kill -0 "$p" 2>/dev/null && left+=" $p"; done
+    [ -n "$left" ] || return 0
+    sleep 0.2
+    n=$((n + 1))
+  done
+  kill -9 $left 2>/dev/null
+}
+
+# timed <secs> <command...>: the command, killed after secs (exit 124).
+timed() {
+  local secs="$1" pid ticks=0
+  shift
+  "$@" &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$ticks" -ge $((secs * 5)) ]; then kill_tree "$pid"; wait "$pid" 2>/dev/null; return 124; fi
+    sleep 0.2
+    ticks=$((ticks + 1))
+  done
+  wait "$pid"
+}
+
+# watched <host> <command...>: the command's own exit, or 124 when the host
+# stopped answering and it was killed, or 125 past MAX_SECS. A command that
+# finishes before the first ping never sees one.
+watched() {
+  local host="$1" pid watcher why
+  shift
+  "$@" &
+  pid=$!
+  (
+    misses=0
+    while :; do
+      for _ in $(seq 1 $((PING_SECS * 5))); do
+        kill -0 "$pid" 2>/dev/null || exit 0
+        [ "$(date +%s)" -lt "$DEADLINE" ] || { kill_tree "$pid"; exit 2; }
+        sleep 0.2
+      done
+      if timed $((PING_SECS + 20)) "${PING[@]}" "$host" true </dev/null >/dev/null 2>&1; then misses=0
+      else misses=$((misses + 1)); fi
+      [ "$misses" -lt "$PING_MISSES" ] || { kill_tree "$pid"; exit 1; }
+    done
+  ) &
+  watcher=$!
+  wait "$pid"
+  local code=$?
+  wait "$watcher"
+  why=$?
+  case "$why" in 1) return 124 ;; 2) return 125 ;; esac
+  return "$code"
+}
+
+# What to do about a host that dropped out: say so, never try it again this
+# run, and close its shared connection (in case that's what's stuck).
+dropped() {
+  echo "$1 stopped answering over ssh (${PING_MISSES} tries in a row, ${PING_SECS} s apart, couldn't log in); trying the others." >&2
+  SKIP+=" $1"
+  timed 10 "${SSH[@]}" -O exit "$1" >/dev/null 2>&1
+}
+# Past MAX_SECS: not 255, as running it all again here wouldn't be quicker.
+over_time() {
+  echo "This check has been going for $((MAX_SECS / 60)) minutes, waiting in line included, so it was stopped." >&2
+  rm -f "$files" "$changed"
+  exit 1
+}
 
 ARGS=()
 SHOTS=""
@@ -232,7 +341,7 @@ low_on_room() {
 # FREE_GIB set, if it's low. Not if it's fine or can't be asked.
 host_is_low() {
   local kb
-  kb="$("${SSH[@]}" "$HOST" "cd '$remote_base' && $free_cmd" 2>/dev/null)" && low_on_room "$kb"
+  kb="$(watched "$HOST" "${SSH[@]}" "$HOST" "cd '$remote_base' && $free_cmd" 2>/dev/null)" && low_on_room "$kb"
 }
 
 # Each host: reachable, its system, whether its lock is free now, and how much
@@ -256,13 +365,18 @@ choose() {
     case "$h" in -*|"") continue ;; esac
     # One that dropped out during a copy this run isn't tried again.
     case " $SKIP " in *" $h "*) continue ;; esac
-    out="$("${SSH[@]}" "$h" "$probe" 2>/dev/null)"
+    out="$(watched "$h" "${SSH[@]}" "$h" "$probe" 2>/dev/null)"
     rc=$?
+    [ "$rc" != 125 ] || over_time
+    if [ "$rc" = 124 ]; then
+      dropped "$h"
+      continue
+    fi
     if [ "$rc" != 0 ]; then
       # It answered, but a disk too full for the probe's mkdir fails it too,
       # and calling that unreachable would run the check on this Mac (Codex's
       # review). 255 is ssh itself: nobody there to ask.
-      if [ "$rc" != 255 ] && kb="$("${SSH[@]}" "$h" "cd ~ && $free_cmd" 2>/dev/null)" && low_on_room "$kb"; then
+      if [ "$rc" != 255 ] && kb="$(watched "$h" "${SSH[@]}" "$h" "cd ~ && $free_cmd" 2>/dev/null)" && low_on_room "$kb"; then
         pass_over "$h"
       else
         echo "Couldn't reach $h over ssh." >&2
@@ -330,7 +444,11 @@ take_copylock() {
   if command -v flock >/dev/null 2>&1; then flock "$1" /bin/sh -c "$hold" sh "$ready" "$$" "$release" &
   else /usr/bin/lockf -k "$1" /bin/sh -c "$hold" sh "$ready" "$$" "$release" & fi
   holder=$!
-  until [ -e "$ready" ] || ! kill -0 "$holder" 2>/dev/null; do sleep 0.2; done
+  # Waiting for another check from this checkout counts towards MAX_SECS too.
+  until [ -e "$ready" ] || ! kill -0 "$holder" 2>/dev/null; do
+    if [ "$(date +%s)" -ge "$DEADLINE" ]; then kill_tree "$holder"; wait "$holder" 2>/dev/null; holder="" release=""; over_time; fi
+    sleep 0.2
+  done
   # The helper gone with no ready file never had the lock (a lock file it
   # can't open): no copy without it.
   if [ ! -e "$ready" ]; then
@@ -389,7 +507,7 @@ while :; do
     # HOST, HOST_OS and remote_base are still the copy's.
     FREE=0
   elif ! choose; then
-    [ -z "$copied_host" ] || "${SSH[@]}" "$copied_host" "rm -rf '$remote_run'" 2>/dev/null
+    [ -z "$copied_host" ] || watched "$copied_host" "${SSH[@]}" "$copied_host" "rm -rf '$remote_run'" 2>/dev/null
     rm -f "$files" "$changed"
     if [ -n "$LOW" ]; then
       # Not 255: a disk to clear isn't a reason to run it all on this Mac.
@@ -402,7 +520,7 @@ while :; do
   if [ "$HOST" = "$copied_host" ]; then
     echo "Checking on $HOST (its copy is already there)"
   else
-    [ -z "$copied_host" ] || "${SSH[@]}" "$copied_host" "rm -rf '$remote_run'" 2>/dev/null
+    [ -z "$copied_host" ] || watched "$copied_host" "${SSH[@]}" "$copied_host" "rm -rf '$remote_run'" 2>/dev/null
     copied_host=""
     id="$(date +%H%M%S)-$$-$tries"
     remote_run="$remote_base/runs/$id"
@@ -425,13 +543,23 @@ while :; do
     fi
     # By content (-c), not size and time: an edit that keeps both would
     # otherwise leave the mirror's old copy in the run.
-    if ! "${SSH[@]}" "$HOST" "mkdir -p '$mirror' '$remote_run' && touch '$mirror'" \
-      || ! rsync -azc --from0 --files-from="$files" -e "${SSH[*]}" "$ROOT/" "$HOST:$mirror/" \
-      || ! rsync -a -e "${SSH[*]}" "$files" "$HOST:$remote_run.files" \
-      || ! "${SSH[@]}" "$HOST" "rsync -a --from0 --files-from='$remote_run.files' '$mirror/' '$remote_run/' && rm -f '$remote_run.files'" \
-      || ! rsync -a -e "${SSH[*]}" "$changed" "$HOST:$remote_run/.check-changed"; then
+    copy_it() {
+      "${SSH[@]}" "$HOST" "mkdir -p '$mirror' '$remote_run' && touch '$mirror'" \
+        && rsync -azc --from0 --files-from="$files" -e "${SSH[*]}" "$ROOT/" "$HOST:$mirror/" \
+        && rsync -a -e "${SSH[*]}" "$files" "$HOST:$remote_run.files" \
+        && "${SSH[@]}" "$HOST" "rsync -a --from0 --files-from='$remote_run.files' '$mirror/' '$remote_run/' && rm -f '$remote_run.files'" \
+        && rsync -a -e "${SSH[*]}" "$changed" "$HOST:$remote_run/.check-changed"
+    }
+    watched "$HOST" copy_it
+    rc=$?
+    if [ "$rc" = 124 ] || [ "$rc" = 125 ]; then
       drop_copylock
-      "${SSH[@]}" "$HOST" "rm -rf '$remote_run' '$remote_run.files'" 2>/dev/null
+      [ "$rc" != 125 ] || over_time
+      dropped "$HOST"
+      continue
+    elif [ "$rc" != 0 ]; then
+      drop_copylock
+      watched "$HOST" "${SSH[@]}" "$HOST" "rm -rf '$remote_run' '$remote_run.files'" 2>/dev/null
       # The next host that can run it, before this Mac (6 Nov: Tinker Desk
       # dropped off mid-copy and the check ran on the M5).
       if host_is_low; then
@@ -478,8 +606,25 @@ while :; do
   # A failed step's log path is on the host: its logs come back here, and the
   # path in the output is changed to match.
   local_logs="$(mktemp -d "${TMPDIR:-/tmp}/threadbear-check-remote.XXXXXX")"
-  "${SSH[@]}" "$HOST" "$remote_cmd" 2>&1 | rewrite_logs "$remote_base/tmp-$id/threadbear-check." "$local_logs"
+  watched "$HOST" "${SSH[@]}" "$HOST" "$remote_cmd" 2>&1 | rewrite_logs "$remote_base/tmp-$id/threadbear-check." "$local_logs"
   code=${PIPESTATUS[0]}
+  [ "$code" != 125 ] || { rmdir "$local_logs" 2>/dev/null; over_time; }
+  # 255 is ssh's own: the connection went before the check ended. Like a host
+  # that stops answering, it's the next host's (or, with none, this Mac's): a
+  # run that can't finish anywhere would hold the landing for nothing.
+  if [ "$code" = 124 ] || [ "$code" = 255 ]; then
+    # Its copy over there goes with that host's own clean-up (half a day).
+    rmdir "$local_logs" 2>/dev/null
+    if [ "$code" = 255 ]; then
+      echo "Lost the connection to $HOST during the check; trying the others." >&2
+      SKIP+=" $HOST"
+      timed 10 "${SSH[@]}" -O exit "$HOST" >/dev/null 2>&1
+    else
+      dropped "$HOST"
+    fi
+    copied_host=""
+    continue
+  fi
   if [ "$now" = 1 ] && [ "$code" = 75 ]; then
     # Never started. Its copy stays for the next go (above).
     rmdir "$local_logs" 2>/dev/null
@@ -491,31 +636,26 @@ while :; do
   break
 done
 rm -f "$files" "$changed"
-if [ "$code" = 255 ]; then
-  # Not "unreachable": that would make check.sh run it all again here.
-  echo "Lost the connection to $HOST during the check." >&2
-  code=1
-fi
 
 # The disk as the failure left it (keep_logs), or as it is now if that couldn't
 # be written. -s: a full disk can leave the file empty.
 fail_kb=""
 if [ "$code" != 0 ]; then
-  fail_kb="$("${SSH[@]}" "$HOST" "cd '$remote_base' && if [ -s 'kept-$id/free-kb' ]; then cat 'kept-$id/free-kb'; else $free_cmd; fi" 2>/dev/null)"
+  fail_kb="$(watched "$HOST" "${SSH[@]}" "$HOST" "cd '$remote_base' && if [ -s 'kept-$id/free-kb' ]; then cat 'kept-$id/free-kb'; else $free_cmd; fi" 2>/dev/null)"
 fi
 
 # find, not a glob: the host's login shell may be zsh, which complains
 # out loud when a glob matches nothing.
-kept="$("${SSH[@]}" "$HOST" "find '$remote_base/kept-$id' -maxdepth 1 -name 'threadbear-check.*' 2>/dev/null | head -1")"
+kept="$(watched "$HOST" "${SSH[@]}" "$HOST" "find '$remote_base/kept-$id' -maxdepth 1 -name 'threadbear-check.*' 2>/dev/null | head -1")"
 if [ -n "$kept" ]; then
-  rsync -a -e "${SSH[*]}" "$HOST:$kept/" "$local_logs/" >/dev/null
+  watched "$HOST" rsync -a -e "${SSH[*]}" "$HOST:$kept/" "$local_logs/" >/dev/null
 fi
-"${SSH[@]}" "$HOST" "rm -rf '$remote_base/kept-$id' '$remote_run'" 2>/dev/null
+watched "$HOST" "${SSH[@]}" "$HOST" "rm -rf '$remote_base/kept-$id' '$remote_run'" 2>/dev/null
 [ -n "$(ls -A "$local_logs")" ] || rmdir "$local_logs"
 
 if [ -n "$SHOTS" ]; then
   mkdir -p "$SHOTS"
-  rsync -a -e "${SSH[*]}" "$HOST:$remote_shots/" "$SHOTS/" >/dev/null && "${SSH[@]}" "$HOST" "rm -rf '$remote_shots'"
+  watched "$HOST" rsync -a -e "${SSH[*]}" "$HOST:$remote_shots/" "$SHOTS/" >/dev/null && watched "$HOST" "${SSH[@]}" "$HOST" "rm -rf '$remote_shots'"
 fi
 # Last, so it's the line read: what a full disk breaks often looks nothing like
 # one (a CodeSign error, 7 Nov).

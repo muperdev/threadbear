@@ -229,3 +229,57 @@ test("review round 4: a check's output whose start was cut in a long password lo
   assert.ok(!c.output.includes('p9p9p9'), c.output.slice(0, 60));
   assert.match(c.output, /last line/);
 });
+
+// Daybreak, 8 Nov ("Whitespace-only truncation exposes password fragments"):
+// dropping the run reading stopped in went back to the last space, which was
+// inside a quoted password with a long blob after it, so the output ended
+// `{"password":"Sup3rSecretPassw0rd ` and no rule knew that half any more.
+test('daybreak 8 Nov: output read up to a limit is not cut at a space inside a quoted password', async () => {
+  const dir = tmpDir('tb-safe-cut-space-');
+  const file = path.join(dir, 'out.txt');
+  fs.writeFileSync(file, `log\n{"password":"${PASSWORD} suffix","blob":"${'B'.repeat(120_000)}"}\n`);
+  const r = await runCommand(`cat ${JSON.stringify(file)}`, { cwd: dir, env: { ...process.env }, shell: ['/bin/sh', '-c'] });
+  assert.equal(r.truncated, true);
+  assert.ok(!leaks(r.text), JSON.stringify(r.text.slice(0, 80)));
+  // As a hook's message embeds it (runner/patches.ts), with the whole password
+  // known to the scrubber too: nothing of it goes up.
+  const scrubber = new Scrubber();
+  scrubber.known.add(`${PASSWORD} suffix`);
+  const msg = `[Threadbear hook] t ran after your turn and passed:\n\n\`\`\`\n${r.text.trim()}\n\`\`\`\n\nNothing to do.`;
+  const doc = toMessageDoc('t1', { type: 'user.message', seq: 1, ts: '2026-11-08T00:00:00.000Z', text: msg, origin: 'runner' } as never, (t) => scrubber.safeText(t));
+  assert.ok(doc && !leaks(doc.text), String(doc?.text).slice(0, 120));
+  // The same layout whole (not cut) is still kept and left to the scrub.
+  fs.writeFileSync(file, `log\n{"password":"${PASSWORD} suffix","blob":"${'B'.repeat(100)}"}\n`);
+  const whole = await runCommand(`cat ${JSON.stringify(file)}`, { cwd: dir, env: { ...process.env }, shell: ['/bin/sh', '-c'] });
+  assert.equal(whole.truncated, false);
+  assert.ok(!leaks(scrubText(whole.text)), scrubText(whole.text));
+});
+
+test('daybreak 8 Nov: a long run at the end still costs only that run, when nothing secret is near', async () => {
+  const dir = tmpDir('tb-safe-cut-plain-');
+  const file = path.join(dir, 'out.txt');
+  const lines = Array.from({ length: 1000 }, (_, i) => `line ${i} of an ordinary build log`).join('\n');
+  fs.writeFileSync(file, `${lines}\n${'B'.repeat(120_000)}`);
+  const r = await runCommand(`cat ${JSON.stringify(file)}`, { cwd: dir, env: { ...process.env }, shell: ['/bin/sh', '-c'] });
+  assert.equal(r.truncated, true);
+  assert.match(r.text, /line 999 of an ordinary build log\n$/);
+});
+
+test("daybreak 8 Nov: a check's output whose start was let go of isn't begun at a space inside a quoted password", async () => {
+  const dir = tmpDir('tb-safe-cut-front-');
+  fs.writeFileSync(path.join(dir, 'out.txt'), `{"blob":"${'B'.repeat(20_000)}","password":"${PASSWORD} suffix phrase"}\nlast line\n`);
+  const c = await runCheck({ command: 'cat out.txt', cwd: dir, home: dir, scheduleId: 'front', timeoutMs: 10_000 });
+  assert.ok(!c.output.includes('suffix phrase') && !leaks(c.output), c.output.slice(0, 80));
+  assert.match(c.output, /last line$/);
+});
+
+test("codex 8 Nov: spaces at the end of a check's output can't pull a password's middle to the front without its start", async () => {
+  const dir = tmpDir('tb-safe-cut-pad-');
+  fs.writeFileSync(path.join(dir, 'out.txt'), `log\n{"password":"first-word ${PASSWORD}"}\n${' '.repeat(15_960)}`);
+  const c = await runCheck({ command: 'cat out.txt', cwd: dir, home: dir, scheduleId: 'pad', timeoutMs: 10_000 });
+  assert.ok(!leaks(c.output), JSON.stringify(c.output));
+  // And with the spaces split over many writes.
+  fs.writeFileSync(path.join(dir, 'a'), `log\n{"password":"first-word ${PASSWORD}"}\n`);
+  const s = await runCheck({ command: `cat a; for i in 1 2 3 4; do printf '%3990s' ''; sleep 0.05; done`, cwd: dir, home: dir, scheduleId: 'pad2', timeoutMs: 10_000 });
+  assert.ok(!leaks(s.output), JSON.stringify(s.output));
+});

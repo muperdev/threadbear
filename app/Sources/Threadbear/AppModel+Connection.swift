@@ -45,10 +45,6 @@ extension AppModel {
                 // did before them.
                 pools = hello.pools ?? []
                 poolsSupported = hello.pools != nil
-                experiments = hello.experiments
-                // Voice mode is an experiment: turned off in runner.json
-                // since it started, it ends here.
-                if !VoiceMode.available { VoiceMode.shared.stop() }
                 if hello.clis.isEmpty { loadClis() }
                 // Maybe a newer runner than last time.
                 highlightsUnsupported = false
@@ -280,9 +276,7 @@ extension AppModel {
         // The ding for a finished thread (Settings > General >
         // Notifications), wherever you are looking. Not another runner's,
         // as with notifications, nor a scripted app's.
-        // Nor the thread you're talking with in Voice: its reply is being
-        // read out.
-        if notificationsEnabled, !thread.isRemote, !VoiceMode.shared.isOn(for: thread.id), let previous {
+        if notificationsEnabled, !thread.isRemote, let previous {
             DingPlayer.threadChanged(from: previous.status, to: thread.status)
         }
         if showing && thread.lastSeq > thread.lastSeenSeq && thread.status != .waiting {

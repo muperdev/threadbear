@@ -113,4 +113,24 @@ final class SlashCommandsTests: XCTestCase {
         // Plain words and paths come through as they are.
         XCTAssertEqual(String(SlashPalette.description("Open chrome:// pages (Finder, Xcode)").characters), "Open chrome:// pages (Finder, Xcode)")
     }
+
+    /// Daybreak, 8 Nov: a skill's description is a cloned repo's words, and
+    /// a link in it opened through macOS from the palette's own window,
+    /// past OpenGate (a `file:` link to a .command ran it). Its words stay;
+    /// nothing in it is a link, whatever the scheme or however it's written.
+    func testADescriptionsLinksKeepTheirWordsButAreNotLinks() {
+        let cases = [
+            "[Read documentation](file:///Users/me/checkout/docs.command) first",
+            "Open [Slack](slack://open) or <slack://open>",
+            "See <https://example.com> and **[bold](x-apple.systempreferences:com.apple.preference.security)**",
+            "Nested `[code](file:///etc/passwd)` and [a [b] c](file:///tmp/run.sh)",
+        ]
+        for markdown in cases {
+            let text = SlashPalette.description(markdown)
+            XCTAssertTrue(text.runs.allSatisfy { $0.link == nil }, "a link survived in: \(markdown)")
+        }
+        let text = SlashPalette.description("[Read documentation](file:///Users/me/checkout/docs.command) first, **now**")
+        XCTAssertEqual(String(text.characters), "Read documentation first, now")
+        XCTAssertTrue(text.runs.contains { $0.inlinePresentationIntent == .stronglyEmphasized }, "formatting stays")
+    }
 }

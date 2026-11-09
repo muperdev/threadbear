@@ -49,29 +49,34 @@ import Testing
         #expect(after.landed(in: after).isEmpty)
     }
 
-    /// The first three headings and their rows are one flat run of list rows, so
-    /// a row's id is the same under any heading and the List moves it, rather
-    /// than fading it out of one section and into another.
-    @Test func linesKeepARowsIdAcrossHeadings() {
-        let before = sections(thread("a", status: .running, working: "Busy"), thread("b"))
-        let after = sections(thread("a"), thread("b"))
-        let unfolded: (PhoneSection) -> Bool = { _ in false }
-        #expect(before.lines(folded: unfolded).map(\.id) == ["heading:inbox", "b", "heading:running", "a"])
-        #expect(after.lines(folded: unfolded).map(\.id).contains("a"))
-        #expect(!after.lines(folded: unfolded).map(\.id).contains("heading:running"))
+    /// Starred, Inbox and Running are real sections again, so their headings
+    /// stick while scrolling, and a List only fades a row from one section to
+    /// another. These are the rows the inbox flies across instead.
+    @Test func theRowsThatTravelAreTheOnesUnderANewHeading() {
+        let before = sections(thread("a", status: .running, working: "Busy"), thread("b"), thread("c", starred: true), thread("e"))
+        let after = sections(thread("a"), thread("b"), thread("c"), thread("d"), thread("e", starred: true))
+        #expect(before.moves(to: after) == [
+            "a": InboxMove(from: .running, to: .inbox),
+            "c": InboxMove(from: .starred, to: .inbox),
+            "e": InboxMove(from: .inbox, to: .starred),
+        ])
+        #expect(after.moves(to: after).isEmpty)
     }
 
-    @Test func aFoldedHeadingKeepsItsLineAndHidesItsRows() {
-        let list = sections(thread("a", status: .running, working: "Busy"), thread("b", starred: true), thread("c"))
-        let lines = list.lines(folded: { $0 == .running })
-        #expect(lines.map(\.id) == ["heading:starred", "b", "heading:inbox", "c", "heading:running"])
+    /// A new thread or one that's gone has nowhere to travel from or to: it just
+    /// turns up or goes, and a new one still gets its mark popped in.
+    @Test func aThreadTurningUpOrLeavingDoesntTravel() {
+        let before = sections(thread("a"), thread("gone", status: .running, working: "Busy"))
+        let after = sections(thread("a"), thread("new"))
+        #expect(before.moves(to: after).isEmpty)
+        #expect(before.landed(in: after) == ["new"])
     }
 
-    @Test func anEmptyInboxHasTheEmptyLineWhereItsHeadingWas() {
-        let list = sections(thread("a", status: .running, working: "Busy"))
-        #expect(list.lines(folded: { _ in false }).map(\.id) == ["inbox-zero", "heading:running", "a"])
-        // Under a star that needs him, nothing says the inbox is empty.
-        let starred = sections(PhoneThread(threadId: "s", title: "s", needsYou: true, lastActivityAt: now, starredAt: now))
-        #expect(starred.lines(folded: { _ in false }).map(\.id) == ["heading:starred", "s"])
+    /// Waiting on a schedule puts a row under Hibernating, which travels too.
+    @Test func aScheduledRowTravelsToHibernating() {
+        let wake = PhoneSchedule(id: "s", title: "Look again", whenText: "Tomorrow", threadId: "a", nextRunAt: now.addingTimeInterval(3600))
+        let before = InboxSections.build([thread("a", status: .running, working: "Busy")], now: now)
+        let after = InboxSections.build([thread("a")], now: now, wakes: ["a": wake])
+        #expect(before.moves(to: after) == ["a": InboxMove(from: .running, to: .hibernating)])
     }
 }

@@ -109,37 +109,42 @@ extension AppModel {
     /// Asks for a folder and adds it: the project's patches load from it.
     func addProjectFolder(_ id: String) {
         guard let project = project(id) else { return }
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Add"
-        panel.message = "Add a folder to \(project.title)"
-        if let first = project.folders.first { panel.directoryURL = URL(fileURLWithPath: first).deletingLastPathComponent() }
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        let path = url.standardizedFileURL.path
-        guard !project.folders.contains(path) else { return }
-        updateProject(id, ProjectUpdate(folders: project.folders + [path]))
+        projectFilePicker.choose(configure: { panel in
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.allowsMultipleSelection = false
+            panel.prompt = "Add"
+            panel.message = "Add a folder to \(project.title)"
+            if let first = project.folders.first { panel.directoryURL = URL(fileURLWithPath: first).deletingLastPathComponent() }
+        }) { [weak self] url in
+            // The project may have changed while the picker was open.
+            guard let self, let url, let current = self.project(id) else { return }
+            let path = url.standardizedFileURL.path
+            guard !current.folders.contains(path) else { return }
+            self.updateProject(id, ProjectUpdate(folders: current.folders + [path]))
+        }
     }
 
     /// Asks for a picture and makes it the project's icon, which the
     /// librarian then leaves alone.
     func chooseProjectIcon(_ id: String) {
         guard let client, let project = project(id) else { return }
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.png, .jpeg, .webP, .svg, .icns, .ico, .gif, .heic, .tiff]
-        panel.prompt = "Use"
-        panel.message = "Choose an icon for \(project.title)"
-        if let first = project.folders.first { panel.directoryURL = URL(fileURLWithPath: first) }
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        whileBusy(BusyKey.projectIcon(id)) { [self] in
-            do {
-                replace(try await client.setProjectIcon(id, path: url.standardizedFileURL.path))
-            } catch {
-                show(error)
+        projectFilePicker.choose(configure: { panel in
+            panel.canChooseDirectories = false
+            panel.canChooseFiles = true
+            panel.allowsMultipleSelection = false
+            panel.allowedContentTypes = [.png, .jpeg, .webP, .svg, .icns, .ico, .gif, .heic, .tiff]
+            panel.prompt = "Use"
+            panel.message = "Choose an icon for \(project.title)"
+            if let first = project.folders.first { panel.directoryURL = URL(fileURLWithPath: first) }
+        }) { [weak self] url in
+            guard let self, let url, self.project(id) != nil else { return }
+            self.whileBusy(BusyKey.projectIcon(id)) { [self] in
+                do {
+                    self.replace(try await client.setProjectIcon(id, path: url.standardizedFileURL.path))
+                } catch {
+                    self.show(error)
+                }
             }
         }
     }

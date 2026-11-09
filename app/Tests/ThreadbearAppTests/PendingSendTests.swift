@@ -315,7 +315,7 @@ final class PendingSendTests: XCTestCase {
         let text = try XCTUnwrap(params["text"] as? String)
         XCTAssertTrue(text.contains("> Couldn't trust poddle: Thread not found: th2"))
         XCTAssertTrue(text.contains("In thread th2 (\"Poddle\"), folder /Users/m/dev/me/poddle"), "the thread acted on, not the one open")
-        XCTAssertTrue(text.contains("Mike was pressing Trust on a patch in the Patches panel"))
+        XCTAssertTrue(text.contains("The user was pressing Trust on a patch in the Patches panel"))
         XCTAssertNotNil(app.errorMessage, "the bar stays until the thread is made")
         transport.answer("threads.create", ["thread": ["id": "th_new", "title": "Error"]])
         try await until { app.selection == "th_new" }

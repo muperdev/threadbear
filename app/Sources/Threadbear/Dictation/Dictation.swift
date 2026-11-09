@@ -6,7 +6,7 @@ import ThreadbearCore
 /// Press it and talk, and the words appear in the message box where the
 /// cursor was as they're heard; press it again and the last words settle.
 /// The message isn't sent: it's in the box to edit or send as typed text
-/// would be. Unlike Voice mode (VoiceMode), nothing is read out, and
+/// would be. Nothing is read out, and
 /// there's no thread conversation, only typing by voice.
 @MainActor
 @Observable

@@ -123,7 +123,7 @@ final class RowSwipeController {
                 if !leaving { cancelGesture() }
                 return false
             }
-            swipe.begin(rightTaken: SwipeNavigation.shared.takesBack)
+            swipe.begin(rightTaken: SwipeNavigation.shared.takesFingersRight(inverted: event.isDirectionInvertedFromDevice))
             eatingMomentum = false
         }
         if event.phase.contains(.changed) || event.phase.contains(.began) {
@@ -221,16 +221,19 @@ enum RowSwipeEvents {
     /// system's scrolling runs.
     /// `middle`: over the middle of the window (a page swipe), rather
     /// than the sidebar's rows.
-    static func event(dx: Double, dy: Double = 0, phase: Phase, middle: Bool = false) -> NSEvent? {
+    /// `content`: `dx` and `dy` are the content's way instead (positive
+    /// right and down as it scrolls), the same whatever the system's
+    /// natural scrolling is, for page swipes, where right is Back.
+    static func event(dx: Double, dy: Double = 0, phase: Phase, middle: Bool = false, content: Bool = false) -> NSEvent? {
         guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: 0, wheel3: 0) else { return nil }
         cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
         cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase.rawValue)
         guard let probe = NSEvent(cgEvent: cg) else { return nil }
-        let delta = probe.isDirectionInvertedFromDevice ? dx : -dx
+        let delta = content || probe.isDirectionInvertedFromDevice ? dx : -dx
         cg.setDoubleValueField(.scrollWheelEventPointDeltaAxis2, value: delta)
         cg.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2, value: delta)
         // Up and down the way the system scrolls, as across.
-        let vertical = probe.isDirectionInvertedFromDevice ? dy : -dy
+        let vertical = content || probe.isDirectionInvertedFromDevice ? dy : -dy
         cg.setDoubleValueField(.scrollWheelEventPointDeltaAxis1, value: vertical)
         cg.setDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1, value: vertical)
         if let window = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) {

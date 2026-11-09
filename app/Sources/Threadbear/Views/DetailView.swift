@@ -693,6 +693,32 @@ private struct NewThreadHeading: View {
     }
 }
 
+/// "In builder-skills": the project a thread started from its page joins
+/// as it's made, with an x to start it outside the project instead.
+private struct NewThreadProjectChip: View {
+    @Environment(AppModel.self) private var app
+    let project: Project
+
+    var body: some View {
+        HStack(spacing: zoomed(6)) {
+            ProjectIconView(project: project, size: 16)
+            Text("In \(project.title)")
+                .font(.system(size: TypeScale.label, weight: .medium))
+            Button { app.newThreadProjectId = nil } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: zoomed(9), weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .tip("Start it outside the project")
+        }
+        .padding(.horizontal, zoomed(10))
+        .padding(.vertical, zoomed(5))
+        .background(Capsule().fill(Color.primary.opacity(0.06)))
+        .tip("The thread joins \(project.title) as it starts, so the agent has its goals from the first message")
+    }
+}
+
 /// "Starts in misc on bearworks": the folder and account the composer's
 /// menus are set to (with pools, "on the Claude pool", or the login a
 /// pinned draft is on). Then each login as a card with the room it has
@@ -713,6 +739,9 @@ private struct NewThreadNote: View {
             ?? (app.newThreadUsesPools ? AccountName.login(account, accounts: logins.accounts) : AccountName.short(account, accounts: logins.accounts))
         let title = logins.account(account).map(AccountName.title) ?? account
         VStack(spacing: zoomed(14)) {
+            if let projectId = app.newThreadProjectId, let project = app.projects.first(where: { $0.id == projectId }) {
+                NewThreadProjectChip(project: project)
+            }
             if let runner, app.newThreadLogins == nil {
                 // Its logins and folders come with its hello.
                 Text("Starts on \(runner.name)")

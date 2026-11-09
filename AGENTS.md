@@ -260,7 +260,8 @@ if `tb` isn't found (an older runner, or outside a thread), use
   (`scripts/check-remote.sh`); one run at a time, so it may say it's
   waiting for another thread's. A host short of disk is passed over (8 GiB
   free for Swift, 2 otherwise), and if none has room the check fails and
-  names them. If the host can't be reached it runs here
+  names them. A host that stops answering partway is dropped for the next
+  one. If none can be reached it runs here
   at low priority. `--e2e` always runs here, as it needs the claude login. It skips the deploy tests and BearDock's
   unless something they cover changed from main (`--all` runs them
   anyway). The app's part is under a minute with a warm `app/.build` and
@@ -289,16 +290,13 @@ if `tb` isn't found (an older runner, or outside a thread), use
 - A thread started somewhere else (like `~/dev/me/misc`) still needs a
   worktree of its own, as another thread may be editing the main
   checkout. Borrow a spare: `./borrow-worktree.sh` in the main checkout
-  prints one, detached at main and set up, with warm build caches. Don't
-  `git worktree add` a fresh one: its first app build takes 5 to 10
-  minutes. Commit there, then land while holding the same repo lock as
-  `tb land`: `threadbear-land.lock` in `git rev-parse --git-common-dir`.
-  On a Mac, run a script under `/usr/bin/lockf -k <lockfile>` (Linux:
-  `flock -x <lockfile>`). That script must rebase, run the required check
-  on the combined revision, and fast-forward main, all while holding the
-  lock. A plain `git merge` bypasses queued landings and wastes their
-  checks. Don't call a lock-taking `tb land` inside that script. Then run
+  prints one, on a `thread/borrow-<slot>-<time>` branch from main, set
+  up, with warm build caches. Don't `git worktree add` a fresh one: its
+  first app build takes 5 to 10 minutes. Commit there and run `tb land`
+  in it (`runner/bin/tb` if `tb` isn't found), then
   `./borrow-worktree.sh --give-back <dir>` so the next thread gets it.
+  Landing any other way holds `tb land`'s lock throughout
+  (docs/thread-worktrees.md); a plain `git merge` wastes queued checks.
 - The live runner runs a release, a snapshot, so editing `runner/` doesn't
   change it. To try a runner change, start `runner/scripts/dev-runner.sh` in
   the background and use the `<dev home>/tb` it prints (a bare `tb` reaches

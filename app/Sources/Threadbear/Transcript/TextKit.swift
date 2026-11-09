@@ -230,6 +230,14 @@ final class TextMeasurer {
 }
 
 /// A read-only, selectable TextKit 1 text view for transcript text.
+/// A view that holds one thread's transcript text: the transcript table,
+/// or the composer card under it. TranscriptTextView asks the nearest one
+/// whose thread it's in (`transcriptThreadId`).
+@MainActor
+protocol TranscriptThreadHost: AnyObject {
+    var hostedThreadId: String? { get }
+}
+
 final class TranscriptTextView: NSTextView {
     // Clicks count while Threadbear isn't the app in front (FirstClick.swift).
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -654,7 +662,7 @@ final class TranscriptTextView: NSTextView {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(block.source, forType: .string)
         case .open:
-            RichRenderer.shared.openBeside(block)
+            RichRenderer.shared.openWindow(block)
         }
     }
 
@@ -1223,11 +1231,13 @@ final class TranscriptTextView: NSTextView {
         guard !text.isEmpty else { return }
         let app = AppModel.shared
         switch action {
+        // Explain and Quote only put words in front of Mike, so text that
+        // isn't in a thread's transcript goes to the main panel's thread.
         case .explain:
-            guard let threadId = transcriptThreadId else { return }
+            guard let threadId = transcriptThreadId ?? app.selection else { return }
             app.explain(text, message: selectionMessage, in: threadId)
         case .quote:
-            guard let threadId = transcriptThreadId else { return }
+            guard let threadId = transcriptThreadId ?? app.selection else { return }
             app.quoteInComposer(text, in: threadId)
         case .copy:
             let range = selectedRange()
@@ -1236,14 +1246,25 @@ final class TranscriptTextView: NSTextView {
         }
     }
 
-    /// The thread whose transcript this text is in: the main panel's, or
-    /// one open in a panel of its own. A reply button is only pressed from
-    /// its own thread's transcript, so a `button:` link an agent copied
-    /// from another thread can't press that thread's (Codex's review, 7 Nov).
-    private var transcriptThreadId: String? {
-        var view = superview
-        while let v = view, !(v is TranscriptTableView) { view = v.superview }
-        return (view as? TranscriptTableView)?.controller?.session?.threadId ?? AppModel.shared.selection
+    /// The thread whose transcript (or composer card) this text is in: the
+    /// main panel's, or one open in a panel of its own. Nil when it isn't
+    /// in either. A reply button is only pressed from its own thread's
+    /// transcript, so a `button:` link an agent copied from another thread
+    /// can't press that thread's (Codex's review, 7 Nov). Never the main
+    /// panel's selection: a thread in a panel of its own puts its asks in
+    /// a composer card outside any transcript table, and guessing the
+    /// selection there let a restricted thread's card press a full-access
+    /// thread's button (Daybreak, 8 Nov).
+    var transcriptThreadId: String? { Self.threadId(around: self) }
+
+    /// The nearest view above `view` that knows its thread, and its thread.
+    static func threadId(around view: NSView) -> String? {
+        var next = view.superview
+        while let v = next {
+            if let host = v as? TranscriptThreadHost { return host.hostedThreadId }
+            next = v.superview
+        }
+        return nil
     }
 
     func closeSelectionBar() {

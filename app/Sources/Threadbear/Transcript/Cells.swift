@@ -14,6 +14,10 @@ protocol RowCellDelegate: AnyObject {
     func loadStartRequest(_ approvalId: String)
     /// The card's answer is on its way: a spinner, and no more clicks.
     func isAnswering(_ approvalId: String) -> Bool
+    /// A card with queued calls (docs/protocol.md, "Queued calls"): which
+    /// calls Mike has unticked, by item id, and ticking one again.
+    func untickedCalls(_ approvalId: String) -> Set<String>
+    func toggleQueuedCall(approvalId: String, itemId: String)
     func questionDraft(_ approvalId: String) -> [Int: Set<String>]
     func setQuestionDraft(_ approvalId: String, _ draft: [Int: Set<String>])
     /// A secret card (docs/protocol.md, "Secrets"): where its answer is,
@@ -65,6 +69,8 @@ extension RowCellDelegate {
     var linkThreadId: String? { nil }
     func secretState(_ approvalId: String) -> SecretCardState { .ready }
     func isAnswering(_ approvalId: String) -> Bool { false }
+    func untickedCalls(_ approvalId: String) -> Set<String> { [] }
+    func toggleQueuedCall(approvalId: String, itemId: String) {}
     func answerSecret(approvalId: String, _ answer: SecretAnswer) {}
     func secretEdited(_ approvalId: String) {}
     func askNoteChanged(_ card: AsksCard, ask: Int, note: AskNote) {}
@@ -1563,6 +1569,10 @@ final class ApprovalRowCell: RowCellView {
     /// Beside the buttons while the answer is on its way.
     let spinner = Spinner.make()
     private var approvalId = ""
+    /// A card with queued calls (docs/protocol.md, "Queued calls"): one
+    /// entry per call, its own first, and the calls' item ids in order.
+    private var stackRows: [(rule: FillView, head: TranscriptTextView, box: FillView, body: TranscriptTextView, tick: PillButton, cross: PillButton)] = []
+    private var stackIds: [String] = []
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1587,6 +1597,13 @@ final class ApprovalRowCell: RowCellView {
         // Only a waiting approval gets this card; once answered it's a work
         // line (HeaderRowCell).
         let pending = item.resolution == nil
+        if pending, !item.queued.isEmpty, render.parts.count == item.queued.count + 1 {
+            configureStacked(item, render: render, x: x, width: width)
+            return
+        }
+        hideStack()
+        payloadBox.isHidden = false
+        payloadView.isHidden = false
         let top = RowMetrics.rowTop + zoomed(2)
         card.frame = NSRect(x: x, y: top, width: width, height: render.height - top - RowMetrics.rowBottom - zoomed(2))
         card.set(fill: Theme.cardBackground, stroke: Theme.cardBorder, radius: RowMetrics.cardRadius, accent: .controlAccentColor)
@@ -1631,14 +1648,128 @@ final class ApprovalRowCell: RowCellView {
         Spinner.show(spinner, busy, at: NSPoint(x: buttonX + zoomed(2), y: y + RowMetrics.buttonHeight / 2))
     }
 
+    /// The card with queued calls: each call's title with its tick and
+    /// cross, then its diff or command, then Allow (as many as are ticked)
+    /// and Deny all. No Always allow: a rule from one click on many calls
+    /// isn't something Mike was asked about.
+    private func configureStacked(_ item: ApprovalItem, render: RowRender, x: CGFloat, width: CGFloat) {
+        let pad = RowMetrics.cardPad
+        let top = RowMetrics.rowTop + zoomed(2)
+        card.frame = NSRect(x: x, y: top, width: width, height: render.height - top - RowMetrics.rowBottom - zoomed(2))
+        card.set(fill: Theme.cardBackground, stroke: Theme.cardBorder, radius: RowMetrics.cardRadius, accent: .controlAccentColor)
+        let left = x + pad + RowMetrics.accentBar
+        let inner = width - pad * 2 - RowMetrics.accentBar
+        var y = card.frame.minY + pad
+        titleView.place(NSRect(x: left, y: y, width: inner, height: render.textSize.height))
+        titleView.show(render.text ?? NSAttributedString(), width: inner)
+        titleView.setTip("")
+        y += render.textSize.height
+        payloadBox.isHidden = true
+        payloadView.isHidden = true
+        payloadView.clear()
+
+        let calls = [item.request] + item.queued
+        // A queued call's approvalId is its own item id (ApprovalQueue).
+        stackIds = [item.request.itemId ?? ""] + item.queued.map(\.approvalId)
+        let unticked = delegate?.untickedCalls(approvalId) ?? []
+        let busy = delegate?.isAnswering(approvalId) == true
+        for (index, part) in render.parts.enumerated() {
+            if stackRows.count <= index {
+                let entry = (rule: FillView(), head: TranscriptTextView(), box: FillView(), body: TranscriptTextView(),
+                             tick: PillButton(pill: "✓"), cross: PillButton(pill: "✕"))
+                entry.tick.target = self
+                entry.tick.action = #selector(tickClicked(_:))
+                entry.cross.target = self
+                entry.cross.action = #selector(crossClicked(_:))
+                entry.tick.setTip("Allow this one")
+                entry.cross.setTip("Don't allow this one; the agent is told no")
+                [entry.rule, entry.head, entry.box, entry.body, entry.tick, entry.cross].forEach(addSubview)
+                stackRows.append(entry)
+            }
+            let entry = stackRows[index]
+            let ticked = !unticked.contains(stackIds[index])
+            for view in [entry.rule, entry.head, entry.box, entry.body, entry.tick, entry.cross] as [NSView] { view.isHidden = false }
+            entry.tick.tag = index
+            entry.cross.tag = index
+            entry.rule.set(fill: Theme.hairline, stroke: nil, radius: 0)
+            entry.rule.frame = NSRect(x: left, y: y + StackedApproval.gap / 2, width: inner, height: 0.5)
+            y += StackedApproval.gap
+            let headHeight = render.lineHeights.indices.contains(index) ? render.lineHeights[index] : 0
+            let rowHeight = max(headHeight, StackedApproval.toggleHeight)
+            entry.head.place(NSRect(x: left, y: y + (rowHeight - headHeight) / 2, width: inner - StackedApproval.togglesWidth, height: headHeight))
+            entry.head.show(part.leading, width: inner - StackedApproval.togglesWidth)
+            entry.head.setTip(ApprovalText.filePath(calls[index]).map { ToolPresentation.shortTitle($0, limit: 400) } ?? "")
+            let toggleY = y + (rowHeight - StackedApproval.toggleHeight) / 2
+            entry.cross.frame = NSRect(x: left + inner - StackedApproval.toggleWidth, y: toggleY, width: StackedApproval.toggleWidth, height: StackedApproval.toggleHeight)
+            entry.tick.frame = entry.cross.frame.offsetBy(dx: -(StackedApproval.toggleWidth + zoomed(6)), dy: 0)
+            // The one it's set to is filled.
+            entry.tick.prominent = ticked
+            entry.cross.prominent = !ticked
+            entry.tick.isEnabled = !busy
+            entry.cross.isEnabled = !busy
+            // An unticked call stays readable but steps back.
+            entry.head.alphaValue = ticked ? 1 : 0.45
+            entry.box.alphaValue = ticked ? 1 : 0.45
+            entry.body.alphaValue = ticked ? 1 : 0.45
+            y += rowHeight + zoomed(8)
+            entry.box.set(fill: Theme.codeBackground, stroke: nil, radius: zoomed(8))
+            entry.box.frame = NSRect(x: left, y: y, width: inner, height: part.bodyHeight + RowMetrics.boxPad * 2)
+            entry.body.place(entry.box.frame.insetBy(dx: RowMetrics.boxPad, dy: RowMetrics.boxPad))
+            entry.body.show(part.body ?? NSAttributedString(), width: inner - RowMetrics.boxPad * 2)
+            y = entry.box.frame.maxY
+        }
+        for entry in stackRows.dropFirst(render.parts.count) { hide(entry) }
+        y += zoomed(12)
+
+        let count = stackIds.filter { !unticked.contains($0) }.count
+        allow.title = "Allow \(count)"
+        allow.shortcut = "⏎"
+        allow.setTip(count == stackIds.count ? "Let it do all of these (Return)" : "Let it do the ticked ones; the rest are refused (Return)")
+        deny.title = "Deny all"
+        deny.setTip("Don't let it do any of these; the agent is told no")
+        always.isHidden = true
+        var buttonX = left
+        for button in [allow, deny] {
+            button.isHidden = false
+            button.isEnabled = !busy && (button !== allow || count > 0)
+            button.frame = NSRect(x: buttonX, y: y, width: max(zoomed(76), button.fittingWidth), height: RowMetrics.buttonHeight)
+            buttonX = button.frame.maxX + zoomed(8)
+        }
+        Spinner.show(spinner, busy, at: NSPoint(x: buttonX + zoomed(2), y: y + RowMetrics.buttonHeight / 2))
+    }
+
+    private func hide(_ entry: (rule: FillView, head: TranscriptTextView, box: FillView, body: TranscriptTextView, tick: PillButton, cross: PillButton)) {
+        for view in [entry.rule, entry.head, entry.box, entry.body, entry.tick, entry.cross] as [NSView] { view.isHidden = true }
+        entry.head.clear()
+        entry.body.clear()
+    }
+
+    private func hideStack() {
+        stackRows.forEach(hide)
+        stackIds = []
+    }
+
+    /// The tick or cross on a call: sets it to that, whichever it was.
+    @objc private func tickClicked(_ sender: NSButton) { setTicked(sender.tag, true) }
+    @objc private func crossClicked(_ sender: NSButton) { setTicked(sender.tag, false) }
+
+    private func setTicked(_ index: Int, _ ticked: Bool) {
+        guard stackIds.indices.contains(index) else { return }
+        let id = stackIds[index]
+        let isTicked = !(delegate?.untickedCalls(approvalId).contains(id) ?? false)
+        if isTicked != ticked { delegate?.toggleQueuedCall(approvalId: approvalId, itemId: id) }
+    }
+
     override func releaseContent() {
         titleView.park()
         payloadView.park()
+        stackRows.forEach { $0.head.park(); $0.body.park() }
     }
 
     override func updateSlices(force: Bool = false) {
         titleView.updateSlice(force: force)
         payloadView.updateSlice(force: force)
+        stackRows.forEach { $0.head.updateSlice(force: force); $0.body.updateSlice(force: force) }
     }
 
     @objc private func allowClicked() { delegate?.respond(approvalId: approvalId, decision: .allow, answers: nil, message: nil) }

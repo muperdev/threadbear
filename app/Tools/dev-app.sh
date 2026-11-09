@@ -384,7 +384,14 @@ launch_app() {
   rm -f "$I_LOG"
   # open -g launches it without bringing it forward; the app then puts its
   # window behind everything as soon as it's there (Automation.swift).
-  open -g -n "$I_BUNDLE" --stdout "$I_DIR/app.stdout" --stderr "$I_DIR/app.stderr" --args "${app_args[@]}"
+  # BROWSERBEAR_HOME given to start points the Browser panel at a stand-in
+  # BrowserBear (a fake socket and agent/tabs.json) rather than the real one
+  # on this Mac, and rebuild keeps it. open doesn't pass the shell's
+  # environment on by itself.
+  local env_args=() bear_home=""
+  [ -f "$I_DIR/browserbear.home" ] && bear_home="$(cat "$I_DIR/browserbear.home")"
+  [[ -n "$bear_home" ]] && env_args+=(--env "BROWSERBEAR_HOME=$bear_home")
+  open -g -n ${env_args[@]+"${env_args[@]}"} "$I_BUNDLE" --stdout "$I_DIR/app.stdout" --stderr "$I_DIR/app.stderr" --args "${app_args[@]}"
   for i in $(seq 1 200); do
     pid="$(bundle_pid "$I_BUNDLE")"
     [ -n "$pid" ] && break
@@ -528,6 +535,7 @@ cmd_start() {
     # The date the bear goes by: its Santa hat, and bedtime under an empty Inbox.
     [ -z "$bear_date" ] || printf '%s\n' -ThreadbearBearDate "$bear_date"
   } >"$dir/app.args"
+  [[ -n "${BROWSERBEAR_HOME:-}" ]] && printf '%s' "$BROWSERBEAR_HOME" >"$dir/browserbear.home"
   launch_app
   trap - ERR
   CLEANUP_ID=""

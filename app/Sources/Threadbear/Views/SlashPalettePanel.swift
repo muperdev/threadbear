@@ -86,7 +86,12 @@ final class SlashPaletteCoordinator: NSObject, NSWindowDelegate {
     func show(_ content: AnyView) {
         guard let parent = anchor?.window else { return }
         let panel = self.panel ?? makePanel()
-        hosting?.rootView = AnyView(PaletteFrame(content: content, resize: self))
+        // A window of its own doesn't inherit the main window's openURL, so
+        // anything clickable in it goes through OpenGate here too, as a
+        // link from no thread (Daybreak, 8 Nov). Descriptions have no links
+        // now (SlashPalette.description); this is for whatever comes next.
+        hosting?.rootView = AnyView(PaletteFrame(content: content, resize: self)
+            .environment(\.openURL, OpenGate.urlAction(files: .unknown)))
         if panel.parent !== parent {
             panel.parent?.removeChildWindow(panel)
             parent.addChildWindow(panel, ordered: .above)

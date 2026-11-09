@@ -53,15 +53,6 @@ struct ThreadbearApp: App {
         .defaultLaunchBehavior(.presented)
         .restorationBehavior(.disabled)
         .commands {
-            // The app menu's Settings… made here rather than left to the
-            // Settings scene, so its key comes from the shortcut list and
-            // Settings > Keyboard can change it. It opens the same window.
-            CommandGroup(replacing: .appSettings) {
-                IconMenuItems {
-                    SettingsLink { Label("Settings…", systemImage: "gearshape") }
-                        .shortcut(.settings)
-                }
-            }
             // The Den, in place of the stock About panel.
             CommandGroup(replacing: .appInfo) {
                 IconMenuItems {
@@ -191,6 +182,19 @@ struct ThreadbearApp: App {
             SettingsView()
                 .environment(app)
         }
+        // The app menu's Settings… made here rather than left to the
+        // Settings scene, so its key comes from the shortcut list and
+        // Settings > Keyboard can change it. It opens the same window.
+        // On the Settings scene, not the main window: from there the
+        // scene's own Settings… stayed beside it, two in the menu (7 Nov).
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                IconMenuItems {
+                    SettingsLink { Label("Settings…", systemImage: "gearshape") }
+                        .shortcut(.settings)
+                }
+            }
+        }
     }
 }
 
@@ -199,8 +203,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var linkedThread: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // A voice server the last run left behind by crashing (VoiceServer).
-        VoiceServer.reapLeftover()
         MainActor.assumeIsolated {
             let app = AppModel.shared
             let arguments = CommandLine.arguments
@@ -282,8 +284,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationWillTerminate(_ notification: Notification) {
         MainActor.assumeIsolated {
             ActivityRecorder.shared.quit()
-            VoiceMode.shared.stop()
-            VoiceServer.shared.stop()
             AppUpdater.shared.applyAtQuit()
         }
     }

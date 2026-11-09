@@ -5,8 +5,8 @@ import SwiftUI
 enum Juice {
     static var reduceMotion: Bool { UIAccessibility.isReduceMotionEnabled }
 
-    /// Rows gliding from one heading to another, and the rest making room. Under
-    /// Reduce Motion, nothing: the list just changes.
+    /// A row flying from one heading to another (RowFlight.swift), and the rest
+    /// making room. Under Reduce Motion, nothing: the list just changes.
     static var rows: Animation? {
         reduceMotion ? nil : .snappy(duration: 0.32, extraBounce: 0.04)
     }

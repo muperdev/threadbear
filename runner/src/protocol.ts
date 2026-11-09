@@ -289,8 +289,11 @@ export type PanelPlace = 'tab' | 'left' | 'right' | 'top' | 'bottom' | 'window';
 export type PanelRequest = {
   id: string;
   panel: string; // "highlights", "patches", "usage", "updates", "connectors", or one of the thread's panels' ids
-  title: string; // "Highlights", "Convex"
+  title: string; // "Highlights", "Convex"; with highlight, the pin's title
   where?: PanelPlace;
+  // pin with show: the highlight to open in the pane, over Highlights. An
+  // app that doesn't know this opens Highlights.
+  highlight?: string;
   at: string;
 };
 
@@ -610,6 +613,11 @@ export type PlanEntry = { text: string; status: 'pending' | 'in_progress' | 'com
 export type ApprovalOption = 'allow' | 'allowAlways' | 'deny';
 export type ApprovalDecision = 'allow' | 'allowAlways' | 'deny' | 'answered' | 'expired';
 
+// A call waiting behind an approval card, as its own card would show it.
+export type QueuedCall = { itemId: string; name: string; title: string; input: Record<string, unknown> };
+// How Mike answered each queued call, by itemId.
+export type QueuedAnswers = Record<string, 'allow' | 'deny'>;
+
 export type Question = {
   question: string;
   header?: string;
@@ -727,6 +735,9 @@ export type EventBody =
       input: Record<string, unknown>;
       options: ApprovalOption[];
     }
+  // The agent's other calls from the same reply, waiting behind this card
+  // (docs/protocol.md, "Queued calls"). A later one replaces the list.
+  | { type: 'approval.queued'; approvalId: string; calls: QueuedCall[] }
   | { type: 'question.requested'; approvalId: string; itemId?: string; questions: Question[] }
   // An agent's ask_secret (docs/protocol.md, "Secrets"): never the value.
   | { type: 'secret.requested'; approvalId: string; itemId?: string; label: string; reason: string; placeholder?: string }
@@ -826,6 +837,7 @@ export const PERSISTED_TYPES = new Set<string>([
   'tool.result',
   'edit.diff',
   'approval.requested',
+  'approval.queued',
   'question.requested',
   'secret.requested',
   'approval.resolved',

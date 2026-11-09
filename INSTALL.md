@@ -154,7 +154,8 @@ Hetzner cloud server with 8 GB. Do this as an ordinary user with sudo, not root.
 
 1. **Packages:** `sudo apt-get install -y git build-essential imagemagick
    librsvg2-bin bubblewrap jq lsof` (ImageMagick and rsvg-convert stand in for
-   macOS's sips and Quick Look when pictures are converted; Codex's sandbox
+   macOS's sips and Quick Look when pictures are converted, rsvg-convert
+   alone drawing SVGs; Codex's sandbox
    wants bubblewrap; lsof checks who's on the other end of a handover's
    socket, and minimal images leave it out). zsh isn't needed: patch
    commands run in the account's own shell, else bash. Set the account's full name, which agents are told:

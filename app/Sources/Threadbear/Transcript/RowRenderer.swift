@@ -84,6 +84,24 @@ enum RowMetrics {
     }
 }
 
+/// A card with calls queued on it (docs/protocol.md, "Queued calls"):
+/// what's shared by its measuring (RowRenderer) and its layout
+/// (ApprovalRowCell).
+enum StackedApproval {
+    static var gap: CGFloat { zoomed(22) }
+    static var toggleHeight: CGFloat { zoomed(24) }
+    static var toggleWidth: CGFloat { zoomed(34) }
+    /// The tick and cross beside each call's title.
+    static var togglesWidth: CGFloat { toggleWidth * 2 + zoomed(6) + zoomed(12) }
+
+    /// "Make these 4 changes?" when every call edits or writes a file,
+    /// "Allow these 4 steps?" otherwise.
+    static func title(_ calls: [ApprovalRequest]) -> String {
+        let edits: Set<String> = ["Edit", "MultiEdit", "Write", "NotebookEdit"]
+        return calls.allSatisfy { edits.contains($0.name) } ? "Make these \(calls.count) changes?" : "Allow these \(calls.count) steps?"
+    }
+}
+
 /// Everything a cell needs to draw one row at one width, plus its height.
 /// Immutable once built, so it's shared across threads.
 final class RowRender: @unchecked Sendable {
@@ -413,6 +431,7 @@ enum RowRenderer {
                                  detail: body, detailSize: size)
             }
             let inner = width - RowMetrics.cardPad * 2 - RowMetrics.accentBar
+            if !item.queued.isEmpty { return stackedApprovalRender(item, inner: inner, vertical: vertical, measurer: measurer) }
             let title = approvalTitleText(item)
             let titleSize = measurer.measure(title, width: inner)
             let payload = item.isStartRequest ? startRequestPayload(item.startRequest) : approvalPayload(item.request)
@@ -1031,6 +1050,31 @@ enum RowRenderer {
 
     // MARK: Cards
 
+    /// A card with the agent's other calls queued on it (docs/protocol.md,
+    /// "Queued calls"), the one Mike picked from mockups (8 Nov 2026): its
+    /// own call and each queued one in turn, each with its title, its
+    /// diff or command, and a tick and cross; Allow and Deny all under
+    /// them. `parts` has a part per call, `lineHeights` each title's height.
+    static func stackedApprovalRender(_ item: ApprovalItem, inner: CGFloat, vertical: CGFloat, measurer: TextMeasurer) -> RowRender {
+        let calls = [item.request] + item.queued
+        let title = NSAttributedString(string: StackedApproval.title(calls), attributes: Theme.text(Theme.cardTitleFont, line: TypeScale.scaled(20)))
+        let titleSize = measurer.measure(title, width: inner)
+        var height = RowMetrics.cardPad * 2 + titleSize.height
+        var parts: [RowRender.Part] = []
+        var heads: [CGFloat] = []
+        for call in calls {
+            let head = approvalTitleText(ApprovalItem(request: call, root: item.root))
+            let headHeight = measurer.measure(head, width: inner - StackedApproval.togglesWidth).height
+            let body = approvalPayload(call)
+            let bodyHeight = measurer.measure(body, width: inner - RowMetrics.boxPad * 2).height
+            parts.append(RowRender.Part(leading: head, body: body, bodyHeight: bodyHeight))
+            heads.append(headHeight)
+            height += StackedApproval.gap + max(headHeight, StackedApproval.toggleHeight) + zoomed(8) + bodyHeight + RowMetrics.boxPad * 2
+        }
+        height += zoomed(12) + RowMetrics.buttonHeight
+        return RowRender(height: vertical + zoomed(4) + height, text: title, textSize: titleSize, lineHeights: heads, parts: parts)
+    }
+
     /// "Write release.sh?" and, for a file, its folder after it, dimmed, as
     /// file rows show it. The card's tooltip has the whole path.
     static func approvalTitleText(_ item: ApprovalItem) -> NSAttributedString {
@@ -1112,6 +1156,7 @@ enum RowRenderer {
         let output = NSMutableAttributedString(string: "\(info.request.runnerName) wants to start a thread on \(place)", attributes: titleAttributes)
         var notes: [String] = []
         if info.target == nil { notes.append("It asked for \u{201C}\(info.request.target)\u{201D}, which isn't one of your machines.") }
+        if let folder = info.missingFolder { notes.append("\(folder) isn't a folder on this Mac. Start it sends the request back, to ask again with one that is.") }
         if let why = info.request.why?.trimmingCharacters(in: .whitespacesAndNewlines), !why.isEmpty { notes.append(why) }
         if !notes.isEmpty { output.append(NSAttributedString(string: "\n" + notes.joined(separator: "\n"), attributes: quiet)) }
         return output

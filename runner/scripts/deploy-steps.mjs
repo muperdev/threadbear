@@ -45,7 +45,10 @@ export function step(name, cmd, args, opts, io = {}) {
   const { say = console.log, write = (s) => process.stdout.write(s), error = console.error, spawn = spawnSync, tmpdir = os.tmpdir() } = io;
   write(`${name}... `);
   const started = Date.now();
-  const logFile = path.join(tmpdir, `threadbear-deploy-${process.pid}-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.log`);
+  // The name is cut short for the file: a rerun of a dozen failed files made
+  // a name past macOS's 255 bytes, and the update died with ENAMETOOLONG (7 Nov).
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 60).replace(/-+$/, '');
+  const logFile = path.join(tmpdir, `threadbear-deploy-${process.pid}-${slug}.log`);
   const fd = fs.openSync(logFile, 'w');
   const r = spawn(cmd, args, { ...opts, stdio: ['ignore', fd, fd] });
   fs.closeSync(fd);

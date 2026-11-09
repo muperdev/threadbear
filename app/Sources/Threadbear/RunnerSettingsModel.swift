@@ -2,7 +2,7 @@ import AppKit
 import ThreadbearCore
 
 enum SettingsTab: String, Hashable, CaseIterable {
-    case general, voice, dictation, models, pools, runners, devices, keyboard
+    case general, dictation, models, pools, runners, devices, keyboard
 }
 
 /// The Settings window's side of AppModel. Everything in it is the

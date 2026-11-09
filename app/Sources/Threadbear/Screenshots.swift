@@ -330,6 +330,18 @@ enum ScreenshotRunner {
             app.usageShown = false
             try? await Task.sleep(for: .milliseconds(300))
         }
+        // 14r. The Runners panel in Mike's order, then its top card mid-drag
+        // (Mike, 8 Nov: the panel rearranges the same order as Settings).
+        if wanted("14r") {
+            app.runnersShown = true
+            try? await Task.sleep(for: .milliseconds(800))
+            await capture(window, dir.appendingPathComponent("14r-runners-panel.png"))
+            app.runnerPanelDragPreview = CGSize(width: 18, height: 70)
+            try? await Task.sleep(for: .milliseconds(800))
+            await capture(window, dir.appendingPathComponent("14s-runners-panel-dragging.png"))
+            app.runnerPanelDragPreview = nil
+            app.runnersShown = false
+        }
         // 15. The sidebar's Projects view: rows under a project's heading
         // name only the thread's other projects, or its folder.
         if wanted("15") {

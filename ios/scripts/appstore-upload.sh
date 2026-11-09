@@ -6,13 +6,20 @@
 #   ios/scripts/appstore-upload.sh            archive, export and validate a signed .ipa; no upload
 #   UPLOAD=1 ios/scripts/appstore-upload.sh   archive, export, then upload it to App Store Connect
 #   UPLOAD=1 BUILD_NUMBER=<b> ios/scripts/appstore-upload.sh
-#                                             upload a build already archived in OUT, without
-#                                             archiving it again
+#                                             upload a build this script already archived in
+#                                             OUT, without archiving it again
 #
 # Each run gets a new build number, the UTC time as YYMMDDHHMM (always increasing), unless
 # BUILD_NUMBER is set, like Walkies' and Quick Ask's (this script is theirs, copied). The version
 # (MARKETING_VERSION, 1.0.0) comes from the project. Everything lands in OUT (default
-# /tmp/threadbear-appstore/<build>); if OUT already has Threadbear.xcarchive, that archive is used.
+# ~/Library/Caches/Threadbear/ios-builds/appstore/<build>).
+#
+# OUT and the derived data (DD) must be this account's alone, mode 700 with no ACL letting anyone
+# else in (scripts/private-dir.mjs; move an old one away and a fresh one is made): they were
+# fixed names under /tmp until 8 Nov, where another account on the Mac could make the folder
+# first and plant an archive this script would then sign and upload. An archive already in OUT is
+# only reused when BUILD_NUMBER names it, this script finished it (archived.txt beside it), and
+# nothing in it belongs to or can be written by another account; otherwise it's archived afresh.
 #
 # `altool --validate-app` runs without UPLOAD=1 (VALIDATE=0 skips it) and is skipped with it, as
 # the upload validates the build anyway: on 7 Nov it sat silent for 8+ minutes while the upload on
@@ -21,6 +28,7 @@
 # The API key is Poddle's team-wide one (same team), read from ~/.config/poddle and never printed.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+umask 077  # what this makes is ours alone
 
 ASC_KEY_ID=${ASC_KEY_ID:-7SS6J9F98P}
 ASC_ISSUER_ID=${ASC_ISSUER_ID:-69a6de6f-a06e-47e3-e053-5b8c7c11a4d1}
@@ -28,14 +36,18 @@ KEY_DIR=${KEY_DIR:-$HOME/.config/poddle}
 ASC_KEY="$KEY_DIR/AuthKey_$ASC_KEY_ID.p8"
 TEAM_ID=4DTAZSZL6B
 BUILD=${BUILD_NUMBER:-$(date -u +%y%m%d%H%M)}
-OUT=${OUT:-/tmp/threadbear-appstore/$BUILD}
-DD=${DD:-/tmp/threadbear-dd-appstore}
-ARCHIVE="$OUT/Threadbear.xcarchive"
+BUILDS=$HOME/Library/Caches/Threadbear/ios-builds
+OUT=${OUT:-$BUILDS/appstore/$BUILD}
+DD=${DD:-$BUILDS/dd-appstore}
 
 [[ -f "$ASC_KEY" ]] || { echo "No App Store Connect API key at $ASC_KEY" >&2; exit 1; }
 auth=(-allowProvisioningUpdates -authenticationKeyPath "$ASC_KEY"
   -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
-mkdir -p "$OUT"
+# Makes OUT and DD (mode 700) if they're missing, stops if another account could get into either
+# or change a folder above, and from here on uses the real paths that were checked.
+OUT=$(node scripts/private-dir.mjs "$OUT") || exit 1
+DD=$(node scripts/private-dir.mjs "$DD") || exit 1
+ARCHIVE="$OUT/Threadbear.xcarchive"
 
 # The export options: App Store Connect distribution, Xcode-managed (cloud) signing.
 export_options() {
@@ -56,16 +68,22 @@ PLIST
   echo "$OUT/ExportOptions-$1.plist"
 }
 
-if [[ -f "$ARCHIVE/Info.plist" ]]; then
-  # A build archived by an earlier run (say its validate step hung): upload that, not a rebuild.
-  echo "Using the archive already at $ARCHIVE"
+if [[ -n "${BUILD_NUMBER:-}" && -e "$ARCHIVE" ]]; then
+  # Asked for by build number: one an earlier run archived (say its validate step hung). Upload
+  # that, not a rebuild, but only if this script finished it and it's still ours alone.
+  [[ -f "$OUT/archived.txt" && -f "$ARCHIVE/Info.plist" ]] \
+    || { echo "$ARCHIVE wasn't finished by this script; move it away to archive build $BUILD again." >&2; exit 1; }
+  node scripts/private-dir.mjs --tree "$ARCHIVE" > /dev/null || exit 1
+  echo "Using the archive already at $ARCHIVE ($(cat "$OUT/archived.txt"); HEAD is $(git rev-parse --short HEAD 2>/dev/null || echo unknown))"
 else
-  rm -rf "$ARCHIVE"
+  rm -rf "$ARCHIVE" "$OUT/archived.txt"
   echo "Archiving Release for iOS, build number $BUILD…"
   xcodebuild archive -project Threadbear.xcodeproj -scheme Threadbear -configuration Release \
     -destination 'generic/platform=iOS' -archivePath "$ARCHIVE" -derivedDataPath "$DD" \
     CURRENT_PROJECT_VERSION="$BUILD" THREADBEAR_APS_ENVIRONMENT=production "${auth[@]}" > "$OUT/archive.log" 2>&1 \
     || { grep -E " error:|ARCHIVE FAILED" "$OUT/archive.log" >&2; echo "Archive failed, see $OUT/archive.log" >&2; exit 1; }
+  # What says this run finished it, for a later BUILD_NUMBER run to reuse.
+  echo "archived from commit $(git rev-parse --short HEAD 2>/dev/null || echo unknown)" > "$OUT/archived.txt"
 fi
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :ApplicationProperties:CFBundleShortVersionString" "$ARCHIVE/Info.plist")
 # A reused archive carries its own build number, whatever BUILD_NUMBER said.

@@ -285,6 +285,37 @@ public enum ApprovalDecision: String, Sendable, Hashable, Codable {
     }
 }
 
+/// The agent's other calls from the same reply, waiting behind an approval
+/// card (docs/protocol.md, "Queued calls"). Each is shaped as its own card
+/// would be, with its tool call's id as both ids.
+public struct ApprovalQueue: Sendable, Hashable, Decodable {
+    public var approvalId: String
+    public var calls: [ApprovalRequest]
+
+    public init(approvalId: String, calls: [ApprovalRequest]) {
+        self.approvalId = approvalId
+        self.calls = calls
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        approvalId = (try? c.decodeIfPresent(String.self, forKey: .approvalId)) ?? ""
+        let raw = (try? c.decodeIfPresent(LossyArray<Call>.self, forKey: .calls))??.elements ?? []
+        calls = raw.filter { !$0.itemId.isEmpty }.map {
+            ApprovalRequest(approvalId: $0.itemId, itemId: $0.itemId, name: $0.name ?? "Tool", title: $0.title ?? $0.name ?? "Tool", input: $0.input ?? .object([:]), options: [.allow, .deny])
+        }
+    }
+
+    struct Call: Decodable {
+        var itemId: String
+        var name: String?
+        var title: String?
+        var input: JSONValue?
+    }
+
+    enum CodingKeys: String, CodingKey { case approvalId, calls }
+}
+
 public struct ApprovalResolution: Sendable, Hashable, Decodable {
     public var approvalId: String
     public var decision: ApprovalDecision
@@ -502,6 +533,8 @@ public enum EventPayload: Sendable, Hashable {
     /// buttons"): the whole button each time.
     case buttonUpdated(ReplyButton)
     case approvalResolved(ApprovalResolution)
+    /// The calls queued on an approval card, the whole list each time.
+    case approvalQueued(ApprovalQueue)
     case planUpdated([PlanEntry])
     /// "Plan first": the agent's plan, waiting for Mike, and what became of
     /// it (`go` approved, `revise` sent back).
@@ -666,6 +699,8 @@ public struct Event: Sendable, Hashable, Decodable {
             return .buttonUpdated(try c.decode(ReplyButton.self, forKey: .button))
         case "approval.resolved":
             return .approvalResolved(try ApprovalResolution(from: decoder))
+        case "approval.queued":
+            return .approvalQueued(try ApprovalQueue(from: decoder))
         case "plan.updated":
             return .planUpdated(try PlanFields(from: decoder).entries)
         case "plan.proposed":

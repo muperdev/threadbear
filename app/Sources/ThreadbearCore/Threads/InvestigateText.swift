@@ -55,11 +55,11 @@ public enum InvestigateText {
         } else {
             lines.append("- No thread was open")
         }
-        if let doing = r.doing { lines.append("- Mike was \(doing)") }
+        if let doing = r.doing { lines.append("- The user was \(doing)") }
         let app = [r.appVersion.map { "app \($0)" }, r.appCommit.map { "built from \($0)" }].compactMap { $0 }.joined(separator: ", ")
         if !app.isEmpty { lines.append("- The \(app)") }
         if let runner = r.runnerVersion, !runner.isEmpty { lines.append("- Runner \(runner)") }
-        lines += ["", "Find the cause in this checkout and fix it. Start from where the app sets that text (`errorMessage`), follow it to whatever failed, and check `tb logs` and `~/Library/Logs/Threadbear` around that time. Test first, then land it as AGENTS.md says. If it turns out not to be a bug (something Mike has to do, or another service), say what and why instead of changing code."]
+        lines += ["", "Find the cause in this checkout and fix it. Start from where the app sets that text (`errorMessage`), follow it to whatever failed, and check `tb logs` and `~/Library/Logs/Threadbear` around that time. Test first, then land it as AGENTS.md says. If it turns out not to be a bug (something the user has to do, or another service), say what and why instead of changing code."]
         return lines.joined(separator: "\n")
     }
 }

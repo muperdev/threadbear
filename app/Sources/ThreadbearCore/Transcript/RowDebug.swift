@@ -172,6 +172,7 @@ extension TranscriptModel {
         case .toolResult(let result): return ["t:" + result.itemId] + (result.images.isEmpty ? [] : ["i:" + result.itemId])
         case .editDiff(let diff): return ["t:" + diff.itemId]
         case .approvalRequested(let request): return ["ap:" + request.approvalId]
+        case .approvalQueued(let queue): return ["ap:" + queue.approvalId]
         case .questionRequested(let request): return ["q:" + request.approvalId]
         case .secretRequested(let request): return ["s:" + request.approvalId]
         case .reviewUpdated(let review): return ["review:" + review.id]

@@ -5,9 +5,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { phoneCommands, ThreadRouter } from '../../src/handover.ts';
+import { phoneCommands, primaryRemote, ThreadRouter } from '../../src/handover.ts';
 import { FakeAccounts, FakeAdapter, makeHarness, testConfig, tick, type Harness } from '../helpers/fakes.ts';
-import { Runner, type Notification } from '../../src/runner.ts';
+import { Runner, SAVE_RETRY_MS, type Notification } from '../../src/runner.ts';
 import { ThreadStore } from '../../src/store.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
@@ -735,4 +735,158 @@ test("only the phone's Stop counts as Mike's, not an agent's interrupt_thread", 
   const agent = ask();
   await new ThreadRouter(h.runner, () => undefined).interrupt(agent.id);
   assert.equal((await agent.answer).stopped, undefined);
+});
+
+// THREADBEAR-9: flush took the thread out of `dirty` before saving, so a
+// failed save stayed lost until something else changed the thread, and a
+// draining runner's last save could be lost for good.
+function failSaves(h: Harness, times: number) {
+  const realSave = h.store.save.bind(h.store);
+  let left = times;
+  h.store.save = (rec) => {
+    if (left-- > 0) throw new Error('ENOENT: temp file went');
+    realSave(rec);
+  };
+}
+
+test('a thread whose save failed is saved again by itself', () => {
+  const errors: string[] = [];
+  const h = makeHarness(undefined, {}, { log: { ...nullLogger, error: (m: string) => errors.push(m) } });
+  const t = create(h).thread;
+  h.adapter.last.init();
+  h.runner.flush();
+
+  failSaves(h, 3);
+  h.runner.update({ threadId: t.id, title: 'Renamed' });
+  assert.notEqual(JSON.parse(fs.readFileSync(threadFile(h, t.id), 'utf8')).title, 'Renamed');
+  // Said once, not on every try: it goes to Sentry.
+  assert.deepEqual(errors, ['could not save thread']);
+
+  const updates = () => h.notes.filter((n) => n.method === 'thread.updated' && (n as any).params.thread.id === t.id).map((n) => (n as any).params.thread.title);
+  const seen = updates().length;
+  // A retry with nothing new tells nobody; a change while it fails still does.
+  h.clock.advance(SAVE_RETRY_MS);
+  assert.equal(updates().length, seen);
+  h.runner.update({ threadId: t.id, title: 'Renamed again' });
+  assert.deepEqual(updates().slice(seen), ['Renamed again']);
+  h.clock.advance(SAVE_RETRY_MS);
+  assert.equal(JSON.parse(fs.readFileSync(threadFile(h, t.id), 'utf8')).title, 'Renamed again');
+  assert.deepEqual(errors, ['could not save thread']);
+  // Saved, so nothing is left waiting to try again.
+  const before = h.clock.pending();
+  h.clock.advance(SAVE_RETRY_MS);
+  assert.equal(h.clock.pending(), before);
+});
+
+test("a retried save doesn't bring back a thread deleted in the meantime", () => {
+  const h = makeHarness();
+  const t = create(h).thread;
+  h.adapter.last.init();
+  h.adapter.last.result('completed');
+  h.runner.flush();
+
+  failSaves(h, 1);
+  h.runner.update({ threadId: t.id, title: 'Renamed' });
+  h.runner.delete(t.id);
+  h.clock.advance(SAVE_RETRY_MS);
+
+  assert.equal(fs.existsSync(path.join(h.home, 'threads', t.id)), false);
+});
+
+test("a retried save doesn't overwrite a thread that has gone to the new runner", async () => {
+  const h = makeHarness();
+  const t = create(h).thread;
+  h.adapter.last.init();
+  h.adapter.last.result('completed');
+  h.runner.flush();
+
+  failSaves(h, 1);
+  h.runner.update({ threadId: t.id, title: 'Renamed' });
+  await h.runner.beginDrain([], { onHandedOver: () => {} });
+  await tick();
+  assert.equal(h.runner.has(t.id), false);
+  // Letting it go saved it, with what the failed save was carrying.
+  assert.equal(JSON.parse(fs.readFileSync(threadFile(h, t.id), 'utf8')).title, 'Renamed');
+
+  // The new runner has moved it on since.
+  const file = threadFile(h, t.id);
+  const newer = { ...JSON.parse(fs.readFileSync(file, 'utf8')), title: 'From the new runner' };
+  fs.writeFileSync(file, JSON.stringify(newer));
+  h.clock.advance(SAVE_RETRY_MS);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).title, 'From the new runner');
+});
+
+test('a save that fails while the runner stops leaves no timer behind', async () => {
+  const h = makeHarness();
+  const t = create(h).thread;
+  h.adapter.last.init();
+  h.adapter.last.result('completed');
+  h.runner.flush();
+
+  let tries = 0;
+  h.store.save = () => {
+    tries++;
+    throw new Error('disk full');
+  };
+  h.runner.update({ threadId: t.id, title: 'Renamed' });
+  await h.runner.shutdown();
+  const after = tries;
+  h.clock.advance(SAVE_RETRY_MS * 3);
+  assert.equal(tries, after, 'no save is tried after the runner stopped');
+  assert.equal(h.runner.saveRetryTimer, undefined);
+  assert.notEqual(JSON.parse(fs.readFileSync(threadFile(h, t.id), 'utf8')).title, 'Renamed');
+});
+
+test('a kept thread whose wake time in words is still being worked out stays until it is', async () => {
+  // Codex's review: it crossed with wakeWhen.pending, so the new runner woke
+  // it and this runner's answer went nowhere.
+  const h = makeHarness();
+  const t = create(h).thread;
+  h.adapter.last.init();
+  h.adapter.last.result('completed');
+  await tick();
+  const rec = (h.runner as any).threads.get(t.id).rec;
+  rec.wakeWhen = { said: 'tomorrow', pending: true };
+  const handed: string[] = [];
+  await h.runner.beginDrain([t.id], { onHandedOver: (id) => handed.push(id), backgroundMs: 30 * MIN });
+  (h.runner as any).checkHandovers();
+  await tick();
+  assert.deepEqual(handed, []);
+  assert.deepEqual(h.runner.keeping(), [t.id]);
+  rec.wakeWhen = { said: 'tomorrow' };
+  (h.runner as any).checkHandovers();
+  await tick();
+  assert.deepEqual(handed, [t.id]);
+});
+
+test('an idle thread hibernating in words is kept by a drain that was not asked to keep it', async () => {
+  // Codex's second round: a restart keeps only busy threads, and beginDrain let this one go at once.
+  const h = makeHarness();
+  const t = create(h).thread;
+  h.adapter.last.init();
+  h.adapter.last.result('completed');
+  await tick();
+  (h.runner as any).threads.get(t.id).rec.wakeWhen = { said: 'tomorrow', pending: true };
+  await h.runner.beginDrain([], { onHandedOver: () => {}, backgroundMs: 30 * MIN });
+  assert.deepEqual(h.runner.keeping(), [t.id]);
+});
+
+// 8 Nov: a thread finishing its turn on a draining runner couldn't
+// send_message the cloud runner's thread its brief named, as a draining
+// runner's tools left other runners' threads out.
+test('primaryRemote: a draining runner reaches other runners\' threads through the primary', async () => {
+  const calls: Array<[string, Record<string, unknown>]> = [];
+  const rows = { runners: [{ id: 'cloud', name: 'Hetzner Cloud', online: true, lastSeenAt: '' }], threads: [{ threadId: 'ba5bb5ec-1', runnerId: 'cloud', title: 'Rust port' }] };
+  const link = {
+    call: async <T,>(method: string, params: Record<string, unknown> = {}): Promise<T> => {
+      calls.push([method, params]);
+      return (method === 'remoteThreads.list' ? rows : { queued: false }) as T;
+    },
+  };
+  const remote = primaryRemote(link);
+  const listed = await remote.list();
+  assert.equal(listed.threads[0].threadId, 'ba5bb5ec-1');
+  assert.deepEqual(calls[0], ['remoteThreads.list', { forTools: true }], 'the primary waits for the rows, as for its own tools');
+  await remote.call('ba5bb5ec-1', 'threads.send', { text: 'hi' });
+  assert.deepEqual(calls.at(-1), ['threads.send', { threadId: 'ba5bb5ec-1', text: 'hi' }]);
 });

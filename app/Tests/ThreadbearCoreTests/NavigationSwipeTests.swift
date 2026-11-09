@@ -12,13 +12,13 @@ final class NavigationSwipeTests: XCTestCase {
     /// Fingers right go back and left go forward, as in Safari, once
     /// they're past the line.
     func testRightGoesBackAndLeftForward() {
-        var back = swiped([(8, 0), (60, 0), (60, 0)])
+        var back = swiped([(8, 0), (80, 0), (80, 0)])
         XCTAssertEqual(back.direction, .back)
         XCTAssertTrue(back.armed)
         XCTAssertEqual(back.end(), .back)
         XCTAssertEqual(back.phase, .idle)
 
-        var forward = swiped([(-8, 0), (-120, 0)])
+        var forward = swiped([(-8, 0), (-160, 0)])
         XCTAssertEqual(forward.end(), .forward)
     }
 
@@ -88,7 +88,7 @@ final class NavigationSwipeTests: XCTestCase {
 
     /// A quick flick goes even short of the line.
     func testFlickGoes() {
-        var swipe = swiped([(8, 0), (30, 0), (20, 0)])
+        var swipe = swiped([(8, 0), (40, 0), (25, 0)])
         XCTAssertFalse(swipe.armed)
         XCTAssertEqual(swipe.end(), .back)
     }
@@ -99,22 +99,36 @@ final class NavigationSwipeTests: XCTestCase {
         var swipe = NavigationSwipe()
         swipe.begin(allowed: [.back])
         _ = swipe.move(dx: 8, dy: 0, elapsed: 1.0 / 120)
-        for _ in 0..<4 { _ = swipe.move(dx: 10, dy: 0, elapsed: 1.0 / 120) }
+        for _ in 0..<6 { _ = swipe.move(dx: 10, dy: 0, elapsed: 1.0 / 120) }
         XCTAssertEqual(swipe.end(), .back)
 
         var slow = NavigationSwipe()
         slow.begin(allowed: [.back])
         _ = slow.move(dx: 8, dy: 0, elapsed: 0.05)
-        for _ in 0..<4 { _ = slow.move(dx: 10, dy: 0, elapsed: 0.05) }
+        for _ in 0..<6 { _ = slow.move(dx: 10, dy: 0, elapsed: 0.05) }
         XCTAssertNil(slow.end())
     }
 
     /// A quick move, a pause to look at the arrow, then a lift: not a flick.
     func testAPauseBeforeLiftingIsntAFlick() {
-        var swipe = swiped([(8, 0), (30, 0), (20, 0)])
+        var swipe = swiped([(8, 0), (40, 0), (25, 0)])
         XCTAssertNil(swipe.end(stillMoving: false))
-        var past = swiped([(8, 0), (120, 0)])
+        var past = swiped([(8, 0), (160, 0)])
         XCTAssertEqual(past.end(stillMoving: false), .back, "past the line goes however slowly")
+    }
+
+    /// A way the window could swipe but there's nothing in the history:
+    /// it tracks (the card says there's nowhere to go), gives only a
+    /// little, never arms, and goes nowhere.
+    func testNowhereInTheHistoryTracksButNeverGoes() {
+        var swipe = NavigationSwipe()
+        swipe.begin(allowed: [.back], empty: [.forward])
+        XCTAssertEqual(swipe.move(dx: -8, dy: 0), .swipe)
+        XCTAssertTrue(swipe.isEmpty)
+        _ = swipe.move(dx: -400, dy: 0)
+        XCTAssertFalse(swipe.armed)
+        XCTAssertLessThanOrEqual(swipe.progress, 0.25)
+        XCTAssertNil(swipe.end())
     }
 
     func testNowhereToGoThatWayIsLeftAlone() {

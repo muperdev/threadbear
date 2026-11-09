@@ -61,7 +61,7 @@ import { hasLineBreak, stripEnvComment } from './linear-text.ts';
 import { actionCommandProblem, automaticCommand, liveCommandProblem, TRUST_ALL, worktreeOf, type PatchGate } from './patch-trust.ts';
 import { verifiedUrl } from './verified-imports.ts';
 import { inBackground } from './background.ts';
-import { CUT_LOOKAHEAD, dropPartialEnd, safeEnd } from './safe-cut.ts';
+import { CUT_LOOKAHEAD, safeEnd, safeEndOfPartial } from './safe-cut.ts';
 import { groupAlive, killGroup } from './proc.ts';
 
 export const CONVEX_DASHBOARD = 'https://dashboard.convex.dev';
@@ -541,18 +541,18 @@ export function readPatchModule(id: string, source: 'home' | 'project', file: st
     }
     appliesTo = list.map((g: string) => g.trim());
   }
-  // The when, badge and summary functions of the file's actions and panels,
-  // kept aside (see liveFunctions) once the whole file has passed. Only
-  // panels have a summary.
+  // The when, badge, label and summary functions of the file's actions and
+  // panels, kept aside (see liveFunctions) once the whole file has passed.
+  // Only actions have a label and only panels a summary.
   const live: [string, LiveFunctions][] = [];
-  const liveOf = (kind: string, i: number, title: string, raw: { when?: unknown; badge?: unknown; summary?: unknown }, itemId: string): string | undefined => {
+  const liveOf = (kind: string, i: number, title: string, raw: { when?: unknown; badge?: unknown; label?: unknown; summary?: unknown }, itemId: string): string | undefined => {
     const fns: LiveFunctions = {};
-    for (const key of kind === 'panels' ? (['when', 'badge', 'summary'] as const) : (['when', 'badge'] as const)) {
+    for (const key of kind === 'panels' ? (['when', 'badge', 'summary'] as const) : (['when', 'badge', 'label'] as const)) {
       if (raw[key] === undefined) continue;
       if (typeof raw[key] !== 'function') return `${kind}[${i}] ("${title}") has a ${key} that isn't a function.`;
       fns[key] = raw[key] as LiveFunction;
     }
-    if (fns.when || fns.badge || fns.summary) live.push([itemId.slice(id.length), fns]);
+    if (fns.when || fns.badge || fns.label || fns.summary) live.push([itemId.slice(id.length), fns]);
     return undefined;
   };
   let worktree: WorktreeConfig | undefined;
@@ -580,7 +580,7 @@ export function readPatchModule(id: string, source: 'home' | 'project', file: st
   if (v.actions !== undefined) {
     if (!Array.isArray(v.actions)) return problem('actions should be an array.');
     for (const [i, raw] of v.actions.entries()) {
-      const a = raw as { title?: unknown; run?: unknown; prompt?: unknown; url?: unknown; note?: unknown; icon?: unknown; when?: unknown; badge?: unknown };
+      const a = raw as { title?: unknown; run?: unknown; prompt?: unknown; url?: unknown; note?: unknown; icon?: unknown; when?: unknown; badge?: unknown; label?: unknown };
       if (!a || typeof a !== 'object' || typeof a.title !== 'string' || !a.title.trim()) return problem(`actions[${i}] needs a title.`);
       const run = typeof a.run === 'string' && a.run.trim() ? a.run : undefined;
       const prompt = typeof a.prompt === 'string' && a.prompt.trim() ? a.prompt : undefined;
@@ -1060,7 +1060,7 @@ export async function renderListPanel(
 // ------------------------------------------------------------ live state
 
 type LiveFunction = (ctx: ItemsContext) => unknown;
-type LiveFunctions = { when?: LiveFunction; badge?: LiveFunction; summary?: LiveFunction };
+type LiveFunctions = { when?: LiveFunction; badge?: LiveFunction; label?: LiveFunction; summary?: LiveFunction };
 
 // The when and badge functions of loaded patch files' actions and panels,
 // keyed like listFunctions. Kept off the items, which go over the wire.
@@ -1122,16 +1122,18 @@ export async function applyLive(set: PatchSet, ctx: LiveContext): Promise<PatchS
       shIn.close();
     }
   };
-  const settle = async <T extends { id: string; patch: string; badge?: number; summary?: string }>(item: T): Promise<T | undefined> => {
+  const settle = async <T extends { id: string; patch: string; title: string; badge?: number; summary?: string }>(item: T): Promise<T | undefined> => {
     const fns = liveFor(set, item);
     if (!fns) return item;
-    const [shown, badge, summary] = await Promise.all([
+    const [shown, badge, label, summary] = await Promise.all([
       fns.when ? call(item.patch, fns.when).then((v) => Boolean(v), () => false) : true,
       fns.badge ? call(item.patch, fns.badge).then(badgeCount, () => undefined) : undefined,
+      fns.label ? call(item.patch, fns.label).then(labelText, () => undefined) : undefined,
       fns.summary ? call(item.patch, fns.summary).then(summaryText, () => undefined) : undefined,
     ]);
     if (!shown) return undefined;
     const out = { ...item };
+    if (label !== undefined) out.title = label;
     delete out.badge;
     delete out.summary;
     if (badge !== undefined) out.badge = badge;
@@ -1157,6 +1159,14 @@ function summaryText(v: unknown): string | undefined {
     .filter(Boolean)
     .slice(0, SUMMARY_LINES);
   return lines.length ? lines.join('\n') : undefined;
+}
+
+// A label function's answer as the chip's title for now: a string, or
+// nothing to keep the title the patch gave.
+function labelText(v: unknown): string | undefined {
+  // One line: a chip is one line tall, and newlines would stack it.
+  const s = typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '';
+  return s ? s.slice(0, 60).trim() : undefined;
 }
 
 // A badge function's answer as a count: a number, a numeric string or a
@@ -1321,12 +1331,13 @@ export function runCommand(
     const finish = (code: number | null, error?: string) => {
       clearTimeout(timer);
       let text = Buffer.concat(chunks).toString('utf8');
-      // Stopped reading part way: what was cut there was never seen whole.
-      if (truncated) text = dropPartialEnd(text);
-      if (Buffer.byteLength(text, 'utf8') > LIMITS.toolResultText) {
+      // What fits in the limit, cut where no secret is split; stopped reading
+      // part way, never in the run reading stopped in either (safe-cut.ts).
+      const fits = Buffer.byteLength(text, 'utf8') > LIMITS.toolResultText ? Buffer.from(text, 'utf8').subarray(0, LIMITS.toolResultText).toString('utf8').replace(/\uFFFD$/, '').length : text.length;
+      if (truncated) text = text.slice(0, safeEndOfPartial(text, fits));
+      else if (fits < text.length) {
         truncated = true;
-        const kept = Buffer.from(text, 'utf8').subarray(0, LIMITS.toolResultText).toString('utf8').replace(/\uFFFD$/, '');
-        text = text.slice(0, safeEnd(text, kept.length));
+        text = text.slice(0, safeEnd(text, fits));
       }
       if (error) text = text ? `${text}\n${error}` : error;
       if (timedOut) {

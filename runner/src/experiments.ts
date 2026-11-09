@@ -94,10 +94,3 @@ export function experimentOn(home: string, id: ExperimentId): boolean {
   if (typeof said === 'boolean') return said;
   return EXPERIMENTS.find((x) => x.id === id)?.on ?? false;
 }
-
-// The ids of every experiment that's on for this runner, for hello's
-// `experiments`: the Mac app reads it for experiments that live in the
-// app (Voice mode), so one switch in runner.json still turns them on.
-export function experimentsOn(home: string): string[] {
-  return EXPERIMENTS.filter((x) => experimentOn(home, x.id)).map((x) => x.id);
-}

@@ -390,12 +390,21 @@ export const images = query({
 
 export const command = query({
   args: { token: v.string(), commandId: v.id('commands') },
-  returns: v.object({ state: v.union(v.literal('pending'), v.literal('taken'), v.literal('done'), v.literal('failed')), note: v.optional(v.string()), threadId: v.optional(v.string()) }),
+  // result (API 62): a slashCommands command's answer, the thread's list.
+  returns: v.object({ state: v.union(v.literal('pending'), v.literal('taken'), v.literal('done'), v.literal('failed')), note: v.optional(v.string()), threadId: v.optional(v.string()), result: v.optional(v.any()) }),
   handler: async (ctx, { token, commandId }) => {
     await checkPhoneToken(ctx, token);
     const c = await ctx.db.get(commandId);
     if (!c) throw new ConvexError({ kind: 'notFound', message: 'no such command' });
-    return { state: c.state, ...(c.note ? { note: c.note } : {}), ...(c.resultThreadId ? { threadId: c.resultThreadId } : {}) };
+    let result: unknown;
+    if (c.kind === 'slashCommands' && c.result) {
+      try {
+        result = JSON.parse(c.result);
+      } catch {
+        result = undefined;
+      }
+    }
+    return { state: c.state, ...(c.note ? { note: c.note } : {}), ...(c.resultThreadId ? { threadId: c.resultThreadId } : {}), ...(result !== undefined ? { result } : {}) };
   },
 });
 
@@ -688,6 +697,19 @@ export const press = mutation({
     if (!/^[a-z0-9]{8}$/.test(buttonId)) throw new ConvexError({ kind: 'invalid', message: 'no such button' });
     const t = await findThread(ctx, threadId);
     return queue(ctx, t.runnerId, 'press', threadId, { buttonId });
+  },
+});
+
+// The slash commands a thread can run, for the phone's palette (API 62,
+// docs/protocol.md "Slash commands"): the thread's runner answers with its
+// threads.commands list, which phone:command returns as `result`.
+export const slashCommands = mutation({
+  args: { token: v.string(), threadId: v.string() },
+  returns: v.id('commands'),
+  handler: async (ctx, { token, threadId }) => {
+    await checkPhoneToken(ctx, token);
+    const t = await findThread(ctx, threadId);
+    return queue(ctx, t.runnerId, 'slashCommands', threadId, {});
   },
 });
 
@@ -1059,7 +1081,7 @@ async function knownRunner(ctx: QueryCtx, runnerId: string): Promise<string> {
 // what the runner's own pendingCommands reads. One that waits too long goes
 // (sync:pruneFiles, COMMAND_KEEP_MS). Its photos are recorded in commandFiles
 // so a delete elsewhere sees they're still on their way (sync.ts storageInUse).
-async function queue(ctx: MutationCtx, runnerId: string, kind: 'send' | 'respond' | 'update' | 'create' | 'page' | 'share' | 'quickAsk' | 'schedule' | 'picture' | 'press', threadId: string | undefined, args: Record<string, unknown>) {
+async function queue(ctx: MutationCtx, runnerId: string, kind: 'send' | 'respond' | 'update' | 'create' | 'page' | 'share' | 'quickAsk' | 'schedule' | 'picture' | 'press' | 'slashCommands', threadId: string | undefined, args: Record<string, unknown>) {
   let n = 0;
   let bytes = docBytes(args);
   for await (const c of ctx.db.query('commands').withIndex('by_runner_state', (q) => q.eq('runnerId', runnerId).eq('state', 'pending'))) {

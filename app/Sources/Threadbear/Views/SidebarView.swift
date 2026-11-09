@@ -670,13 +670,13 @@ enum RowMode: Equatable {
         switch self {
         case .inbox, .projects: return [.star, .snooze, .archive]
         case .hibernating: return [.star, .unsnooze, .archive]
-        case .archive: return [.unarchive]
+        case .archive: return [.unarchive, .delete]
         }
     }
 }
 
 enum RowAction {
-    case star, snooze, archive, unsnooze, unarchive
+    case star, snooze, archive, unsnooze, unarchive, delete
 }
 
 struct ThreadRowView: View {
@@ -1129,6 +1129,11 @@ private struct RowActions: View {
                     Button { app.unsnooze(thread.id) } label: { Image(systemName: "arrow.uturn.backward") }
                         .buttonStyle(RowIconButtonStyle())
                         .tip("Wake")
+                case .delete:
+                    Button { app.deleteThread(thread.id) } label: { Image(systemName: "trash") }
+                        .buttonStyle(RowIconButtonStyle())
+                        .busy(app.isBusy(BusyKey.deleteThread(thread.id)))
+                        .tip("Delete chat…")
                 case .unarchive:
                     Button { app.unarchive(thread.id) } label: { Image(systemName: "arrow.uturn.backward") }
                         .buttonStyle(RowIconButtonStyle())
@@ -1264,6 +1269,9 @@ struct ThreadMenu: View {
             Button("Unarchive", systemImage: "tray.and.arrow.up") { app.unarchive(thread.id) }
         } else {
             Button("Archive", systemImage: "archivebox") { app.archive(thread.id) }
+        }
+        if thread.isArchived {
+            Button("Delete…", systemImage: "trash", role: .destructive) { app.deleteThread(thread.id) }
         }
         // Projects are this Mac's runner's; another runner's threads
         // aren't in them.

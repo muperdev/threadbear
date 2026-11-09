@@ -56,10 +56,6 @@ struct ComposerView: View {
         if let thread {
             RefusalOffer(thread: thread)
         }
-        // Voice mode's bear, over the box while it's on for this thread.
-        if VoiceMode.shared.isOn(for: thread?.id ?? VoiceMode.newThread) {
-            VoiceStage(threadId: thread?.id ?? VoiceMode.newThread)
-        }
         // The folder's actions (patches), on shelves sitting on the box's
         // top edge, in from its rounded corner (ActionChips).
         if let thread, !thread.actions.isEmpty || thread.patches.contains(where: { $0.untrusted != nil }) {
@@ -73,7 +69,7 @@ struct ComposerView: View {
         // The box: the open card over a line, then the message.
         VStack(alignment: .leading, spacing: 0) {
         if let cardRow, let controller {
-            ComposerCard(row: cardRow, collapsed: cardCollapsed, controller: controller)
+            ComposerCard(row: cardRow, threadId: thread?.id, collapsed: cardCollapsed, controller: controller)
                 .padding(.horizontal, Self.padding)
                 .padding(.top, zoomed(8))
                 .padding(.bottom, zoomed(10))
@@ -338,12 +334,11 @@ struct ComposerView: View {
         return true
     }
 
-    /// Whether pictures can go in this box, saying why not when they can't:
-    /// a picture this Mac's runner keeps would be a path another runner
-    /// hasn't got.
+    /// Whether pictures can go in this box, saying why not when they can't
+    /// (only over the direct link to another runner: `picturesRefusal`).
     private func picturesAllowed() -> Bool {
-        if let name = thread.flatMap(app.runnerName(of:)) ?? (thread == nil ? app.newThreadRunner?.name : nil) {
-            app.errorMessage = "Pictures can't go to \(name) from this Mac yet."
+        if let why = app.picturesRefusal(for: thread) {
+            app.errorMessage = why
             return false
         }
         return true

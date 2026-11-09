@@ -65,4 +65,53 @@ final class ReplyButtonRenderTests: XCTestCase {
         XCTAssertTrue(RenderCache.holdsButtons(row))
         XCTAssertFalse(RenderCache.holdsButtons(plain))
     }
+
+    /// Daybreak, 8 Nov: a thread open in a panel of its own (B) puts its
+    /// asks in a composer card, outside any transcript table. A pill there
+    /// was taken as pressed from the main panel's thread (A), so B's ask
+    /// could carry A's copied `button:` link and press A's full-access
+    /// button. Text knows its thread from the view it's in, or has none.
+    func testAPillInAPanelsComposerCardIsPressedFromThatThreadNeverTheSelection() {
+        let app = AppModel.shared
+        let saved = (app.selection, app.errorMessage)
+        defer { app.selection = saved.0; app.errorMessage = saved.1 }
+        let a = unique(), b = unique(), id = unique()
+        ReplyButtons.shared.receive(ReplyButton(id: id, title: "Ship it", start: .init(text: "Ship it", cwd: "/tmp", permissionMode: "full")), threadId: a)
+        app.selection = a
+
+        // B's composer card, in a panel of its own.
+        let controller = TranscriptController()
+        let session = ThreadSession(threadId: b, app: app)
+        controller.show(session)
+        let card = ComposerCardHost(controller: controller)
+        let ask = TranscriptRow(id: "ak:1", seq: 1, turnId: "t1", content: .asks(AsksCard(seq: 1, asks: [Ask(action: "Press [Ship it](button:\(id))", why: "")])))
+        card.show(ask, threadId: b)
+        let text = TranscriptTextView()
+        card.addSubview(text)
+        XCTAssertEqual(text.transcriptThreadId, b, "the card's own thread, not the selection")
+        app.errorMessage = nil
+        app.pressReplyButton(id, from: text.transcriptThreadId)
+        XCTAssertEqual(app.errorMessage, "That button belongs to another thread, so it can't be pressed from here.")
+        XCTAssertNil(ReplyButtons.shared.known(id)?.button.pressed)
+
+        // The controller moving on to A before the card has B's asks out
+        // of it: a press then is nobody's, not A's (Codex's review).
+        let sessionA = ThreadSession(threadId: a, app: app)
+        controller.show(sessionA)
+        XCTAssertNil(text.transcriptThreadId)
+        card.show(ask, threadId: a)
+        XCTAssertEqual(text.transcriptThreadId, a, "once it's A's card, it's A's")
+        _ = sessionA
+
+        // A card with no thread, or text in no thread's view, presses nothing.
+        card.show(ask, threadId: b)
+        controller.show(nil)
+        XCTAssertNil(text.transcriptThreadId)
+        let loose = TranscriptTextView()
+        NSView().addSubview(loose)
+        XCTAssertNil(loose.transcriptThreadId)
+        app.errorMessage = nil
+        app.pressReplyButton(id, from: loose.transcriptThreadId)
+        XCTAssertEqual(app.errorMessage, "That button belongs to another thread, so it can't be pressed from here.")
+    }
 }

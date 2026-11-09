@@ -16,7 +16,7 @@ import type { AgentWrite } from '../adapters/types.ts';
 import { CLAUDE_PATCH_ID, claudeCommands, claudeOptions, settingsCommands, settingsNamedPaths, type ClaudeOptions } from '../claude-trust.ts';
 import { canonicalPath, runsAsCodeByName, type CodeWrite } from '../code-writes.ts';
 import type { PatchInfo } from '../protocol.ts';
-import { actionRunProblem, automaticTrust, EMPTY_PATCH_SET, PATCH_EXTENSIONS, patchDirs, projectRoots, hookApplies, loadPatchSet, applyLive, hasLive, projectPanels, renderListPanel, renderPanel, runCommand, type CommandOutcome, type PanelRender, type PatchSet, type ProjectFolder, projectPatchFiles } from '../patches.ts';
+import { actionRunProblem, automaticTrust, isInside, EMPTY_PATCH_SET, PATCH_EXTENSIONS, patchDirs, projectRoots, hookApplies, loadPatchSet, applyLive, hasLive, projectPanels, renderListPanel, renderPanel, runCommand, type CommandOutcome, type PanelRender, type PatchSet, type ProjectFolder, projectPatchFiles } from '../patches.ts';
 import { liveCommandEnv } from '../shell-allowlist.ts';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -170,6 +170,12 @@ export const patchesPart = {
     }
     entry.refreshing = false;
     entry.at = this.clock.now();
+    // Asked for again while this read ran (rereadPatches): it may be stale.
+    if (entry.again) {
+      entry.again = false;
+      entry.at = -Infinity;
+      if (rt.patches === entry && !rt.deleted) void this.refreshPatches(st);
+    }
     // The folder moved on meanwhile: the next summary starts over.
     if (rt.patches !== entry || rec.cwd !== cwd || rt.deleted) return;
     // The projects changed meanwhile: read again.
@@ -217,7 +223,8 @@ export const patchesPart = {
     this.claudeChecks.clear();
     this.sharedPatchSets.clear();
     // A turn may have changed what they read (comments resolved, a handback).
-    this.liveRuns.clear();
+    // One still running is kept, so it isn't started again beside itself.
+    this.dropFinishedLiveRuns();
   },
 
   // A live state command (when, badge), shared by every thread that runs
@@ -474,6 +481,22 @@ export const patchesPart = {
 
   // Every thread whose patches have been read reads them again now: a
   // trusted file can matter to threads in other folders (a project's).
+  // Forgets the live commands' finished output (it may be out of date),
+  // keeping any still running for the reads that join them.
+  dropFinishedLiveRuns(this: Runner): void {
+    for (const [key, run] of this.liveRuns) if (run.doneAt !== undefined) this.liveRuns.delete(key);
+  },
+
+  // Reads one thread's patches again now. A read already under way may have
+  // started before whatever asked for this, so it goes again once it ends.
+  rereadPatches(this: Runner, st: ThreadState): void {
+    const entry = st.rt.patches;
+    if (!entry) return;
+    entry.at = -Infinity;
+    if (entry.refreshing) entry.again = true;
+    else void this.refreshPatches(st);
+  },
+
   rereadAllPatches(this: Runner): void {
     this.forgetFolders();
     for (const st of this.threads.values()) {
@@ -687,6 +710,15 @@ export const patchesPart = {
       await this.openUrl(action.url ?? '');
       return { ok: true, durationMs: Date.now() - started };
     }
+    // A thread whose worktree was removed hasn't moved out of it until its
+    // next message (leaveRemovedWorktree), and the folder may be another
+    // thread's or a borrower's by now, so nothing runs there (Codex, 8 Nov).
+    // An archive's cleanup running now decides whether the folder stays.
+    while (st.rt.cleaning) await st.rt.cleaning;
+    const gone = st.rec.worktree;
+    if (gone?.removedAt && isInside(action.folder ?? st.rec.cwd, gone.path)) {
+      throw new RpcError(ErrorCode.other, `Didn't run ${action.title}: this thread's worktree at ${gone.path} was removed when it was archived, and the folder may be another thread's now. Send the thread a message first, and it carries on in the main checkout.`);
+    }
     const running = (st.rt.runningActions ??= new Set());
     if (running.has(actionId)) throw new RpcError(ErrorCode.busy, `${action.title} is already running.`);
     // It runs from the folder, so what the patch's hash covered must still
@@ -726,9 +758,21 @@ export const patchesPart = {
       this.markDirty(st);
       // Land (or any command) may have moved the branch or the files.
       this.recheckLooseEnds(st);
+      // What a command did is often what its chips' `when` and badges ask
+      // (a Run that starts a server swaps for its Stop): read them now,
+      // rather than at the next poll up to LIVE_POLL_MS later. The live
+      // commands' finished output is from before it ran, so it goes too;
+      // one still running is kept, so a slow command shared by many
+      // threads isn't started again beside itself.
+      if (st.rt.patches) {
+        this.dropFinishedLiveRuns();
+        this.rereadPatches(st);
+      }
       return { ok: outcome.ok, exitCode: outcome.exitCode, durationMs: outcome.durationMs, seq: event.seq };
     } finally {
       running.delete(actionId);
+      // An archive held for it (archiveWhenGone) goes ahead now.
+      if (running.size === 0) this.archiveWhenGone(st);
     }
   },
 };

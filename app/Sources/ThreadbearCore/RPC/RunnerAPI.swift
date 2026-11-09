@@ -19,6 +19,10 @@ public extension RPCClient {
         return try await call("threads.list", params, as: ThreadsResult.self).threads
     }
 
+    func deleteThread(_ threadId: String) async throws {
+        _ = try await call("threads.delete", .object(["threadId": .string(threadId)]), as: EmptyResult.self)
+    }
+
     func searchThreads(_ query: String, limit: Int? = nil) async throws -> [ThreadSummary] {
         var params: [String: JSONValue] = ["query": .string(query)]
         if let limit { params["limit"] = .number(Double(limit)) }
@@ -37,6 +41,7 @@ public extension RPCClient {
         if let mode = request.permissionMode { params["permissionMode"] = .string(mode.rawValue) }
         if let title = request.title { params["title"] = .string(title) }
         if let runnerId = request.runnerId { params["runnerId"] = .string(runnerId) }
+        if !request.projectIds.isEmpty { params["projectIds"] = .array(request.projectIds.map { .string($0) }) }
         return try await call("threads.create", .object(params), as: ThreadResult.self, timeout: RPCClient.sendTimeout).thread
     }
 
@@ -236,7 +241,9 @@ public extension RPCClient {
         ]), as: ThreadResult.self).thread
     }
 
-    func respond(threadId: String, approvalId: String, decision: ApprovalDecision, message: String? = nil, answers: [String: String]? = nil) async throws {
+    /// `queued`: answers to the calls queued on the card, by item id
+    /// (docs/protocol.md, "Queued calls").
+    func respond(threadId: String, approvalId: String, decision: ApprovalDecision, message: String? = nil, answers: [String: String]? = nil, queued: [String: ApprovalDecision]? = nil) async throws {
         var params: [String: JSONValue] = [
             "threadId": .string(threadId),
             "approvalId": .string(approvalId),
@@ -244,6 +251,7 @@ public extension RPCClient {
         ]
         if let message { params["message"] = .string(message) }
         if let answers { params["answers"] = .object(answers.mapValues { .string($0) }) }
+        if let queued, !queued.isEmpty { params["queued"] = .object(queued.mapValues { .string($0.rawValue) }) }
         _ = try await call("approvals.respond", .object(params), as: EmptyResult.self)
     }
 
@@ -354,6 +362,9 @@ public struct NewThreadRequest: Sendable, Hashable {
     /// Another runner, when this Mac's runner makes it there through
     /// Convex (docs/protocol.md, "Other runners' threads through the backend").
     public var runnerId: String?
+    /// Projects it starts in, joined before its first turn (New Thread on
+    /// a project's page).
+    public var projectIds: [String] = []
 
     public init(text: String, images: [ImageRef] = [], cwd: String? = nil, accountId: String? = nil, poolId: String? = nil, model: String? = nil, effort: String? = nil, fastMode: Bool = false, permissionMode: PermissionMode? = nil, title: String? = nil) {
         self.text = text

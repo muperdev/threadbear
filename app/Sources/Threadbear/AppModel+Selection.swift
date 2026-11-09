@@ -15,8 +15,6 @@ extension AppModel {
             dock.show(WindowDock.threadPanel(threadId))
             return
         }
-        // Voice talks with the thread on screen: going to another ends it.
-        if VoiceMode.shared.isOn, VoiceMode.shared.threadId != threadId { VoiceMode.shared.stop() }
         selection = threadId
         openProjectId = nil
         showsProjectsHome = false

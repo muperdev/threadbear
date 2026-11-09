@@ -15,7 +15,7 @@ import type { ToolApprovalAnswer } from './adapters/types.ts';
 import { cardInput, tooLongForCard } from './tools.ts';
 import { usageLine } from './usage.ts';
 import { findPool, poolLine } from './pools.ts';
-import { AGENT_MESSAGE_PREFIX, EFFORT_LEVELS, MOVE_MESSAGE_PREFIX, sentByAgent } from './protocol.ts';
+import { AGENT_MESSAGE_PREFIX, EFFORT_LEVELS, ErrorCode, MOVE_MESSAGE_PREFIX, RpcError, sentByAgent } from './protocol.ts';
 import type { Scheduler } from './schedules.ts';
 import { MAX_CHECK_TIMEOUT_SECS } from './schedule-check.ts';
 import { checkDigest, type CheckCard } from './patch-trust.ts';
@@ -283,11 +283,21 @@ export function buildThreadbearTools(
     // A whole id is looked up by itself. Listing every thread for it cost a
     // draining runner 2.8 MB from the primary per call, and parallel calls
     // piled up until the primary closed its link (THREADBEAR-F, 7 Nov).
-    if (id.length >= 36) {
-      const t = await Promise.resolve(control.get(id)).catch(() => undefined);
+    // One that isn't here can only be another runner's (no id is longer than
+    // a whole one), so this runner's list isn't fetched for it either: on a
+    // draining runner that's the same list from the primary, per call.
+    const whole = id.length >= 36;
+    if (whole) {
+      // In an async function so a get that throws rather than rejects is caught
+      // too. Only "not found" means look elsewhere: anything else (the
+      // primary's link failing) says so, rather than "No thread".
+      const t = await (async () => control.get(id))().catch((e: unknown) => {
+        if (e instanceof RpcError && e.code === ErrorCode.threadNotFound) return undefined;
+        throw e;
+      });
       if (t?.id === id) return { id };
     }
-    const hits = (await all()).filter((t) => t.id === id || t.id.startsWith(id));
+    const hits = whole ? [] : (await all()).filter((t) => t.id === id || t.id.startsWith(id));
     // A whole id here needs nothing from the backend.
     if (hits.some((t) => t.id === id)) return { id };
     const rt = await others();
@@ -515,7 +525,7 @@ export function buildThreadbearTools(
       t.waitingForRoom ? `waiting for room until: ${t.waitingForRoom.until}` : '',
       `model: ${t.model ?? 'default'}${t.modelInUse ? ` (running as ${t.modelInUse})` : ''}`,
       `effort: ${t.effort ?? 'default'}${t.effortInUse ? ` (${t.effortInUse} last turn)` : ''}`,
-      `permissions: ${t.permissionMode === 'full' ? 'full access' : t.permissionMode === 'auto' ? 'auto (a classifier checks each action)' : t.permissionMode === 'plan' ? 'plan first (changes nothing until Mike approves its plan)' : 'ask before edits'}`,
+      `permissions: ${t.permissionMode === 'full' ? 'full access' : t.permissionMode === 'auto' ? 'auto (a classifier checks each action)' : t.permissionMode === 'plan' ? 'plan first (changes nothing until the user approves its plan)' : 'ask before edits'}`,
       t.snoozedUntil ? `snoozed until: ${snoozeEnd(t)}` : '',
       t.archivedAt ? `archived: ${t.archivedAt}${archivedHow(t)}` : '',
       `last activity: ${relativeTime(t.lastActivityAt, now())}`,
@@ -724,8 +734,10 @@ export function buildThreadbearTools(
       handle(async (input, extra) => {
         if (!control.pin) throw new Error("This runner doesn't keep highlights yet.");
         await confirm('pin', await confinedReason(`Pin ${input.path ?? input.url ?? 'something'} for the user to open`), input, extra?.signal);
-        const { id, scriptsOff } = await control.pin(selfId, input);
-        const pinned = `Pinned (${id})${input.show ? ', and shown in the side pane' : ''}.`;
+        const { id, scriptsOff, shown } = await control.pin(selfId, input);
+        // Older runners (a handover) don't say whether it showed.
+        const where = !input.show ? '' : shown === false ? ". It opens in the side pane when the user next looks at this thread in the Mac app; they aren't right now (it waits until then, or until their next message)" : ', and open in the side pane in front of the user now';
+        const pinned = `Pinned (${id})${where}.`;
         // Older runners (a handover) don't say; then nothing's added.
         return scriptsOff
           ? `${pinned} This page has scripts. The side pane opens it with them off, and the user has to choose Run them there before anything it draws with JavaScript shows (and again whenever the file changes), so mention that.`
@@ -1640,7 +1652,7 @@ export function buildThreadbearTools(
         effort: effortEnum.optional().describe("Reasoning effort (ultra is Codex only). Default: the model's own level."),
         permissionMode: z.enum(['full', 'ask', 'auto']).optional().describe('"full" (default), "ask" before edits and commands, or "auto": a classifier approves or blocks each action and asks only when it can\'t decide, for work on untrusted text (Claude only; on Codex it acts like ask).'),
         why: z.string().optional().describe('A few plain words on why this thread exists, about 6 ("fixing a hook it hit"). The sidebar shows them when the user hovers the mark on its row, as they have none of your context for it.'),
-        runner: z.string().optional().describe('Another of the user\'s machines to start it on: its name, or "main". folder is a path there. Where this machine can\'t, it asks the user first and waits.'),
+        runner: z.string().optional().describe('Another of the user\'s machines to start it on: its name, or "main". folder is a path there (~ for its home). Where this machine can\'t, it asks the user first and waits.'),
       },
       handle(async ({ text, title, folder: f, pool: p, account: acc, model, effort, permissionMode: asked, why, runner }, extra) => {
         // From a thread not in full mode, the new thread gets its mode

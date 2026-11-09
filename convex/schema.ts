@@ -83,6 +83,10 @@ export const threadFields = {
         why: v.optional(v.string()),
         reply: v.optional(v.string()),
         options: v.optional(v.array(v.string())),
+        // What each option does if Mike picks it (end_turn's { label, does }),
+        // one per option: the Mac's relay card draws the answers as rows with
+        // these under them, as it does for its own runner's threads. Since API 61.
+        optionNotes: v.optional(v.array(v.string())),
         suggested: v.optional(v.number()),
         links: v.optional(v.array(v.object({ title: v.string(), url: v.string() }))),
         ticked: v.optional(v.boolean()),
@@ -312,6 +316,8 @@ export default defineSchema({
     messageBytes: v.optional(v.number()),
     // Its tool output's bytes (eventBodies), against CAP.bodyBytes.
     bodyBytes: v.optional(v.number()),
+    // messageBytes counted again from its rows (sync.ts recountMessageBytes), once.
+    messagesRecounted: v.optional(v.boolean()),
     pushMinute: v.optional(v.number()),
     pushes: v.optional(v.number()),
   }).index('by_runnerId', ['runnerId']),
@@ -348,6 +354,22 @@ export default defineSchema({
   })
     .index('by_hash', ['ticketHash'])
     .index('by_token_issued', ['tokenId', 'issuedAt'])
+    .index('by_storageId', ['storageId'])
+    .index('by_issued', ['issuedAt']),
+
+  // Pictures the main Mac's runner uploads for a message to another runner's
+  // thread (relay:pictureUploadUrl, convex/http.ts /relay/upload, API 63): the
+  // one-use ticket, and once used the file it stored. A command names only
+  // these (relay.ts commandPictures), relay:discardPictures deletes only
+  // these, and the rows go after a day with any file nothing names any more
+  // (sync:pruneFiles), so an upload that never went out doesn't stay.
+  relayUploads: defineTable({
+    ticketHash: v.string(),
+    issuedAt: v.number(),
+    usedAt: v.optional(v.number()),
+    storageId: v.optional(v.id('_storage')),
+  })
+    .index('by_hash', ['ticketHash'])
     .index('by_storageId', ['storageId'])
     .index('by_issued', ['issuedAt']),
 
@@ -436,7 +458,7 @@ export default defineSchema({
     runnerId: v.string(), // or "any"
     threadId: v.optional(v.string()),
     // interrupt and call (API 44) come only from the main Mac's runner (relay.ts queueCommand).
-    kind: v.union(v.literal('send'), v.literal('respond'), v.literal('update'), v.literal('create'), v.literal('page'), v.literal('share'), v.literal('quickAsk'), v.literal('interrupt'), v.literal('call'), v.literal('schedule'), v.literal('picture'), v.literal('press')),
+    kind: v.union(v.literal('send'), v.literal('respond'), v.literal('update'), v.literal('create'), v.literal('page'), v.literal('share'), v.literal('quickAsk'), v.literal('interrupt'), v.literal('call'), v.literal('schedule'), v.literal('picture'), v.literal('press'), v.literal('slashCommands')),
     args: v.any(),
     state: v.union(v.literal('pending'), v.literal('taken'), v.literal('done'), v.literal('failed')),
     note: v.optional(v.string()),
@@ -444,7 +466,7 @@ export default defineSchema({
     takenAt: v.optional(v.number()),
     doneAt: v.optional(v.number()),
     resultThreadId: v.optional(v.string()), // for create, once it lands
-    result: v.optional(v.string()), // a call's answer as JSON text (API 44), from an allow-listed method (relay.ts CALLS)
+    result: v.optional(v.string()), // a call's answer as JSON text (API 44), from an allow-listed method (relay.ts CALLS); a slashCommands list (API 62)
   })
     .index('by_runner_state', ['runnerId', 'state'])
     .index('by_state', ['state'])

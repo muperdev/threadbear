@@ -44,6 +44,9 @@ shot running -ThreadbearOpen a5
 shot december -ThreadbearOpen a5 -ThreadbearBearDate 2026-12-24T12:00
 shot dictating -ThreadbearOpen a3 -ThreadbearDictating
 shot typing-out -ThreadbearOpen a3 -ThreadbearTypingOut
+shot slash-commands -ThreadbearOpen a3 -ThreadbearDraft /co
+shot typed-out -ThreadbearOpen a3 -ThreadbearTypedOut
+shot heard-live -ThreadbearOpen a3 -ThreadbearHeardLive
 shot pictures -ThreadbearPictures -ThreadbearOpen pics
 shot new-thread -ThreadbearCompose "Add a dark mode to the garden planner, matching the system setting"
 shot pair --unpaired

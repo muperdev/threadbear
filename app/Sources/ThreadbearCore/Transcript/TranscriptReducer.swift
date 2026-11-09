@@ -827,9 +827,34 @@ public struct TranscriptModel: Sendable {
             let toolId = request.itemId.flatMap { $0.isEmpty ? nil : "t:" + $0 }
             if let toolId { approvalForTool[toolId] = id }
             let shown = toolId.map { itemIndex[$0] != nil } ?? false
+            // One card per approval id. The runner never asks twice under
+            // one id, but another runner can: a harmless card, then a start
+            // request under the same id, left two cards up, and Allow on the
+            // harmless one answered the start request (by id) with the
+            // fingerprint of what the other card read (Codex's review, 8
+            // Nov). The newer request takes the card's place instead. A card
+            // already answered stays as it was, and so does a start request:
+            // it shows what this Mac's runner read, so nothing the asking
+            // runner sends under its id takes its place (Codex, round two).
+            if let index = itemIndex[id], index < items.count {
+                guard case .approval(let old) = items[index].content, old.resolution == nil, !old.isStartRequest else { break }
+                let replacement = ApprovalItem(request: request, root: root, toolShown: shown, startRequest: startRequests[request.approvalId])
+                update(id) { content in content = .approval(replacement) }
+                tailDirty = true
+                break
+            }
             append(TranscriptRow(id: id, seq: seq, turnId: turnId, content: .approval(ApprovalItem(request: request, root: root, toolShown: shown, startRequest: startRequests[request.approvalId]))))
             pendingCards[id] = turnId ?? ""
             tailDirty = true
+
+        case .approvalQueued(let queue):
+            let id = "ap:\(queue.approvalId)"
+            update(id) { content in
+                // Never on another runner's start request (ApprovalItem.queued).
+                guard case .approval(var item) = content, item.resolution == nil, !item.isStartRequest else { return }
+                item.queued = queue.calls
+                content = .approval(item)
+            }
 
         case .questionRequested(let request):
             let id = "q:\(request.approvalId)"

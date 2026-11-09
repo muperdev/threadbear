@@ -224,6 +224,10 @@ export const ACCESS: Record<string, Access> = {
   remoteThread: 'owner',
   queueCommand: 'owner',
   commandState: 'owner',
+  // Pictures for another runner's thread (API 63): an upload URL, and
+  // deleting ones uploaded for a command that wasn't queued.
+  pictureUploadUrl: 'owner',
+  discardPictures: 'owner',
   remoteAccounts: 'owner',
   // Full sync (API 52): a runner writes its own threads' tool output, and only
   // the main Mac's runner reads another runner's.

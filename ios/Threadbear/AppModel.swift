@@ -116,9 +116,15 @@ final class AppModel {
     /// `-ThreadbearCompose <text>` (Debug only): open New thread with this
     /// typed in, for the screenshots.
     var composeText: String?
+    /// `-ThreadbearDraft <text>` (Debug only): start the open thread's reply
+    /// box with this typed in ("/co" shows the slash command palette).
+    var draftText: String?
     /// `-ThreadbearSearch <text>` (Debug only): start with this in the
     /// inbox's search, for the screenshots.
     var searchText: String?
+    /// `-ThreadbearScrollTo <threadId>` (Debug only): start with the inbox
+    /// scrolled to this row, for seeing the headings stick.
+    var scrollToThreadId: String?
     /// `-ThreadbearPhoto <path>` (Debug only): start the composers with this
     /// photo, for the screenshots, as nothing can tap the system picker.
     /// With `-ThreadbearSlowPhoto` it takes a few seconds, to see the spinner tile.
@@ -132,6 +138,54 @@ final class AppModel {
     /// Whether messages waiting for their runner can be listed and cancelled
     /// (backend API 57, phone:waiting and phone:cancel).
     var canSeeWaiting: Bool { isFake || (apiVersion ?? 0) >= BackendCompatibility.waitingSendsAPIVersion }
+    /// Whether the reply box's slash command palette can ask the runner
+    /// for a thread's list (backend API 62, phone:slashCommands).
+    var canUseSlashCommands: Bool { isFake || (apiVersion ?? 0) >= BackendCompatibility.slashCommandsAPIVersion }
+    /// Each thread's slash commands once its runner has answered (SlashPaletteList).
+    var slashCommands: [String: [SlashCommand]] = [:]
+    /// Why a thread's list didn't come: its runner is away, or it failed.
+    var slashCommandsProblem: [String: String] = [:]
+    @ObservationIgnored private var slashLoading: Set<String> = []
+    /// The commands picked from the palette lately, newest first.
+    var recentSlashCommands: [String] = UserDefaults.standard.stringArray(forKey: "recentSlashCommands") ?? [] {
+        didSet { UserDefaults.standard.set(recentSlashCommands, forKey: "recentSlashCommands") }
+    }
+
+    /// Asks the thread's runner for its commands when the palette opens,
+    /// once at a time. Kept for the session: a folder's skills change
+    /// rarely, and the runner keeps its own copy fresh. A runner that's
+    /// away leaves the command waiting; after a while the palette says so.
+    func loadSlashCommands(_ threadId: String) {
+        guard canUseSlashCommands, let backend, slashCommands[threadId] == nil, !slashLoading.contains(threadId) else { return }
+        slashLoading.insert(threadId)
+        slashCommandsProblem[threadId] = nil
+        Task { [weak self] in
+            defer { self?.slashLoading.remove(threadId) }
+            do {
+                let commandId = try await backend.slashCommands(threadId: threadId)
+                let list: [SlashCommand]? = try await withThrowingTaskGroup(of: [SlashCommand]?.self) { group in
+                    group.addTask {
+                        for try await status in backend.command(commandId) {
+                            if status?.state == .done { return status?.commands ?? [] }
+                            if status?.state == .failed { throw TransportError.server(status?.note ?? "The runner couldn't list them.") }
+                        }
+                        return nil
+                    }
+                    group.addTask {
+                        try await Task.sleep(for: .seconds(20))
+                        return nil
+                    }
+                    let first = try await group.next() ?? nil
+                    group.cancelAll()
+                    return first
+                }
+                if let list { self?.slashCommands[threadId] = list }
+                else { self?.slashCommandsProblem[threadId] = "Its Mac hasn't answered yet. You can still type a command and send it." }
+            } catch {
+                self?.slashCommandsProblem[threadId] = "Couldn't get its commands: \(error.localizedDescription)"
+            }
+        }
+    }
 
     /// The thread's own runner by name while it's offline. Not offlineText,
     /// which only speaks up once every runner is: with Bruce and the cloud
@@ -349,7 +403,8 @@ final class AppModel {
             // -ThreadbearRunners: the Mac asleep and two more runners, for the runner picker.
             // -ThreadbearOffline: the Mac's been asleep for hours, so messages wait, and a3 has two waiting.
             let offline = args.contains("-ThreadbearOffline")
-            let fake = FakeBackend(runnerOnline: !offline, listDelay: args.contains("-ThreadbearSlowLoad") ? .seconds(6) : .zero, pictures: args.contains("-ThreadbearPictures"), long: args.contains("-ThreadbearLong"), secret: args.contains("-ThreadbearSecret"), diagrams: args.contains("-ThreadbearDiagrams"), runners: args.contains("-ThreadbearRunners"), queued: offline)
+            // -ThreadbearManyThreads: and a long inbox, a few more running and starred, to scroll.
+            let fake = FakeBackend(runnerOnline: !offline, listDelay: args.contains("-ThreadbearSlowLoad") ? .seconds(6) : .zero, pictures: args.contains("-ThreadbearPictures"), long: args.contains("-ThreadbearLong"), secret: args.contains("-ThreadbearSecret"), diagrams: args.contains("-ThreadbearDiagrams"), runners: args.contains("-ThreadbearRunners"), queued: offline, many: args.contains("-ThreadbearManyThreads"))
             // -ThreadbearSlowStart: a new thread takes a minute to start, so its Starting row stays.
             if args.contains("-ThreadbearSlowStart") { fake.startDelay = .seconds(60) }
             // -ThreadbearShortInbox: one thread in the inbox, one running, one of each put away.
@@ -375,7 +430,10 @@ final class AppModel {
         // `-ThreadbearOpen <threadId>`: start on that thread, for screenshots.
         if let i = args.firstIndex(of: "-ThreadbearOpen"), i + 1 < args.count { openThreadId = args[i + 1] }
         if let i = args.firstIndex(of: "-ThreadbearCompose"), i + 1 < args.count { composeText = args[i + 1] }
+        if let i = args.firstIndex(of: "-ThreadbearDraft"), i + 1 < args.count { draftText = args[i + 1] }
         if let i = args.firstIndex(of: "-ThreadbearSearch"), i + 1 < args.count { searchText = args[i + 1] }
+        // `-ThreadbearScrollTo <threadId>`: start with the inbox scrolled to that row, to see the headings stick.
+        if let i = args.firstIndex(of: "-ThreadbearScrollTo"), i + 1 < args.count { scrollToThreadId = args[i + 1] }
         // `-ThreadbearStart <text>`: start a thread with it, as the sheet's Start does.
         if let i = args.firstIndex(of: "-ThreadbearStart"), i + 1 < args.count, let backend {
             let text = args[i + 1]
@@ -407,6 +465,11 @@ final class AppModel {
 
     private func sections(of list: [PhoneThread]) -> InboxSections {
         InboxSections.build(list.filter { !archiving.contains($0.threadId) && !tucks.hidden.contains($0.threadId) }, now: now, wakes: wakes)
+    }
+
+    /// A thread this phone has a row for (inbox, hibernating, archived).
+    func knownThread(_ id: String) -> PhoneThread? {
+        inbox.first { $0.threadId == id } ?? hibernating.first { $0.threadId == id } ?? den.first { $0.threadId == id }
     }
 
     /// A pasted thread id as the `[title](thread:<id>)` link it goes in as,
@@ -629,10 +692,43 @@ final class AppModel {
     /// there: it's the row arriving that says the thread's finished.
     private(set) var landing: Set<String> = []
 
-    private func popMarksAfterLanding() {
+    /// Rows flying from one heading to another over the list (RowFlight.swift),
+    /// each hiding its real row until it's there.
+    private(set) var flights: [String: RowFlight] = [:]
+    @ObservationIgnored let rowFrames = RowFrames()
+
+    /// The moving rows that can fly: those on show now, or under a folded
+    /// heading that is. None under Reduce Motion, or with a thread open over the
+    /// list, where the change just happens.
+    private func flights(for moves: [String: InboxMove], in list: [PhoneThread]) -> [String: RowFlight] {
+        guard Juice.rows != nil, !threadOpen else { return [:] }
+        var flights: [String: RowFlight] = [:]
+        for (id, move) in moves where !(folds.isFolded(move.from) && folds.isFolded(move.to)) {
+            guard let thread = list.first(where: { $0.threadId == id }) else { continue }
+            if !folds.isFolded(move.from), let from = rowFrames.visible(RowFrames.row(id, under: move.from)) {
+                flights[id] = RowFlight(id: id, thread: thread, move: move, from: from, fromHeading: false)
+            } else if folds.isFolded(move.from), let from = rowFrames.visible(RowFrames.heading(move.from)) {
+                flights[id] = RowFlight(id: id, thread: thread, move: move, from: from, fromHeading: true)
+            }
+        }
+        return flights
+    }
+
+    /// A row's there: its real one shows in place of the picture, and its tick
+    /// or dot pops in.
+    func endFlight(_ id: String) {
+        guard flights.removeValue(forKey: id) != nil else { return }
+        withAnimation(Juice.pop) { _ = landing.remove(id) }
+    }
+
+    private func popMarksAfterLanding(flying: Set<String>) {
         Task {
             try? await Task.sleep(for: Juice.landing)
-            withAnimation(Juice.pop) { landing = [] }
+            // A row still flying pops its own when it lands.
+            withAnimation(Juice.pop) { landing = landing.filter { flights[$0] != nil } }
+            // However its flight went, never leave a row hidden.
+            try? await Task.sleep(for: .seconds(1))
+            for id in flying { endFlight(id) }
         }
     }
 
@@ -663,6 +759,10 @@ final class AppModel {
                     // leaves the list still under his thumb.
                     let (old, new) = (model.sections, model.sections(of: list))
                     let glides = model.loaded.contains(.inbox) && old.changedHeadings(to: new)
+                    // Outside the animation, so the pictures are there at once,
+                    // over the rows they stand in for.
+                    let flying = glides ? model.flights(for: old.moves(to: new), in: list) : [:]
+                    model.flights.merge(flying) { $1 }
                     withAnimation(glides ? Juice.rows : nil) {
                         model.inbox = list
                         // Gone from the list means it's done, so a later unarchive shows.
@@ -670,7 +770,7 @@ final class AppModel {
                         model.tucks.inboxArrived(list, now: .now)
                         if glides { model.landing.formUnion(old.landed(in: new)) }
                     }
-                    if glides { model.popMarksAfterLanding() }
+                    if glides { model.popMarksAfterLanding(flying: Set(flying.keys)) }
                     model.inboxAnswers += 1
                 case .hibernating: model.hibernating = list
                 case .den: model.den = list
@@ -892,12 +992,19 @@ final class AppModel {
         loaded = []
         followLists()
         tasks.append(follow(backend.accounts()) { $0.accounts = $1 })
-        tasks.append(follow(backend.schedules()) { $0.wakes = InboxSections.wakes($1) })
         tasks.append(Task { [weak self] in
             for await up in backend.connectionStates() { self?.connected = up }
         })
         tasks.append(Task { [weak self] in
-            guard let identity = try? await backend.me() else { return }
+            guard let identity = try? await backend.me() else {
+                // Can't tell how new the backend is: the whole list works on any.
+                if !Task.isCancelled, let self { self.followWakes(backend, small: false) }
+                return
+            }
+            // Once the version's known, so a backend from before 45 isn't
+            // asked for phone:wakes, and one since never reads every schedule
+            // whole (Backend.wakes says why).
+            if !Task.isCancelled, let self { self.followWakes(backend, small: (identity.apiVersion ?? 0) >= BackendCompatibility.wakesAPIVersion) }
             self?.backendProblem = BackendCompatibility.problem(identity)
             self?.apiVersion = identity.apiVersion ?? 0
             // The inbox started before this was known: over to following its
@@ -924,6 +1031,11 @@ final class AppModel {
         })
         for row in starting where row.failed == nil { watchStarting(row.id) }
         if registerPush, let apnsToken { register(apnsToken) }
+    }
+
+    /// Which threads a schedule will message, for the Hibernating section.
+    private func followWakes(_ backend: any Backend, small: Bool) {
+        tasks.append(follow(small ? backend.wakes() : backend.schedules()) { $0.wakes = InboxSections.wakes($1) })
     }
 
     private func stop() {

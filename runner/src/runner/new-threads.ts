@@ -40,10 +40,21 @@ export const newThreadsPart = {
     // Started by a sandboxed thread's agent in a sandbox folder: shut in
     // one too (ThreadRecord.confined).
     confined?: boolean;
+    // Projects it starts in (New Thread on a project's page), joined
+    // before its first turn, so that turn already has the project's brief.
+    projectIds?: string[];
   }): { thread: ThreadSummary; turnId: string } {
     if (!params.text && !params.images?.length) throw new RpcError(ErrorCode.badParams, 'text or images required');
     checkImages(params.images ?? []);
+    const projectIds = params.projectIds ?? [];
+    if (projectIds.length) {
+      const projects = this.projects;
+      if (!projects) throw new RpcError(ErrorCode.badParams, 'projects are not available on this runner');
+      // Every one checked before the thread exists: a bad id makes nothing.
+      for (const p of projectIds) projects.get(p);
+    }
     const { st, notes } = this.makeThread(params);
+    if (projectIds.length) this.projects!.changeMembership(st.rec.id, { add: projectIds, by: 'mike' });
     const turnId = this.sendTo(st, params.text ?? '', params.images ?? [], { origin: params.origin, scheduleId: params.scheduleId });
     // Under the first turn, so they read as part of starting it.
     for (const text of notes) this.emit(st, { type: 'system.note', text }, st.rt.turn?.turnId ?? turnId);

@@ -106,9 +106,6 @@ final class AppModel {
     /// its draft stays in the box, greyed and locked, with a spinner for
     /// Send, so the click visibly did something however slow the runner is.
     var creatingThread = false
-    /// This Mac's runner's experiments that are on (hello's `experiments`),
-    /// for the ones that live in the app: Voice mode.
-    var experiments: Set<String> = []
     /// How long a thread may sit idle with one of Mike's messages still
     /// queued before the app gives up on it showing.
     static let queuedGrace: Double = 10
@@ -310,6 +307,10 @@ final class AppModel {
     /// across launches; the folder and "Ask before edits" are for one
     /// thread and go back to the defaults after it starts.
     var newThreadCwd: String?
+    /// The project a new thread starts in (New Thread on a project's page):
+    /// it joins before its first turn, so the agent has the project's goals
+    /// from its first message. Cleared by a plain New Thread and once sent.
+    var newThreadProjectId: String?
     /// The runner the next new thread starts on ("Runs on", the
     /// composer's machine chip): nil for this Mac, or another runner's id.
     /// Its folder, account, model and effort are then that runner's
@@ -423,6 +424,9 @@ final class AppModel {
     /// Screenshots only: holds the top runner mid-drag by this much, as a
     /// script can't hold a real drag still to photograph it.
     @ObservationIgnored var runnerDragPreview: CGSize?
+    /// The same for the Runners panel's top card. Watched, as the panel stays
+    /// put while it's hidden, so it never appears afresh to pick it up.
+    var runnerPanelDragPreview: CGSize?
     /// Each runner's machine figures by runner id (`runners.stats`), asked
     /// every 10 s while a runner's details are open in the Runners panel.
     var runnerStats: [String: RunnerMachineStats] = [:]
@@ -455,6 +459,7 @@ final class AppModel {
     var projects: [Project] = [] {
         didSet { projectsVersion &+= 1 }
     }
+    @ObservationIgnored let projectFilePicker = ProjectFilePicker()
     /// The runner knows about projects: an older one answers
     /// `projects.list` with -32601, and then the activity bar has no
     /// Projects or Librarian button and threads show no project chips.
@@ -627,7 +632,6 @@ final class AppModel {
     /// Bumped by each request for a thread's highlights, so a change that
     /// lands while a fetch is out gets fetched again after it.
     @ObservationIgnored var highlightWanted: [String: Int] = [:]
-    @ObservationIgnored var highlightAutoShow = HighlightAutoShow()
     /// The agents' show_panel requests shown this run (PanelRequestModel).
     @ObservationIgnored var panelRequestGate = PanelRequestGate()
     /// What's waiting on the runner, by `BusyKey`, with how many of each

@@ -50,9 +50,27 @@ final class OpenGateSourceTests: XCTestCase {
         var missing: [String] = []
         for case let file as URL in files where file.pathExtension == "swift" {
             let source = try String(contentsOf: file, encoding: .utf8)
-            if source.contains("AttributedString(markdown"), !source.contains("OpenGate.urlAction") { missing.append(file.lastPathComponent) }
+            // inlineMarkdown parses in ProjectPage.swift, so the files that
+            // show what it makes are checked too: the review window, a
+            // window of its own, missed this (Codex's review, 8 Nov).
+            let parses = source.contains("AttributedString(markdown") || source.contains("inlineMarkdown(") || source.contains("TextSection.markdown(")
+            if parses, !source.contains("OpenGate.urlAction") { missing.append(file.lastPathComponent) }
         }
-        XCTAssertEqual(missing, [], "set .environment(\\.openURL, OpenGate.urlAction) on the Text")
+        XCTAssertEqual(missing, [], "set .environment(\\.openURL, OpenGate.urlAction) on the Text, or the window's root")
+    }
+
+    /// ThreadbearCore can't reach OpenGate, so Markdown parsed there (the
+    /// slash palette's descriptions, Daybreak 8 Nov) is shown without its
+    /// links: whatever window it lands in, nothing in it opens.
+    func testMarkdownParsedInCoreHasItsLinksTakenOff() throws {
+        let root = repo.appendingPathComponent("app/Sources/ThreadbearCore")
+        let files = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)!
+        var missing: [String] = []
+        for case let file as URL in files where file.pathExtension == "swift" {
+            let source = try String(contentsOf: file, encoding: .utf8)
+            if source.contains("AttributedString(markdown"), !source.contains(".withoutLinks") { missing.append(file.lastPathComponent) }
+        }
+        XCTAssertEqual(missing, [], "return the parsed text's .withoutLinks")
     }
 
     func testThePhoneOpensThroughLinkGateOnly() throws {
