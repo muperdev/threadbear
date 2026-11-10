@@ -12,6 +12,10 @@ public enum CardMentions {
         /// Another thread, as a `thread:<id>` link (WorkLinks), which the
         /// transcript already opens in the app.
         case thread
+        /// A file on this Mac, as its absolute path in backticks: what a
+        /// file dropped, pasted or picked in the composer puts in the
+        /// message. Its `url` is the path and its title the file's name.
+        case file
     }
 
     public struct Mention: Sendable, Hashable {
@@ -22,16 +26,56 @@ public enum CardMentions {
         public var kind: Kind = .card
     }
 
-    public static func find(in text: String) -> [Mention] {
-        guard text.contains("notion.") || text.contains("](thread:") else { return [] }
+    /// Cards, threads and files, in order. A backticked path counts only
+    /// when `fileExists` says it's there, so `/api/users` in code stays words.
+    public static func find(in text: String, fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> [Mention] {
+        let hasLinks = text.contains("notion.") || text.contains("](thread:")
+        let hasPaths = text.contains("`/")
+        guard hasLinks || hasPaths else { return [] }
         let ns = text as NSString
-        return links(in: Array(text.utf16)).map { link in
+        let u = Array(text.utf16)
+        let linked: [Mention] = hasLinks ? links(in: u).map { link in
             let title = ns.substring(with: link.title)
                 .replacingOccurrences(of: "\\[", with: "[")
                 .replacingOccurrences(of: "\\]", with: "]")
             let url = ns.substring(with: link.url)
             return Mention(range: link.whole, title: title, url: url, kind: url.hasPrefix("thread:") ? .thread : .card)
+        } : []
+        guard hasPaths else { return linked }
+        // A path inside a link's title is the link's.
+        let files = paths(in: u).compactMap { range -> Mention? in
+            guard !linked.contains(where: { NSIntersectionRange($0.range, range).length > 0 }) else { return nil }
+            let path = ns.substring(with: NSRange(location: range.location + 1, length: range.length - 2))
+            guard fileExists(path) else { return nil }
+            let name = (path as NSString).lastPathComponent
+            return Mention(range: range, title: name.isEmpty ? path : name, url: path, kind: .file)
         }
+        return (linked + files).sorted { $0.range.location < $1.range.location }
+    }
+
+    /// How a file goes into a message: its full path in backticks, so one
+    /// with spaces in its name (every screen recording) is still one path.
+    public static func fileReference(path: String) -> String { "`\(path)`" }
+
+    /// Each `` `/…` `` on one line: a single backtick (not a fence's), then
+    /// an absolute path up to the next backtick.
+    private static func paths(in u: [UInt16]) -> [NSRange] {
+        let n = u.count
+        var found: [NSRange] = []
+        var i = 0
+        while i < n {
+            guard u[i] == tick else { i += 1; continue }
+            // A run of backticks is a fence or a longer code span, not a path.
+            guard i + 1 < n, u[i + 1] == slash, i == 0 || u[i - 1] != tick else { i += 1; continue }
+            var k = i + 1
+            while k < n, u[k] != tick, !lineBreaks.contains(u[k]) { k += 1 }
+            guard k < n, u[k] == tick else { i = k; continue }
+            if k > i + 2, k + 1 >= n || u[k + 1] != tick {
+                found.append(NSRange(location: i, length: k - i + 1))
+            }
+            i = k + 1
+        }
+        return found
     }
 
     // A forward scan, not a regex: `[` was allowed in a title, so with no
@@ -168,7 +212,7 @@ public enum CardMentions {
     }
 
     private static let bracket: UInt16 = 0x5B, close: UInt16 = 0x5D, open: UInt16 = 0x28, shut: UInt16 = 0x29
-    private static let backslash: UInt16 = 0x5C, bang: UInt16 = 0x21, newline: UInt16 = 0x0A, slash: UInt16 = 0x2F, dot: UInt16 = 0x2E
+    private static let backslash: UInt16 = 0x5C, bang: UInt16 = 0x21, newline: UInt16 = 0x0A, slash: UInt16 = 0x2F, dot: UInt16 = 0x2E, tick: UInt16 = 0x60
     /// What `.` doesn't match after a backslash.
     private static let lineBreaks: Set<UInt16> = [0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x2028, 0x2029]
     private static let https = Array("https://".utf16), threadScheme = Array("thread:".utf16)

@@ -1315,18 +1315,21 @@ enum RowRenderer {
         cardChips(pictureChips(userWords(message), images: message.images))
     }
 
-    /// Notion cards and threads mentioned in his words drawn as chips,
-    /// rather than the raw Markdown link the message holds. A click opens
-    /// the card like any other link, or the thread in the app, and the card's title is what the hover card and a Quote
-    /// or Explain of it read.
+    /// Notion cards, threads and files mentioned in his words drawn as
+    /// chips, rather than the raw Markdown link or backticked path the
+    /// message holds. A click opens the card like any other link, the
+    /// thread in the app, or the file as any file link does (with its hover
+    /// card, drag and menu), and the title is what a Quote or Explain of
+    /// it read.
     private static func cardChips(_ text: NSAttributedString) -> NSAttributedString {
         let found = CardMentions.find(in: text.string)
         guard !found.isEmpty else { return text }
         let out = NSMutableAttributedString(attributedString: text)
         for mention in found.reversed() {
-            guard let url = URL(string: mention.url) else { continue }
+            guard let url = mention.kind == .file ? URL(fileURLWithPath: mention.url) : URL(string: mention.url) else { continue }
             var attributes = out.attributes(at: mention.range.location, effectiveRange: nil)
-            attributes[.attachment] = CardChip.attachment(title: mention.title, kind: mention.kind, font: attributes[.font] as? NSFont ?? Theme.bodyFont)
+            attributes[.attachment] = CardChip.attachment(title: mention.title, kind: mention.kind, path: mention.kind == .file ? mention.url : nil,
+                                                          font: attributes[.font] as? NSFont ?? Theme.bodyFont)
             // A thread: link opens that thread (WorkLinks); it has no page
             // for the hover card to show.
             attributes[.link] = url

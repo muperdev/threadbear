@@ -308,11 +308,11 @@ struct ThreadSettings {
         return parts.joined(separator: ", ")
     }
 
-    /// "+": images, the folder (it has no chip of its own), and sending
+    /// "+": files, the folder (it has no chip of its own), and sending
     /// the message later.
     func plusMenu(attach: @escaping () -> Void, schedule: (() -> Void)? = nil) -> NSMenu {
         let menu = NSMenu()
-        let images = ActionMenuItem("Attach images…", symbol: "photo", handler: attach)
+        let images = ActionMenuItem("Attach files…", symbol: "paperclip", handler: attach)
         menu.addItem(images)
         let folder = NSMenuItem(title: "Folder", symbol: "folder", action: nil)
         folder.submenu = folderMenu()
@@ -946,7 +946,7 @@ private struct ChipDivider: View {
     }
 }
 
-/// Opens a small menu: "Attach images…" and the folder.
+/// Opens a small menu: "Attach files…" and the folder.
 private struct PlusButton: View {
     /// A folder picked from its menu is on its way.
     var busy = false
@@ -969,8 +969,8 @@ private struct PlusButton: View {
         .busy(busy)
         .background(MenuAnchorView(anchor: anchor))
         .onHover { hovering = $0 }
-        .tip("Attach images, change the folder or schedule the message")
-        .accessibilityLabel("Attach images, change the folder or schedule the message")
+        .tip("Attach files, change the folder or schedule the message")
+        .accessibilityLabel("Attach files, change the folder or schedule the message")
     }
 }
 

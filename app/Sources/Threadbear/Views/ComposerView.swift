@@ -111,7 +111,7 @@ struct ComposerView: View {
                 running: thread?.status.isBusy == true,
                 canSend: canSend,
                 sending: creating,
-                onAttach: { chooseImages(for: draft) },
+                onAttach: { chooseFiles(for: draft) },
                 onSend: { send() },
                 onSchedule: { app.newSchedule(from: thread, draftKey: draftKey) },
                 handle: handle
@@ -371,20 +371,20 @@ struct ComposerView: View {
         draft.wrappedValue = draft.wrappedValue.removingImage(at: index)
     }
 
-    private func chooseImages(for draft: Binding<Draft>) {
+    private func chooseFiles(for draft: Binding<Draft>) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
-        panel.canChooseDirectories = false
+        panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = [.image]
         panel.prompt = "Add"
         let finish = { (response: NSApplication.ModalResponse) in
             guard response == .OK else { return }
             // Chips where the cursor was, as a paste would put them.
             if let textView = handle.textView {
-                textView.insertPictures(panel.urls)
+                textView.insertFiles(panel.urls)
             } else {
-                attach(panel.urls, to: draft)
+                let images = panel.urls.filter { (try? $0.resourceValues(forKeys: [.contentTypeKey]).contentType?.conforms(to: .image)) == true }
+                attach(images, to: draft)
             }
         }
         if let window = NSApp.keyWindow {
@@ -860,12 +860,13 @@ final class ComposerTextView: NSTextView {
     // MARK: A chip's hover card
     //
     // The picture over a chip in the box, as in Mike's bubble, to tell which
-    // is which. A click stays the cursor's (PictureChipCell), so here it's
+    // is which, and a file's card (its preview, name and folder) over a
+    // file's. A click stays the cursor's (PictureChipCell), so here it's
     // the hover alone.
 
     private var chipTracking: NSTrackingArea?
     private var chipCard: ChipCardWindow?
-    private var hoveredChip: PictureAttachment?
+    private var hoveredChip: NSTextAttachment?
     private var chipTimer: Timer?
 
     override func updateTrackingAreas() {
@@ -896,7 +897,7 @@ final class ComposerTextView: NSTextView {
         if newWindow == nil { hoverChip(nil) }
     }
 
-    private func hoverChip(_ chip: PictureAttachment?) {
+    private func hoverChip(_ chip: NSTextAttachment?) {
         guard chip !== hoveredChip else { return }
         chipTimer?.invalidate()
         chipTimer = nil
@@ -911,17 +912,25 @@ final class ComposerTextView: NSTextView {
 
     private func showChipCard() {
         guard let chip = hoveredChip, let window, let rect = range(of: chip).flatMap(chipRect) else { return }
-        let peek = LinkPeek(url: URL(fileURLWithPath: chip.picture?.path ?? chip.source), title: PictureChip.label(chip.number), pictureOnly: true)
+        let peek: LinkPeek
+        if let picture = chip as? PictureAttachment {
+            peek = LinkPeek(url: URL(fileURLWithPath: picture.picture?.path ?? picture.source), title: PictureChip.label(picture.number), pictureOnly: true)
+        } else if let path = (chip as? CardAttachment)?.path {
+            peek = LinkPeek(url: URL(fileURLWithPath: path), title: nil)
+        } else {
+            return
+        }
         chipCard = ChipCardWindow.show(LinkPeekCard(peek: peek), below: window.convertToScreen(convert(rect, to: nil)), parent: window, above: true)
     }
 
-    /// The chip at `point` in this view.
-    private func chipUnder(_ point: NSPoint) -> PictureAttachment? {
+    /// The picture's or file's chip at `point` in this view.
+    private func chipUnder(_ point: NSPoint) -> NSTextAttachment? {
         guard let layoutManager, let textContainer, let storage = textStorage, storage.length > 0 else { return nil }
         let origin = textContainerOrigin
         let glyph = layoutManager.glyphIndex(for: NSPoint(x: point.x - origin.x, y: point.y - origin.y), in: textContainer)
         let index = layoutManager.characterIndexForGlyph(at: glyph)
-        guard index < storage.length, let chip = storage.attribute(.attachment, at: index, effectiveRange: nil) as? PictureAttachment,
+        guard index < storage.length, let chip = storage.attribute(.attachment, at: index, effectiveRange: nil) as? NSTextAttachment,
+              chip is PictureAttachment || (chip as? CardAttachment)?.kind == .file,
               chipRect(NSRange(location: index, length: 1))?.contains(point) == true else { return nil }
         return chip
     }
@@ -1110,8 +1119,10 @@ final class ComposerTextView: NSTextView {
 
     /// Files pasted or dropped. Pictures go to `media.import` as chips;
     /// raw image data (a screenshot on the clipboard) is written to a file
-    /// first. Any other file (a video, a PDF, a folder) goes in as its
-    /// full path, for the agent to open where it is: nothing's copied, so
+    /// first. Any other file (a video, a PDF, a folder) goes in as a chip
+    /// with its icon and name, and into the message as its full path in
+    /// backticks (`CardMentions.fileReference`), for the agent to open
+    /// where it is: nothing's copied, so
     /// a big one costs nothing, except one macOS is about to take back (a
     /// floating thumbnail's), where an APFS clone keeps it for free.
     /// In the composer they go in place of `range` (the selection, for a paste).
@@ -1182,18 +1193,22 @@ final class ComposerTextView: NSTextView {
         return nil
     }
 
-    /// What a dropped file that isn't a picture puts in the words: its
-    /// full path in backticks, so one with spaces in its name (every
-    /// screen recording) still reads as one path.
-    static func pathText(for urls: [URL]) -> String {
-        urls.map { "`\($0.standardizedFileURL.path)`" }.joined(separator: " ")
+    /// Files from the "+" button: pictures as picture chips, anything else
+    /// as a file's chip, where the cursor is.
+    func insertFiles(_ urls: [URL], replacing range: NSRange? = nil) {
+        let images = urls.filter(isImage)
+        let others = urls.filter { !isImage($0) }
+        var at = range
+        if !others.isEmpty { at = insertPaths(others, replacing: range) }
+        if !images.isEmpty { deliver(images, at: at) }
     }
 
-    /// `urls` as paths in place of `range` (the selection by default), with
-    /// a space either side, through `insertText` so it's one undo. Answers
-    /// where the cursor is after them, for any pictures dropped alongside.
+    /// A chip for each of `urls` in place of `range` (the selection by
+    /// default), with a space either side, as one undo. Answers where the
+    /// cursor is after them, for any pictures dropped alongside.
     private func insertPaths(_ urls: [URL], replacing range: NSRange?) -> NSRange {
-        let ns = string as NSString
+        guard let storage = textStorage else { return range ?? selectedRange() }
+        let ns = storage.string as NSString
         let picked = range ?? selectedRange()
         let location = min(picked.location, ns.length)
         let replace = NSRange(location: location, length: min(picked.length, ns.length - location))
@@ -1201,12 +1216,21 @@ final class ComposerTextView: NSTextView {
             guard index >= 0, index < ns.length, let scalar = Unicode.Scalar(ns.character(at: index)) else { return false }
             return CharacterSet.whitespacesAndNewlines.contains(scalar)
         }
-        var piece = Self.pathText(for: urls)
-        if location > 0, !isSpace(location - 1) { piece = " " + piece }
-        if !isSpace(NSMaxRange(replace)) { piece += " " }
+        let space = NSAttributedString(string: " ", attributes: ComposerTextField.attributes)
+        let piece = NSMutableAttributedString()
+        if location > 0, !isSpace(location - 1) { piece.append(space) }
+        for (i, url) in urls.enumerated() {
+            if i > 0 { piece.append(space) }
+            piece.append(chip(CardAttachment(file: url)))
+        }
+        if !isSpace(NSMaxRange(replace)) { piece.append(space) }
         window?.makeFirstResponder(self)
-        insertText(piece, replacementRange: replace)
-        return NSRange(location: location + (piece as NSString).length, length: 0)
+        guard shouldChangeText(in: replace, replacementString: piece.string) else { return picked }
+        storage.replaceCharacters(in: replace, with: piece)
+        didChangeText()
+        let after = NSRange(location: location + piece.length, length: 0)
+        setSelectedRange(after)
+        return after
     }
 
     private func deliver(_ urls: [URL], at range: NSRange?) {
@@ -1445,10 +1469,10 @@ extension ComposerTextView {
         return range
     }
 
-    private func range(of attachment: PictureAttachment) -> NSRange? {
+    private func range(of attachment: NSTextAttachment) -> NSRange? {
         var found: NSRange?
         textStorage?.enumerateAttribute(.attachment, in: whole) { value, range, stop in
-            if (value as? PictureAttachment) === attachment {
+            if (value as? NSTextAttachment) === attachment {
                 found = NSRange(location: range.location, length: 1)
                 stop.pointee = true
             }

@@ -1,9 +1,10 @@
 import AppKit
 import ThreadbearCore
 
-/// A Notion card or another thread mentioned among the words
+/// A Notion card, another thread or a file mentioned among the words
 /// (`CardMentions`): a small rounded tag with the card's or thread's title,
-/// in place of the raw link (Mike asked 3 Nov, for threads 5 Nov).
+/// or the file's icon and name, in place of the raw link or path (Mike
+/// asked 3 Nov, for threads 5 Nov; files, Behrooz 10 Nov).
 /// It looks like a picture's chip, so a message's chips read as one family.
 enum CardChip {
     /// A long title is cut off rather than taking the whole line.
@@ -24,12 +25,28 @@ enum CardChip {
         return NSSize(width: (metrics.inset + metrics.icon + metrics.gap + words + metrics.trailing).rounded(.up), height: metrics.height)
     }
 
-    /// A card's icon, or a speech bubble for a thread.
+    /// A card's icon, or a speech bubble for a thread. A file has Finder's
+    /// icon for it instead, this one only if that can't be had.
     private static func symbol(_ kind: CardMentions.Kind) -> (name: String, label: String) {
-        kind == .thread ? ("bubble.left", "Thread") : ("square.text.square", "Notion card")
+        switch kind {
+        case .thread: ("bubble.left", "Thread")
+        case .file: ("doc", "File")
+        case .card: ("square.text.square", "Notion card")
+        }
     }
 
-    static func draw(in rect: NSRect, title: String, kind: CardMentions.Kind = .card, metrics: PictureChip.Metrics) {
+    /// Finder's icon for each file, read once: chips redraw with every
+    /// keystroke in the box.
+    private static let icons = NSCache<NSString, NSImage>()
+
+    static func fileIcon(_ path: String) -> NSImage {
+        if let icon = icons.object(forKey: path as NSString) { return icon }
+        let icon = NSWorkspace.shared.icon(forFile: path)
+        icons.setObject(icon, forKey: path as NSString)
+        return icon
+    }
+
+    static func draw(in rect: NSRect, title: String, kind: CardMentions.Kind = .card, path: String? = nil, metrics: PictureChip.Metrics) {
         let shape = NSBezierPath(roundedRect: rect.insetBy(dx: 0.25, dy: 0.25), xRadius: metrics.radius, yRadius: metrics.radius)
         PictureChip.fill.setFill()
         shape.fill()
@@ -38,7 +55,11 @@ enum CardChip {
         shape.stroke()
 
         let icon = NSRect(x: rect.minX + metrics.inset, y: rect.midY - metrics.icon / 2, width: metrics.icon, height: metrics.icon)
-        if let symbol = NSImage(systemSymbolName: symbol(kind).name, accessibilityDescription: symbol(kind).label)?
+        if kind == .file, let path {
+            // A touch larger than a symbol: Finder's icons have room around them.
+            let box = icon.insetBy(dx: -metrics.icon * 0.06, dy: -metrics.icon * 0.06)
+            fileIcon(path).draw(in: box, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high.rawValue])
+        } else if let symbol = NSImage(systemSymbolName: symbol(kind).name, accessibilityDescription: symbol(kind).label)?
             .withSymbolConfiguration(.init(pointSize: metrics.icon * 0.78, weight: .regular)) {
             let size = symbol.size
             let tinted = NSImage(size: size, flipped: false) { box in
@@ -60,12 +81,12 @@ enum CardChip {
     }
 
     /// Mike's bubble: the chip as an attachment that draws itself.
-    static func attachment(title: String, kind: CardMentions.Kind = .card, font: NSFont) -> NSTextAttachment {
+    static func attachment(title: String, kind: CardMentions.Kind = .card, path: String? = nil, font: NSFont) -> NSTextAttachment {
         let metrics = PictureChip.Metrics(font: font)
         let size = size(title, metrics: metrics)
         let attachment = NSTextAttachment()
         attachment.image = NSImage(size: size, flipped: false) { rect in
-            draw(in: rect, title: title, kind: kind, metrics: metrics)
+            draw(in: rect, title: title, kind: kind, path: path, metrics: metrics)
             return true
         }
         attachment.bounds = NSRect(x: 0, y: metrics.baselineOffset, width: size.width, height: size.height)
@@ -73,9 +94,9 @@ enum CardChip {
     }
 }
 
-/// A card or thread in the composer's words. It carries the link it stands
-/// for, so the draft read off the text is the same plain link the message
-/// will hold.
+/// A card, thread or file in the composer's words. It carries the link (or
+/// backticked path) it stands for, so the draft read off the text is the
+/// same plain words the message will hold.
 final class CardAttachment: NSTextAttachment {
     let reference: String
     let title: String
@@ -89,6 +110,19 @@ final class CardAttachment: NSTextAttachment {
         let cell = CardChipCell()
         attachmentCell = cell
         cell.attachment = self
+    }
+
+    /// A file's chip: its file and its name.
+    convenience init(file url: URL) {
+        let path = url.standardizedFileURL.path
+        let name = (path as NSString).lastPathComponent
+        self.init(reference: CardMentions.fileReference(path: path), title: name.isEmpty ? path : name, kind: .file)
+    }
+
+    /// The file a file's chip stands for: its reference without the backticks.
+    var path: String? {
+        guard kind == .file, reference.count > 2 else { return nil }
+        return String(reference.dropFirst().dropLast())
     }
 
     required init?(coder: NSCoder) { fatalError("not coded") }
@@ -107,7 +141,7 @@ final class CardChipCell: NSTextAttachmentCell {
     override func wantsToTrackMouse() -> Bool { false }
 
     override func draw(withFrame cellFrame: NSRect, in controlView: NSView?) {
-        CardChip.draw(in: cellFrame, title: card?.title ?? "", kind: card?.kind ?? .card, metrics: metrics)
+        CardChip.draw(in: cellFrame, title: card?.title ?? "", kind: card?.kind ?? .card, path: card?.path, metrics: metrics)
     }
 
     override func draw(withFrame cellFrame: NSRect, in controlView: NSView?, characterIndex charIndex: Int, layoutManager: NSLayoutManager) {

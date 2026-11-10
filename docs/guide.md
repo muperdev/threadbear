@@ -394,7 +394,7 @@ it appear in `~/ThreadbearThreads`.
 Return sends and Shift-Return adds a new line. In a list, Shift-Return
 starts the next item ("2. " after "1. milk", "- " after "- milk"), and
 Shift-Return on an empty item ends the list. You can paste or drop images
-into the composer, or add them with +. Each one goes in where the cursor
+into the composer, or add them with + (Attach files). Each one goes in where the cursor
 is (or where you drop it) as a small chip, "Picture 1", "Picture 2", with
 its thumbnail, and the agent gets each picture right there in your words.
 You can let go of a file anywhere over the thread, not just on the box: the
@@ -403,8 +403,9 @@ So "this one [Picture 1] should look like this one [Picture 2]" says which
 is which. The thumbnails show over the text too; the cross on one takes it
 and its chip out. Hover a chip to see its picture, in the composer or once
 it's sent; in the thread, clicking one opens the picture in Quick Look.
-Any other file you paste or drop in (a video, a PDF, a folder) goes in as
-its full path where you drop it, for the agent to open where it is.
+Any other file you paste, drop or add with + (a video, a PDF, a folder)
+goes in as a chip with its icon and name, and the agent gets its full path,
+to open it where it is. Hover the chip to see the file and its folder.
 Nothing's copied, so a big one is fine.
 
 Paste a thread's id (Copy thread id in its ... menu or its right-click
