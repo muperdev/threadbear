@@ -4829,6 +4829,63 @@ or by agents with the Notion tools. `read_project` lists the open cards,
 and a thread's brief has one line saying the board is there and how many
 are open. With no gateway, `error` says so.
 
+### Shared projects
+
+Behind the `multiplayer` experiment (docs/multiplayer-design.md). A team
+is people who each run Threadbear, with a hub on one member's Convex
+deployment (`convex/team.ts`). The runner's side is `runner/src/team.ts`;
+its member key is in `secrets/team.json` (0600), and only the key's sha256
+reaches the hub. A member key opens `team:*` alone; a runner key or phone
+token opens nothing there.
+
+```ts
+// On Project, when it's linked to the team's copy
+team?: { id: string; delivery?: "deliver"; syncedAt?: number }
+// delivery: a teammate's message to one of its threads goes straight in
+// rather than waiting. syncedAt: the hub's updatedAt last taken in (the
+// hub's clock, never compared with the Mac's).
+
+type TeamState = {
+  on: boolean; joined: boolean; connected: boolean; error?: string
+  url?: string; name?: string
+  me?: TeamMember
+  members: { memberId; name; host; me; online; seenAt? }[]
+  projects: { id; title; sharedBy; repos: string[]; updatedAt; localProjectId?; mine }[]
+  cards: { id /* team:<member>:<thread8> */; projectId; memberId; memberName; threadId
+           title; status: "working" | "needsThem" | "idle" | "done"
+           headline?; branch?; repo?; handedTo?; handedToName?; mine; updatedAt /* ms */ }[]
+  waiting: { id; kind: "message" | "handover"; projectId; localProjectId?; fromName; fromTitle
+             toThread?; toThreadTitle?; text; repo?; branch?; links?; createdAt }[]
+  log: Record<string /* shared id */, { memberName; text; threadTitle?; at /* ms */ }[]>
+}
+```
+
+Requests: `team.get` → `{ team }`; `team.create { name, memberName? }`
+(on this Mac's own deployment, with its owner key); `team.invite { days? }`
+→ `{ invite: "tbteam:<url>#<code>", expiresAt }` (the host only);
+`team.join { invite, name? }`; `team.leave`; `team.remove { member }` (the
+host); `team.share { projectId }`; `team.add { sharedId }` → `{ projectId,
+missing: string[] }` (a linked project here, its folders this Mac's clones
+of the shared repos); `team.unshare { projectId }`; `team.unlink
+{ projectId }`; `team.setDelivery { projectId, delivery: "ask" | "deliver" }`;
+`team.answer { id, action: "pass" | "dismiss" | "take" | "decline", reason? }`
+→ `{ threadId?, team }`. All but `team.get` refuse while the experiment
+is off. The notification `team.updated { team }` follows any change.
+
+A linked project's title, goals, state, notes and links go up a couple of
+seconds after they change here and come down as the hub changes them
+(last write wins, field by field); its repos are the origin remotes of
+each member's folders, added to. Each of this Mac's threads in a linked
+project has a card, sent at most every 10 seconds when it would change. A
+shared project's brief gets a block on top of the project's own: who's on
+the team, teammates' open threads by their `team:` ids, and the latest
+notes from the team's log, which `update_project`'s `appendNote` adds to.
+`read_project` lists the board and the log. `send_message` takes a `team:`
+id; the teammate's runner notes it in the thread and holds it as waiting,
+unless the project is set to deliver. `hand_over { to, note, links? }` is
+only in a thread's tools while it's on a team. Outside Full access both ask
+first, as they leave this Mac.
+
 ## Schedules
 
 A schedule sends a message at a set time, once (`at`) or over and over
