@@ -213,6 +213,7 @@ before(() => {
   fs.copyFileSync(path.join(RUNNER, 'src', 'rpc-auth.ts'), path.join(rdir, 'src', 'rpc-auth.ts'));
   // deploy-backend.mjs reads this Mac's Convex credential with it.
   fs.copyFileSync(path.join(RUNNER, 'src', 'convex-admin.ts'), path.join(rdir, 'src', 'convex-admin.ts'));
+  fs.copyFileSync(path.join(RUNNER, 'src', 'secure-url.ts'), path.join(rdir, 'src', 'secure-url.ts'));
   fs.writeFileSync(path.join(rdir, 'bin', 'tb'), '#!/usr/bin/env node\n');
   const pkg = { name: 'fake-runner', version: '9.9.9', private: true, type: 'module', scripts: { typecheck: 'true', test: 'true' } };
   fs.writeFileSync(path.join(rdir, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');

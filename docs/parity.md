@@ -27,6 +27,7 @@ website, which read every thread through Convex.
 | The slash command list | `threads.commands` | Yes | Yes |
 | Hibernate until something happens | `threads.hibernateWhen` | Yes | No: The phone hibernates until a time only. |
 | What fills its context | `threads.contextUsage` | No: Asked of the CLI on that Mac; the ring's popover there shows the totals only. | No: Not on the phone. |
+| Taking back a queued message | `threads.unqueue` | No: Queueing (Cmd+Return) is on this Mac's own threads for now. | No: The phone has no queue. |
 | Ticking an ask on the card | `threads.tickAsk` | No: Ticks stay on that Mac. | No: The phone sends picks with its answer instead. |
 | Editing a message | `threads.edit` | No: It undoes file changes on that Mac, so it waits for a way to show what it undid. | No: Not on the phone. |
 | Deleting it | `threads.delete` | No: Done on that Mac. | No: Not on the phone. |

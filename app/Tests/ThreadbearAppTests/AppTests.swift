@@ -194,8 +194,10 @@ final class ComposerTests: XCTestCase {
 
         XCTAssertTrue(composer.takeImages(from: board))
         let expected = "look at `\(video.standardizedFileURL.path)` `\(folder.standardizedFileURL.path)` "
-        XCTAssertEqual(composer.string, expected)
-        XCTAssertEqual(composer.selectedRange().location, (expected as NSString).length)
+        // Each goes in as a file's chip, and as its path in what's sent.
+        XCTAssertEqual(composer.string, "look at \u{FFFC} \u{FFFC} ")
+        XCTAssertEqual(composer.draftNow.text, expected)
+        XCTAssertEqual(composer.selectedRange().location, (composer.string as NSString).length)
 
         // Plain words on the clipboard are still a normal paste.
         board.clearContents()
@@ -203,8 +205,8 @@ final class ComposerTests: XCTestCase {
         XCTAssertFalse(composer.takeImages(from: board))
     }
 
-    /// Dropping a video on the box is taken (a copy), and its path lands
-    /// in the words. A plain text view turned it away before (3 Nov).
+    /// Dropping a video on the box is taken (a copy), and lands as its
+    /// chip, its path in the words sent. A plain text view turned it away before (3 Nov).
     func testDroppingAVideoPutsItsPathIn() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("composer-drop-\(UUID().uuidString.prefix(6))", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -223,7 +225,8 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(composer.draggingEntered(drag), .copy)
         XCTAssertEqual(composer.draggingUpdated(drag), .copy)
         XCTAssertTrue(composer.performDragOperation(drag))
-        XCTAssertEqual(composer.string, "`\(video.standardizedFileURL.path)` ")
+        XCTAssertEqual(composer.string, "\u{FFFC} ")
+        XCTAssertEqual(composer.draftNow.text, "`\(video.standardizedFileURL.path)` ")
     }
 
     /// Letting a file go anywhere over the thread gives it to the composer,
@@ -266,7 +269,7 @@ final class ComposerTests: XCTestCase {
         XCTAssertEqual(host.subviews.count, 2, "the mark shows over the transcript")
         XCTAssertTrue(host.performDragOperation(outside))
         XCTAssertEqual(host.subviews.count, 1, "and goes with the drop")
-        XCTAssertEqual(composer.string, "`\(video.standardizedFileURL.path)` ")
+        XCTAssertEqual(composer.draftNow.text, "`\(video.standardizedFileURL.path)` ")
         XCTAssertTrue(window.firstResponder === composer)
 
         // Words dragged in aren't files, so they aren't for the thread.
