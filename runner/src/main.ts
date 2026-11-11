@@ -29,6 +29,8 @@ import { KeepAwake } from './keep-awake.ts';
 import { experimentOn } from './experiments.ts';
 import { MacScreen } from './mac-screen.ts';
 import { Projects, drainProjectMethods, projectMethods } from './projects.ts';
+import { Team, teamMethods } from './team.ts';
+import type { TeamControl } from './threadbear-mcp.ts';
 import { Librarian, librarianMethods } from './librarian.ts';
 import { ConnectorsMonitor, connectorsMethods } from './connectors.ts';
 import { TaskBoards, gatewayCaller, helperHeaders } from './notion-tasks.ts';
@@ -165,6 +167,25 @@ async function main(): Promise<void> {
   // them there rather than write projects.json beside it, and a kept thread
   // joins or leaves one here (docs/protocol.md, "Handovers").
   const projectControl = () => projectRouter(projects, () => primaryLink, { draining: () => draining, holds: (threadId) => runner.has(threadId) });
+  // Shared projects (team.ts), made once sync's key is read, below. Agents
+  // only see it while the multiplayer experiment is on and there's a team.
+  let team: Team | undefined;
+  const teamControl = (): TeamControl | undefined => {
+    const t = team;
+    if (!t?.joined() || draining) return undefined;
+    return {
+      joined: () => t.joined(),
+      isCardRef: (ref) => t.isCardRef(ref),
+      sendToCard: (p) => t.sendToCard(p),
+      handOver: (p) => t.handOver(p),
+      linesFor: (projectId) => {
+        const rec = projects.record(projectId);
+        return rec ? t.projectLines(rec) : [];
+      },
+      logNote: (projectId, text, threadId) => t.logNote(projectId, text, threadId),
+      memberNames: () => t.members().filter((m) => !m.me).map((m) => m.name),
+    };
+  };
   // Keeps both CLIs current (E). Its hooks call back into the runner and
   // the Restarter, made below; nothing calls them before start().
   const acpOn = () => experimentOn(cfg.home, 'acpAgents');
@@ -240,14 +261,14 @@ async function main(): Promise<void> {
     claudePath: cfg.claudePath,
     registry,
     log,
-    mcpServersFor: (threadId) => ({ [SERVER_NAME]: threadbearMcpServer(router(), threadId, scheduleControl(), projectControl(), appRestarts, () => cfg.bulletReplies, pocketControl, () => cfg.oneReply, () => cfg.connectorsUrl, gatewayHealth, () => experimentOn(cfg.home, 'scheduleChecks'), remoteControl, () => experimentOn(cfg.home, 'replyButtons'), () => experimentOn(cfg.home, 'runAsks')) }),
+    mcpServersFor: (threadId) => ({ [SERVER_NAME]: threadbearMcpServer(router(), threadId, scheduleControl(), projectControl(), appRestarts, () => cfg.bulletReplies, pocketControl, () => cfg.oneReply, () => cfg.connectorsUrl, gatewayHealth, () => experimentOn(cfg.home, 'scheduleChecks'), remoteControl, () => experimentOn(cfg.home, 'replyButtons'), () => experimentOn(cfg.home, 'runAsks'), teamControl) }),
     oneReply: () => cfg.oneReply,
     sandboxFor: (cwd) => sandboxFor(cfg.sandbox, cwd),
     alwaysAsk: ALWAYS_ASK_TOOLS,
     neverAsk: NEVER_ASK_TOOLS,
   });
   // The threadbear tools for an agent that isn't given them in-process.
-  const codexStyleTools = (threadId: string) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, scheduleChecks: () => experimentOn(cfg.home, 'scheduleChecks'), remote: remoteControl, replyButtons: () => experimentOn(cfg.home, 'replyButtons'), runAsks: () => experimentOn(cfg.home, 'runAsks') });
+  const codexStyleTools = (threadId: string) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, scheduleChecks: () => experimentOn(cfg.home, 'scheduleChecks'), remote: remoteControl, replyButtons: () => experimentOn(cfg.home, 'replyButtons'), runAsks: () => experimentOn(cfg.home, 'runAsks'), team: teamControl });
   // One app-server per live Codex thread, each starting what E says is
   // current, with the same threadbear tools as dynamic tools.
   const codex = new CodexAdapter({
@@ -270,7 +291,7 @@ async function main(): Promise<void> {
     registry,
     log,
     mcp: acpMcp,
-    toolsFor: (threadId) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, scheduleChecks: () => experimentOn(cfg.home, 'scheduleChecks'), remote: remoteControl, replyButtons: () => experimentOn(cfg.home, 'replyButtons'), runAsks: () => experimentOn(cfg.home, 'runAsks') }),
+    toolsFor: (threadId) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, scheduleChecks: () => experimentOn(cfg.home, 'scheduleChecks'), remote: remoteControl, replyButtons: () => experimentOn(cfg.home, 'replyButtons'), runAsks: () => experimentOn(cfg.home, 'runAsks'), team: teamControl }),
     extraGuidance: () => RICH_BLOCKS_LINE,
   });
   // Devin threads (the devin experiment, docs/devin-plan.md): one `devin
@@ -282,7 +303,7 @@ async function main(): Promise<void> {
     registry,
     log,
     mcp: acpMcp,
-    toolsFor: (threadId) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, scheduleChecks: () => experimentOn(cfg.home, 'scheduleChecks'), remote: remoteControl, replyButtons: () => experimentOn(cfg.home, 'replyButtons'), runAsks: () => experimentOn(cfg.home, 'runAsks') }),
+    toolsFor: (threadId) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, scheduleChecks: () => experimentOn(cfg.home, 'scheduleChecks'), remote: remoteControl, replyButtons: () => experimentOn(cfg.home, 'replyButtons'), runAsks: () => experimentOn(cfg.home, 'runAsks'), team: teamControl }),
     extraGuidance: () => RICH_BLOCKS_LINE,
   });
   // One process per live thread on an agent that speaks ACP, off unless the
@@ -477,6 +498,26 @@ async function main(): Promise<void> {
     sharedPools.loadCache();
     runner.sharedPools = sharedPools;
   }
+  team = new Team({
+    home: cfg.home,
+    clock: realClock,
+    log,
+    on: () => experimentOn(cfg.home, 'multiplayer'),
+    projects,
+    ownBackend: () => (cfg.sync.url && syncKey ? { url: cfg.sync.url, key: syncKey } : undefined),
+    host: {
+      threads: () => runner.list(['inbox', 'snoozed', 'archived']),
+      thread: (id) => (runner.has(id) ? runner.get(id) : undefined),
+      note: (id, text) => void runner.editThread(id, () => {}, { note: text }),
+      send: (id, text) => void runner.send(id, text),
+      create: (p) => runner.create({ text: p.text, ...(p.cwd ? { cwd: p.cwd } : {}), ...(p.title ? { title: p.title } : {}), projectIds: p.projectIds, startedBy: { kind: 'tool', label: 'Team', icon: 'person.2' } }).thread,
+      publish: (n) => runner.publish(n),
+      onNotification: (fn) => runner.onNotification(fn),
+      defaultCwd: () => cfg.defaults.cwd,
+    },
+  });
+  projects.useTeamBrief((rec) => team?.brief(rec));
+  team.start();
   const scrubber = new Scrubber({ secretsDir: paths.secrets(cfg.home), log });
   // Text cut short anywhere in the runner is cut where none of these values
   // (nor anything the rules know) is split in two (safe-cut.ts). Not counted
@@ -730,7 +771,7 @@ async function main(): Promise<void> {
   updaterReady = true;
 
   runner.attachClis(updates);
-  const methods = { ...restartMethods(restarter), ...scheduleMethods(scheduler), ...projectMethods(projects), ...drainProjectMethods(projects), ...librarianMethods(librarian), ...connectorsMethods(connectors), ...settingsMethods(settings), ...instructionsMethods(instructions), ...modelMethods(models), ...devicesMethods(sync), ...usageStatsMethods({ tally, history: usageHistory, clock: realClock }) };
+  const methods = { ...restartMethods(restarter), ...scheduleMethods(scheduler), ...projectMethods(projects), ...drainProjectMethods(projects), ...librarianMethods(librarian), ...connectorsMethods(connectors), ...settingsMethods(settings), ...instructionsMethods(instructions), ...modelMethods(models), ...devicesMethods(sync), ...usageStatsMethods({ tally, history: usageHistory, clock: realClock }), ...teamMethods(team) };
   // runner.status carries the CLI statuses too (protocol, "runner.status").
   const restartStatus = methods['runner.status'];
   methods['runner.status'] = (p) => {
@@ -1082,6 +1123,7 @@ async function main(): Promise<void> {
     keepAwake.stop();
     connectors.stop();
     projects.stop();
+    await team?.stop();
     usage.stop();
     tally.stop();
     updates.stop();
@@ -1116,6 +1158,8 @@ async function main(): Promise<void> {
   const handOver = async (keeps: string[]) => {
     if (draining || stopping) return;
     draining = true;
+    // The new runner follows the team now.
+    void team?.stop();
     log.info('starting the handover', { keeps });
     try {
       cancelMarkGood();

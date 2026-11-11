@@ -103,6 +103,18 @@ export type ScheduleControl = Async<Scheduler, 'create' | 'list' | 'find' | 'upd
 export type ProjectControl = Async<Projects, 'list' | 'get' | 'find' | 'create' | 'update' | 'appendNote' | 'changeMembership'> &
   Partial<Async<Projects, 'chooseIcon' | 'addLinks' | 'removeLinks'>>;
 
+// Shared projects (team.ts, docs/multiplayer-design.md): a teammate's
+// thread by its board id, hand_over, and the team's part of read_project.
+export type TeamControl = {
+  joined(): boolean;
+  isCardRef(ref: string): boolean;
+  sendToCard(p: { ref: string; text: string; fromThreadId: string }): Promise<string>;
+  handOver(p: { to: string; note: string; threadId: string; links?: { title: string; url: string }[] }): Promise<string>;
+  linesFor(projectId: string): string[];
+  logNote(projectId: string, text: string, threadId?: string): Promise<void>;
+  memberNames(): string[];
+};
+
 export const SERVER_NAME = 'threadbear';
 
 export type AgentApprovalRequest = { name: string; title: string; input: Record<string, unknown>; signal?: AbortSignal };
@@ -234,6 +246,9 @@ export function buildThreadbearTools(
     // The runAsks experiment: end_turn's asks[].run is only offered while
     // it's on.
     runAsks?: () => boolean;
+    // The multiplayer experiment (team.ts): undefined while it's off or
+    // there's no team, so hand_over is only handed out on a team.
+    team?: () => TeamControl | undefined;
   } = {},
 ) {
   const codex = opts.provider === 'codex';
@@ -1022,6 +1037,30 @@ export function buildThreadbearTools(
   const LINKS_HELP =
     'The few places the user goes for this project, at most 8: its live site, admin page, dashboard, store listing, repo. Short titles ("Live site", "Admin"). Not one-off pages, PRs or docs.';
 
+  // Only on a team (the multiplayer experiment): read once, as the tool
+  // list is fixed when a session starts.
+  const teamAtStart = opts.team?.();
+  const teamTools = teamAtStart
+    ? [
+        tool(
+          'hand_over',
+          `Hands this thread's work to a teammate on the project's team (${teamAtStart.memberNames().join(', ') || 'no one else yet'}). It waits on their Mac until they take it, then starts a thread there with your note as its brief. Write the note for someone who has seen none of this: what's done, what's next, what to watch out for. Push the branch first.`,
+          {
+            to: z.string().min(1).describe("The teammate's name."),
+            note: z.string().min(1).max(20_000).describe("The brief: what's done, what's next, what to watch."),
+            links: z.array(z.object({ title: z.string(), url: z.string() })).max(8).optional().describe('PRs, docs and pages they will need.'),
+          },
+          handle(async ({ to, note, links }, extra) => {
+            const t = opts.team?.();
+            if (!t) throw new Error('Not on a team any more.');
+            const caller = await restricted();
+            await confirm('hand_over', caller ? [`Hand this thread's work over to ${to}`] : [], { to, note }, extra?.signal);
+            return t.handOver({ to, note, threadId: selfId, ...(links?.length ? { links } : {}) });
+          }),
+        ),
+      ]
+    : [];
+
   const projectTools = [
     tool(
       'list_projects',
@@ -1067,6 +1106,7 @@ export function buildThreadbearTools(
           `Threads (${p.threadCount}):`,
           ...threads,
           ...(threadIds.length > 20 ? [`… and ${threadIds.length - 20} more`] : []),
+          ...(p.team ? (opts.team?.()?.linesFor(p.id) ?? []) : []),
         ].join('\n');
       }),
     ),
@@ -1157,7 +1197,11 @@ export function buildThreadbearTools(
           folders = [...p.folders.filter((f) => !drop.has(f)), ...add.filter((f) => !p.folders.includes(f))];
         }
         let out = await pc.update(p.id, { title, goals, state, notes, links, folders, notion, by: mikeAsked ? 'mike' : 'agent' });
-        if (appendNote?.trim()) out = await pc.appendNote(p.id, appendNote);
+        if (appendNote?.trim()) {
+          out = await pc.appendNote(p.id, appendNote);
+          // A shared project's note reaches the team's log too.
+          if (out.team) await opts.team?.()?.logNote(p.id, appendNote, selfId);
+        }
         if (addLinks?.length || removeLinks?.length) {
           if (!pc.addLinks || !pc.removeLinks) throw new Error("This runner can't change project links yet.");
           if (removeLinks?.length) out = await pc.removeLinks(p.id, removeLinks);
@@ -1564,6 +1608,7 @@ export function buildThreadbearTools(
     ...pocketTools,
     ...(schedules ? scheduleTools : []),
     ...(projects ? projectTools : []),
+    ...(teamAtStart ? teamTools : []),
     tool(
       'list_threads',
       "Lists Threadbear threads, newest activity first: short id, title, status, folder, account; another runner's say which. By default the inbox; include snoozed and archived ones to see everything. With a query, searches titles and previews across all threads.",
@@ -1753,6 +1798,13 @@ export function buildThreadbearTools(
       handle(async ({ threadId, id: alias, text }, extra) => {
         const asked = threadId ?? alias;
         if (!asked) throw new Error('threadId is required. list_threads shows the ids.');
+        const team = opts.team?.();
+        if (team?.isCardRef(asked)) {
+          // A teammate's thread: it leaves this Mac, so outside Full access it asks first.
+          const caller = await restricted();
+          await confirm('send_message', caller ? [`Send a message to a teammate's thread (${asked})`] : [], { threadId: asked, text }, extra?.signal);
+          return team.sendToCard({ ref: asked, text, fromThreadId: selfId });
+        }
         const hit = await find(asked);
         const id = hit.id;
         if (id === selfId) throw new Error("That's this thread. Just carry on here.");
@@ -2071,13 +2123,13 @@ export function serverInstructions(selfId: string, o: { one: boolean; bulletRepl
   );
 }
 
-export function threadbearMcpServer(control: ThreadControl, selfId: string, schedules?: ScheduleControl, projects?: ProjectControl, appRestarts?: AppRestartControl, bulletReplies: () => boolean = () => true, pocket?: () => PocketControl | undefined, oneReply: () => boolean = () => false, gateway?: () => string | undefined, gatewayHealth?: () => Promise<ConnectorService[] | undefined>, scheduleChecks?: () => boolean, remote?: () => RemoteControl | undefined, replyButtons?: () => boolean, runAsks?: () => boolean): McpSdkServerConfigWithInstance {
+export function threadbearMcpServer(control: ThreadControl, selfId: string, schedules?: ScheduleControl, projects?: ProjectControl, appRestarts?: AppRestartControl, bulletReplies: () => boolean = () => true, pocket?: () => PocketControl | undefined, oneReply: () => boolean = () => false, gateway?: () => string | undefined, gatewayHealth?: () => Promise<ConnectorService[] | undefined>, scheduleChecks?: () => boolean, remote?: () => RemoteControl | undefined, replyButtons?: () => boolean, runAsks?: () => boolean, team?: () => TeamControl | undefined): McpSdkServerConfigWithInstance {
   const one = oneReply();
   const server = createSdkMcpServer({
     name: SERVER_NAME,
     version: RUNNER_VERSION,
     instructions: serverInstructions(selfId, { one, bulletReplies: bulletReplies(), pocket: Boolean(pocket?.()), projects: Boolean(projects) }),
-    tools: buildThreadbearTools(control, selfId, Date.now, schedules, projects, appRestarts, { bulletReplies, pocket, oneReply: () => one, gateway, gatewayHealth, scheduleChecks, remote, replyButtons, runAsks }),
+    tools: buildThreadbearTools(control, selfId, Date.now, schedules, projects, appRestarts, { bulletReplies, pocket, oneReply: () => one, gateway, gatewayHealth, scheduleChecks, remote, replyButtons, runAsks, team }),
   });
   server.tools = [...ALWAYS_ASK_TOOLS].map((name) => ({ name: name.split('__').at(-1)!, permission_policy: 'always_ask' as const }));
   return server;

@@ -399,7 +399,14 @@ export type Project = {
   tasks?: ProjectTasks;
   threadCount: number;
   lastActivityAt?: string;
+  // Linked to a project shared with a team (docs/multiplayer-design.md).
+  team?: ProjectTeam;
 };
+
+// A project's link to the team's copy: the shared id, whether teammates'
+// messages to its threads go straight in ("deliver") or wait for Mike, and
+// the hub's updatedAt last taken in.
+export type ProjectTeam = { id: string; delivery?: 'deliver'; syncedAt?: number };
 
 // A project's task board, read from the Notion database on its page.
 // Notion is where it's changed; Threadbear only shows it.
