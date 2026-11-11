@@ -21,10 +21,10 @@ struct TeamSection: View {
                             .controlSize(.small)
                             .busy(app.isBusy(BusyKey.teamDelivery(project.id)))
                             .tip("Off: a teammate's agent's message to one of these threads waits here for you. On: it goes straight into the thread.")
-                        Menu {
-                            Button("Copy Invite") { app.copyTeamInvite() }
+                        IconMenu {
+                            Button("Copy Invite", systemImage: "person.badge.plus") { app.copyTeamInvite() }
                                 .disabled(app.team.me?.host != true)
-                            Button("Stop Sharing…") { app.stopSharingProject(project.id) }
+                            Button("Stop Sharing…", systemImage: "person.2.slash") { app.stopSharingProject(project.id) }
                         } label: { Image(systemName: "ellipsis.circle") }
                             .menuStyle(.borderlessButton)
                             .fixedSize()
