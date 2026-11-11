@@ -4,7 +4,7 @@ name: Shared projects
 title: Shared projects: work on a project with your team, each with your own threads and agents
 added: 2026-11-11
 on: false
-reminder: 7c1e5a90
+reminder: 0853ed92
 ---
 
 ## What it does
