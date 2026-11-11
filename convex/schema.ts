@@ -997,4 +997,104 @@ export default defineSchema({
     nonce: v.string(),
     createdAt: v.number(),
   }).index('by_nonce', ['nonce']),
+
+  // A team this deployment hosts (docs/multiplayer-design.md, convex/team.ts):
+  // people who each run their own Threadbear and share projects here. Only
+  // what the team shares lives in these tables: never transcripts, tool
+  // output, folders or secrets. A member key opens team.ts alone, and a
+  // runner key or phone token opens nothing in it.
+  teamInfo: defineTable({
+    name: v.string(),
+    createdAt: v.number(),
+  }),
+  teamMembers: defineTable({
+    memberId: v.string(),
+    name: v.string(),
+    // The member key's sha256: the key itself never leaves their Mac.
+    keyHash: v.string(),
+    host: v.boolean(),
+    joinedAt: v.number(),
+    // Their runner's last heartbeat, at most once a minute.
+    seenAt: v.optional(v.number()),
+    revokedAt: v.optional(v.number()),
+  })
+    .index('by_hash', ['keyHash'])
+    .index('by_memberId', ['memberId']),
+  // One join each, for a few days. The code's hash only.
+  teamInvites: defineTable({
+    codeHash: v.string(),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+    usedAt: v.optional(v.number()),
+    usedBy: v.optional(v.string()),
+  }).index('by_hash', ['codeHash']),
+  // A shared project: what every member's linked copy keeps in step.
+  // Folders, icons and thread membership stay on each Mac.
+  teamProjects: defineTable({
+    id: v.string(),
+    title: v.string(),
+    goals: v.string(),
+    state: v.string(),
+    notes: v.string(),
+    links: v.array(v.object({ title: v.string(), url: v.string() })),
+    // Its repos' origin remotes, normalised (github.com/org/repo), so each
+    // member's runner can find its own clones.
+    repos: v.array(v.string()),
+    sharedBy: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    updatedBy: v.string(),
+    removedAt: v.optional(v.number()),
+  }).index('by_projectId', ['id']),
+  // Notes an agent added (appendNote) to a shared project: the team's log of
+  // decisions, newest last.
+  teamLog: defineTable({
+    projectId: v.string(),
+    memberId: v.string(),
+    text: v.string(),
+    threadTitle: v.optional(v.string()),
+    at: v.number(),
+  }).index('by_project', ['projectId']),
+  // One per member's thread in a shared project: the board.
+  teamCards: defineTable({
+    projectId: v.string(),
+    memberId: v.string(),
+    threadId: v.string(),
+    title: v.string(),
+    status: v.union(v.literal('working'), v.literal('needsThem'), v.literal('idle'), v.literal('done')),
+    headline: v.optional(v.string()),
+    branch: v.optional(v.string()),
+    repo: v.optional(v.string()),
+    // A member it was handed over to.
+    handedTo: v.optional(v.string()),
+    updatedAt: v.number(),
+  })
+    .index('by_project', ['projectId'])
+    .index('by_member_thread', ['memberId', 'threadId']),
+  // A message from one member's agent to another's thread, or a handover.
+  teamMessages: defineTable({
+    id: v.string(),
+    projectId: v.string(),
+    kind: v.union(v.literal('message'), v.literal('handover')),
+    from: v.string(),
+    fromThread: v.string(),
+    fromTitle: v.string(),
+    to: v.string(),
+    toThread: v.optional(v.string()),
+    text: v.string(),
+    // A handover's repo, branch and links.
+    repo: v.optional(v.string()),
+    branch: v.optional(v.string()),
+    links: v.optional(v.array(v.object({ title: v.string(), url: v.string() }))),
+    createdAt: v.number(),
+    status: v.union(v.literal('waiting'), v.literal('passed'), v.literal('dismissed'), v.literal('taken'), v.literal('declined')),
+    answeredAt: v.optional(v.number()),
+    // A taken handover's new thread title, or why it was declined.
+    answer: v.optional(v.string()),
+    // The sender's runner has told its thread how it was answered.
+    toldSender: v.optional(v.boolean()),
+  })
+    .index('by_messageId', ['id'])
+    .index('by_to', ['to', 'status'])
+    .index('by_from', ['from', 'toldSender']),
 });
