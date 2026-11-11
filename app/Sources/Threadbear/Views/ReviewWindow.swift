@@ -768,6 +768,7 @@ struct ReviewWindow: View {
                     .foregroundStyle(picked ? Color.accentColor : Color.secondary)
                     .frame(width: 16, height: 16).padding(4).contentShape(Rectangle())
             }.buttonStyle(.plain).padding(-4)
+                .focusEffectDisabled()
                 .tip(picked ? "Unpick \(option.id)" : "Pick \(option.id)")
         } else if picked {
             Image(systemName: "checkmark.square.fill").font(.system(size: 15)).foregroundStyle(Color.accentColor).frame(width: 16, height: 16)

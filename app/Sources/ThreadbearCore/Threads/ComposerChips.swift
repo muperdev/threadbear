@@ -85,10 +85,10 @@ public enum ComposerChips {
     public static let devinEffortLevels = ["medium", "high", "max"]
 
     public static func effortLevels(provider: String) -> [String] {
-        if provider == "grok" { return grokEffortLevels }
-        if provider == "devin" { return devinEffortLevels }
-        return switch Providers.info(provider).effort {
+        switch Providers.info(provider).effort {
         case "codex": codexEffortLevels
+        case "grok": grokEffortLevels
+        case "devin": devinEffortLevels
         case "none": []
         default: effortLevels
         }

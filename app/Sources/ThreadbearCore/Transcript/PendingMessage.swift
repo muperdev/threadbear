@@ -36,6 +36,7 @@ public struct PendingMessage: Sendable, Hashable, Identifiable {
         self.answers = answers
         self.afterSeq = afterSeq
         self.queued = queued
+        self.queuedTurnId = nil
         self.waitingForRunner = waitingForRunner
     }
 

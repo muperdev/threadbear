@@ -17,20 +17,22 @@ import type { Config } from '../config.ts';
 import type { Logger } from '../log.ts';
 import { paths } from '../config.ts';
 import type { CliPolicy, CliStatus, Provider } from '../protocol.ts';
-import type { Provider as AnyProvider } from '../protocol.ts';
-import { PROVIDERS } from '../protocol.ts';
-import { cliName } from '../providers.ts';
 
-// What this updates. An ACP agent's CLI isn't touched by Threadbear. Grok
-// and Devin are listed only once they're installed: most copies never run
-// them.
-const MANAGED: readonly AnyProvider[] = ['claude', 'codex', 'grok', 'devin'];
-const LISTED_WHEN_INSTALLED: readonly AnyProvider[] = ['grok', 'devin'];
+// The CLIs Threadbear checks and updates. Grok and Devin are listed only
+// once they're installed: most copies never run them. An ACP agent's CLI
+// is reported and updated only when asked (acpStatus), never on the hour.
+export const MANAGED_CLIS = ['claude', 'codex', 'grok', 'devin'] as const;
+const LISTED_WHEN_INSTALLED: readonly ManagedCli[] = ['grok', 'devin'];
+export type ManagedCli = (typeof MANAGED_CLIS)[number];
+export function isManagedCli(p: Provider): p is ManagedCli {
+  return (MANAGED_CLIS as readonly string[]).includes(p);
+}
 import { claudeChannel, claudeInstalledVersion, claudeLatestVersion, runClaudeUpdate } from './claude.ts';
 import { grokInstalledVersion, grokLatestVersion, runGrokUpdate } from './grok.ts';
 import { cleanupDevinVersions, devinInstall, devinInstalledVersion, devinLatestVersion, runDevinUpdate, updatableInstall } from './devin.ts';
 import { CodexCopies, NPM_LATEST, codexPackageVersion, type CodexResolver, type SurfaceCheck } from './codex.ts';
 import { VERSION_RE, compareVersions, defaultExec, defaultFetchText, type Exec, type FetchText } from './exec.ts';
+import { cliName } from '../providers.ts';
 import { UpdateHistory, type ProviderState, type UpdatesFile } from './history.ts';
 
 export const FIRST_CHECK_MS = 60_000;
@@ -99,7 +101,7 @@ export class CliUpdates {
   // The Claude version before the newest update, for the "go back" hint.
   private lastClaude?: string;
   // Grok's and Devin's, the same.
-  private previous: Partial<Record<Provider, string>> = {};
+  private previous: Partial<Record<ManagedCli, string>> = {};
 
   constructor(d: CliUpdatesDeps) {
     this.d = d;
@@ -122,7 +124,7 @@ export class CliUpdates {
     });
     // A previous update that was running when the runner stopped didn't
     // finish; say so rather than show it running forever.
-    for (const p of PROVIDERS) {
+    for (const p of Object.keys(this.st) as Provider[]) {
       const u = this.st[p]?.update;
       if (u && (u.state === 'running' || u.state === 'waiting')) this.st[p]!.update = { ...u, state: 'failed', message: 'The runner stopped before this finished.' };
     }
@@ -162,13 +164,8 @@ export class CliUpdates {
     return [...this.listed().map((p) => this.status(p)), ...this.acpProviders().map((p) => this.acpStatus(p))];
   }
 
-  // The managed CLIs shown: Grok and Devin only once installed.
-  private listed(): Provider[] {
-    return MANAGED.filter((p) => !LISTED_WHEN_INSTALLED.includes(p) || fs.existsSync(this.binaryOf(p)));
-  }
-
   // The binary each CLI's new sessions start.
-  private binaryOf(p: Provider): string {
+  private binaryOf(p: ManagedCli): string {
     if (p === 'claude') return this.cfg.claudePath;
     if (p === 'grok') return this.cfg.grokPath;
     if (p === 'devin') return this.cfg.devinPath;
@@ -176,7 +173,7 @@ export class CliUpdates {
   }
 
   check(p?: Provider): CliStatus[] {
-    if (p && !MANAGED.includes(p)) {
+    if (p && !isManagedCli(p)) {
       if (this.acpProviders().includes(p)) this.track(p, this.refreshAcp(p));
       return this.list();
     }
@@ -186,7 +183,7 @@ export class CliUpdates {
   }
 
   update(p: Provider, o: { version?: string; force?: boolean } = {}): CliStatus[] {
-    if (!MANAGED.includes(p)) {
+    if (!isManagedCli(p)) {
       if (this.acpProviders().includes(p) && !this.configOff(p)) this.track(p, this.updateAcp(p));
       return this.list();
     }
@@ -195,7 +192,7 @@ export class CliUpdates {
   }
 
   setPolicy(p: Provider, policy: CliPolicy): CliStatus[] {
-    if (!MANAGED.includes(p)) return this.list();
+    if (!isManagedCli(p)) return this.list();
     this.ps(p).policy = policy;
     this.save();
     this.changed();
@@ -212,7 +209,7 @@ export class CliUpdates {
   // CLI's init (Claude) or initialize (Codex). Two failures in a row on a
   // version it just moved to send a warning, once.
   sessionStarted(p: Provider, version: string | undefined, ok: boolean): void {
-    if (!version) return;
+    if (!version || !isManagedCli(p)) return;
     const s = this.ps(p);
     if (ok) {
       if (s.startFailures?.version === version) {
@@ -232,7 +229,7 @@ export class CliUpdates {
           ? `Claude Code ${version} failed to start twice. To go back: claude install ${this.lastClaude ?? '<version>'}`
           : p === 'codex'
             ? `Codex ${version} failed to start twice.${prev ? ` Go back to ${prev} in Usage.` : ''}`
-            : `${cliName(p)} ${version} failed to start twice.${this.previous[p] ? ` To go back: ${p === 'grok' ? `grok update --version ${this.previous[p]}` : `Update to ${this.previous[p]} from Usage`}` : ''}`;
+            : `${p === 'grok' ? 'Grok Build' : 'Devin'} ${version} failed to start twice.${this.previous[p] ? ` To go back: ${p === 'grok' ? `grok update --version ${this.previous[p]}` : `Update to ${this.previous[p]} from Usage`}` : ''}`;
       this.d.notice?.('warning', message);
       this.history.append({ at: this.iso(), provider: p, action: 'notice', ok: false, version, message });
     }
@@ -294,7 +291,7 @@ export class CliUpdates {
     if (now && now !== before) this.d.hooks.releaseIdle(p, now);
   }
 
-  private status(p: Provider): CliStatus {
+  private status(p: ManagedCli): CliStatus {
     const s = this.st[p] ?? {};
     const installedVersion = this.installed[p];
     const latestVersion = s.latestVersion;
@@ -327,16 +324,20 @@ export class CliUpdates {
   // Claude and Grok update themselves when asked; Threadbear installs
   // Codex's copies and Devin's versions. A Codex set by hand, or a Devin
   // from Homebrew or set by hand, is left alone.
-  private managedBy(p: Provider): CliStatus['managedBy'] {
+  private managedBy(p: ManagedCli): CliStatus['managedBy'] {
     if (p === 'claude' || p === 'grok') return 'cli';
     if (p === 'devin') return updatableInstall(devinInstall(this.cfg.devinPath)) ? 'threadbear' : 'none';
     return this.cfg.codexPath ? 'none' : 'threadbear';
   }
 
+  private listed(): ManagedCli[] {
+    return MANAGED_CLIS.filter((p) => !LISTED_WHEN_INSTALLED.includes(p) || fs.existsSync(this.binaryOf(p)));
+  }
+
   // THREADBEAR_CLI_UPDATES=off (tests, dev runners) and runner.json's own
   // "off" can't be turned on from the app; a Codex binary set by hand is
   // never updated, nor a Devin Threadbear can't update.
-  private policy(p: Provider): CliPolicy {
+  private policy(p: ManagedCli): CliPolicy {
     if (this.configOff(p)) return 'off';
     if (p === 'codex' && this.cfg.codexPath) return 'off';
     if (p === 'devin' && this.managedBy('devin') === 'none') return 'off';
@@ -378,10 +379,11 @@ export class CliUpdates {
         this.timers.delete(name);
         if (name === 'check') {
           for (const p of this.listed()) this.track(p, this.runCheck(p, false));
+          for (const prov of this.acpProviders()) this.track(prov, this.refreshAcp(prov));
           const jitter = Math.floor((this.d.random ?? Math.random)() * CHECK_JITTER_MS);
           this.schedule('check', this.cfg.cliUpdates.checkMinutes * 60_000 + jitter);
         } else if (name.startsWith('retry:')) {
-          const [, p, attempt] = name.split(':') as [string, Provider, string];
+          const [, p, attempt] = name.split(':') as [string, ManagedCli, string];
           const o = this.retryOptions[p] ?? {};
           delete this.retryOptions[p];
           this.startUpdate(p, o, Number(attempt));
@@ -390,7 +392,7 @@ export class CliUpdates {
     );
   }
 
-  private async runCheck(p: Provider, asked: boolean): Promise<void> {
+  private async runCheck(p: ManagedCli, asked: boolean): Promise<void> {
     await this.refreshInstalled();
     const policy = this.policy(p);
     if (policy === 'off' && !asked) return;
@@ -422,7 +424,7 @@ export class CliUpdates {
     this.startUpdate(p, {});
   }
 
-  private async latestOf(p: Provider): Promise<unknown> {
+  private async latestOf(p: ManagedCli): Promise<unknown> {
     if (p === 'claude') return claudeLatestVersion(this.fetchText, claudeChannel(this.cfg.claudeMainDir), LOOKUP_TIMEOUT_MS);
     // Grok asks its own update server; it takes a few seconds more than a fetch.
     if (p === 'grok') return fs.existsSync(this.cfg.grokPath) ? grokLatestVersion(this.cfg.grokPath, this.exec, this.env, 4 * LOOKUP_TIMEOUT_MS) : undefined;
@@ -432,7 +434,7 @@ export class CliUpdates {
 
   // ---- updating
 
-  private startUpdate(p: Provider, o: UpdateOptions, attempt = 1): void {
+  private startUpdate(p: ManagedCli, o: UpdateOptions, attempt = 1): void {
     if (this.running[p] || this.stopped) return;
     const target = o.version ?? this.st[p]?.latestVersion;
     if (this.d.hooks.restartPending()) {
@@ -442,7 +444,7 @@ export class CliUpdates {
       return;
     }
     this.setUpdate(p, { state: 'running', targetVersion: target });
-    const run = p === 'claude' ? this.updateClaude(attempt) : p === 'codex' ? this.updateCodex(o) : this.updateOwn(p as 'grok' | 'devin', o);
+    const run = p === 'claude' ? this.updateClaude(attempt) : p === 'codex' ? this.updateCodex(o) : this.updateOwn(p, o);
     const promise = run.catch((e: Error) => {
       this.d.log.error('cli updates: update failed', { provider: p, error: e.message });
       this.finish(p, { state: 'failed', targetVersion: target, message: e.message });

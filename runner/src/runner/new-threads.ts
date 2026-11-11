@@ -334,9 +334,9 @@ export const newThreadsPart = {
     // Devin's ids overlap Claude's and GPT's (claude-opus-5-5-medium), so a
     // Devin thread keeps to its own list once it's known.
     if (account.provider === 'devin') return !account.models?.length;
-    if (model.startsWith('grok-') || model.startsWith('swe-')) return false;
     // An ACP agent runs what it lists, and nothing can be told from the name.
     if (account.provider !== 'claude') return false;
+    if (model.startsWith('grok-') || model.startsWith('swe-')) return false;
     if (isClaudeModel(model)) return true;
     const elsewhere = this.safeAccounts().filter((a) => a.provider !== 'claude').some((a) => modelRow(a, model));
     return !model.startsWith('gpt-') && !elsewhere;

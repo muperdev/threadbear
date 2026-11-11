@@ -33,6 +33,34 @@ export const PROVIDER_INFO: Record<Provider, ProviderInfo> = {
     smallJobs: false,
     usageReadings: true,
   },
+  // Grok Build (adapters/grok/), behind the grok experiment. Auto behaves
+  // like Ask. No sandbox, and the adapter has no rewind.
+  grok: {
+    id: 'grok',
+    name: 'Grok',
+    cliName: 'Grok Build',
+    loginCommand: 'grok login',
+    effort: 'grok',
+    autoMode: 'asks',
+    sandbox: false,
+    rewind: false,
+    smallJobs: false,
+    usageReadings: false,
+  },
+  // The Devin CLI (adapters/devin/), behind the devin experiment. Auto is
+  // Devin's Smart mode, so it stays in the picker.
+  devin: {
+    id: 'devin',
+    name: 'Devin',
+    cliName: 'Devin',
+    loginCommand: 'devin auth login',
+    effort: 'devin',
+    autoMode: 'classifier',
+    sandbox: false,
+    rewind: false,
+    smallJobs: false,
+    usageReadings: false,
+  },
   // Over ACP (adapters/acp/): Auto behaves like Ask, and neither sandbox,
   // rewind nor usage readings exist for them.
   cursor: {
@@ -61,48 +89,22 @@ export const PROVIDER_INFO: Record<Provider, ProviderInfo> = {
     smallJobs: true,
     usageReadings: false,
   },
-  // Grok Build's CLI (adapters/grok/, docs/grok-plan.md), behind the grok
-  // experiment. Auto and Plan behave like Ask for now, it can't run in the
-  // sandbox, and editing a message reverses the thread's diffs rather than
-  // using Grok's own rewind.
-  grok: {
-    id: 'grok',
-    name: 'Grok',
-    cliName: 'Grok Build',
-    loginCommand: 'grok login',
-    effort: 'codex',
-    autoMode: 'asks',
-    sandbox: false,
-    rewind: false,
-    smallJobs: false,
-    usageReadings: false,
-  },
-  // The Devin CLI (adapters/devin/, docs/devin-plan.md), driven by the Grok
-  // adapter in Devin's dialect, behind the devin experiment.
-  devin: {
-    id: 'devin',
-    name: 'Devin',
-    cliName: 'Devin',
-    loginCommand: 'devin auth login',
-    effort: 'codex',
-    autoMode: 'asks',
-    sandbox: false,
-    rewind: false,
-    smallJobs: false,
-    usageReadings: false,
-  },
 };
 
 const ACP: readonly Provider[] = ['cursor', 'opencode'];
 
-// The providers this runner offers: the ACP agents only with the experiment
-// on, and Grok and Devin only with their own experiments on, so with them
-// off nothing of theirs turns up anywhere.
+// The providers this runner offers. Grok, Devin and the ACP agents only with
+// their experiment on, so with it off nothing of theirs turns up anywhere.
 export function activeProviders(home: string): Provider[] {
   const acp = experimentOn(home, 'acpAgents');
   const grok = experimentOn(home, 'grok');
   const devin = experimentOn(home, 'devin');
-  return PROVIDERS.filter((p) => (p === 'grok' ? grok : p === 'devin' ? devin : acp || !ACP.includes(p)));
+  return PROVIDERS.filter((p) => {
+    if (ACP.includes(p)) return acp;
+    if (p === 'grok') return grok;
+    if (p === 'devin') return devin;
+    return true;
+  });
 }
 
 // One this build has no row for (a record or another runner's hello from a

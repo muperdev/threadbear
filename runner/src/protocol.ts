@@ -4,13 +4,12 @@
 
 export const PROTOCOL_VERSION = 1;
 
+// grok: Grok Build's CLI (docs/grok-plan.md), behind the grok experiment.
+// devin: the Devin CLI (docs/devin-plan.md), behind the devin experiment.
 // cursor and opencode run over ACP (adapters/acp/), behind the acpAgents
-// experiment; grok is Grok Build's CLI (adapters/grok/, docs/grok-plan.md),
-// behind the grok experiment, and devin the Devin CLI (adapters/devin/,
-// docs/devin-plan.md), behind the devin experiment: activeProviders
-// (providers.ts) is the list a runner offers.
-export type Provider = 'claude' | 'codex' | 'cursor' | 'opencode' | 'grok' | 'devin';
-export const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'cursor', 'opencode', 'grok', 'devin'];
+// experiment: activeProviders (providers.ts) is the list a runner offers.
+export type Provider = 'claude' | 'codex' | 'grok' | 'devin' | 'cursor' | 'opencode';
+export const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'grok', 'devin', 'cursor', 'opencode'];
 
 // What a provider is called and can do (providers.ts holds the table). `id`
 // is a plain string as a client can be sent one it has never heard of.
@@ -19,7 +18,7 @@ export type ProviderInfo = {
   name: string;
   cliName: string;
   loginCommand: string;
-  effort: 'claude' | 'codex' | 'none';
+  effort: 'claude' | 'codex' | 'grok' | 'devin' | 'none';
   autoMode: 'classifier' | 'asks';
   sandbox: boolean;
   rewind: boolean;
@@ -400,7 +399,14 @@ export type Project = {
   tasks?: ProjectTasks;
   threadCount: number;
   lastActivityAt?: string;
+  // Linked to a project shared with a team (docs/multiplayer-design.md).
+  team?: ProjectTeam;
 };
+
+// A project's link to the team's copy: the shared id, whether teammates'
+// messages to its threads go straight in ("deliver") or wait for Mike, and
+// the hub's updatedAt last taken in.
+export type ProjectTeam = { id: string; delivery?: 'deliver'; syncedAt?: number };
 
 // A project's task board, read from the Notion database on its page.
 // Notion is where it's changed; Threadbear only shows it.

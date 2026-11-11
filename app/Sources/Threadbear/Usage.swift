@@ -287,9 +287,11 @@ enum SignIn {
     /// often Threadbear's own copy, not on the PATH); empty uses the PATH's.
     static func script(_ account: Account, cliPath: String) -> String {
         let codex = account.provider == "codex"
+        let grok = account.provider == "grok"
+        let devin = account.provider == "devin"
         var env = ""
         if codex, !account.configDir.isEmpty { env = "CODEX_HOME=\(quoted(account.configDir)) " }
-        if account.provider == "grok", account.id != "grok-main", !account.configDir.isEmpty { env = "GROK_HOME=\(quoted(account.configDir)) " }
+        if grok, account.id != "grok-main", !account.configDir.isEmpty { env = "GROK_HOME=\(quoted(account.configDir)) " }
         if account.provider == "claude" || account.provider.isEmpty, account.id != "claude-main", !account.configDir.isEmpty { env = "CLAUDE_CONFIG_DIR=\(quoted(account.configDir)) " }
         let info = Providers.info(account.provider)
         // "opencode auth login": the program, then what it's asked to do.

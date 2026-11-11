@@ -35,11 +35,11 @@ export const DEFAULT_POOL_FOLDERS: Record<string, string[]> = {};
 export type CliUpdatesConfig = {
   claude: CliPolicy;
   codex: CliPolicy;
+  grok: CliPolicy;
+  devin: CliPolicy;
   // The ACP agents: absent is off, as they have no version feed to notify from.
   cursor?: CliPolicy;
   opencode?: CliPolicy;
-  grok: CliPolicy;
-  devin: CliPolicy;
   checkMinutes: number;
   keepCodexVersions: number; // Codex copies kept under <home>/tools/codex
   // Other CLIs' update commands, run daily (updates/extra.ts). None by default.

@@ -155,6 +155,22 @@ private struct ProjectHeader: View {
                     .font(.system(size: TypeScale.sidebarHeading, weight: .semibold))
                     .foregroundStyle(isOpen || hovering ? .primary : .secondary)
                     .lineLimit(1)
+                if let link = project.team {
+                    let waiting = app.team.waiting(for: link.id).count
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: zoomed(9)))
+                        .foregroundStyle(SidebarMetrics.faint)
+                        .accessibilityLabel("Shared with the team")
+                    if waiting > 0 {
+                        Text("\(waiting)")
+                            .font(.system(size: TypeScale.sidebarMeta, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, zoomed(5))
+                            .background(Color.accentColor, in: Capsule())
+                            .monospacedDigit()
+                            .accessibilityLabel("\(waiting) waiting from the team")
+                    }
+                }
                 Spacer(minLength: zoomed(6))
                 if hovering {
                     Image(systemName: "chevron.right")
@@ -248,6 +264,13 @@ struct ProjectMenu: View {
             Button("Archive", systemImage: "archivebox") { app.setProjectArchived(project.id, true) }
         }
         Button(project.notion == nil ? "Add Notion Page…" : "Notion Page…", systemImage: "checklist") { app.linkProjectNotion(project.id) }
+        if app.team.on, app.team.joined {
+            if project.team == nil {
+                Button("Share with \(app.team.name ?? "Team")", systemImage: "person.2") { app.shareProjectWithTeam(project.id) }
+            } else {
+                Button("Stop Sharing…", systemImage: "person.2.slash") { app.stopSharingProject(project.id) }
+            }
+        }
         let others = app.projects.filter { $0.id != project.id && !$0.archived }
         if !others.isEmpty {
             IconMenu("Merge into", systemImage: "arrow.triangle.merge") {

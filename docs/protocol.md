@@ -136,11 +136,11 @@ upgrade with an `Authorization` header that's wrong is turned away with HTTP
 ## Types
 
 ```ts
+// grok: Grok Build, behind the grok experiment (docs/grok-plan.md).
+// devin: the Devin CLI, behind the devin experiment (docs/devin-plan.md).
 // cursor and opencode: ACP agents, only from a runner with the acpAgents
-// experiment on (see "ACP agents"); grok: Grok Build, only from a runner with
-// the grok experiment on (docs/grok-plan.md); devin: the Devin CLI, only from
-// a runner with the devin experiment on (docs/devin-plan.md)
-type Provider = "claude" | "codex" | "cursor" | "opencode" | "grok" | "devin"
+// experiment on (see "ACP agents")
+type Provider = "claude" | "codex" | "grok" | "devin" | "cursor" | "opencode"
 
 // What a provider is called and can do, from `hello`. A client asks this
 // rather than comparing provider names, so a provider it has never heard of
@@ -150,7 +150,7 @@ type ProviderInfo = {
   name: string          // "Claude": in notes and menus
   cliName: string       // "Claude Code": the program, in notes about its versions
   loginCommand: string  // run in a Terminal to sign a login in ("claude auth login")
-  effort: "claude" | "codex" | "none" // which effort levels it offers: Claude's,
+  effort: "claude" | "codex" | "grok" | "devin" | "none" // which effort levels it offers: Claude's,
                         // those plus Codex's ultra, or none of Threadbear's own
   autoMode: "classifier" | "asks"     // Auto: a classifier judges each action, or
                         // it behaves like Ask (Codex)
@@ -1084,7 +1084,7 @@ the summary and then the reply.
 | `hello` | `{ client: string, version: string, build?: { commit, short, tree }, pid?: number }` (`build`: the Mac app's own build, see App restarts; a draining runner's link to the primary says `client: "threadbear-drain"` with its `pid`, for the log) | `{ runnerVersion, protocol: 1, accounts: Account[], providers?: ProviderInfo[], pools?: Pool[], defaults: { cwd, accountId, poolId?, model?, models?: { claude?, codex? }, efforts?: { claude?: EffortLevel, codex?: EffortLevel }, permissionMode?: "full" \| "ask" \| "auto" }, clis?: CliStatus[], updates?: RunnerUpdates, experiments?: string[] }`. `providers` is what each provider this runner knows is called and can do, in its own order (`ProviderInfo` above; absent from older runners, when a client uses what it knows of Claude and Codex). `experiments` is the ids of the experiments on for this runner (docs/experiments.md), read at each `hello`, so the app shows what belongs to one (the Move to menu for `moveToRunner`, the Projects page's decisions for `projectDecisions`) from its next connect. `updates` is under Runner updates; `pools` and `defaults.poolId` under Pools. `defaults.accountId` is the account a `threads.create` with no `accountId` uses: the one with the most room among the last-used account's provider (skipping blocked ones, ones under 10% and ones with a note), worked out again as usage changes; a client keeps its own copy of the rule rather than asking again. `defaults.models[provider]` is the model a new thread on that provider gets when it names none (`runner.json`'s `defaults.models`; a dev runner sets the cheapest); `defaults.model` is the same for Claude, kept for older apps. Absent means the account's own default (`accounts[].defaultModel` names it, when known). `defaults.efforts[provider]` likewise for effort; absent means the model's own level. `defaults.permissionMode` is the mode a `threads.create` with none starts on, and the one the app's new-thread composer starts on and goes back to after each send (`runner.json`'s `defaults.permissionMode`, read at startup; `"plan"` or anything else there is ignored). Absent means `"full"`: setup writes `"auto"` into the `runner.json` it makes for a new install, and an install from before has none. A client that doesn't know the runner's (an older runner, or another runner reached through the backend) starts on `"full"`. `runnerVersion` is `<package version>+<release id>` when the runner runs from a release, else `<package version>+source` `client` is `threadbear-mac` for the Swift app and `threadbear-desktop` for the GPUI one, which only counts as the app being open with its experiment on (`gpuiApp`) |
 | `threads.list` | `{ include?: ("inbox" \| "snoozed" \| "archived")[], ids?: string[] }` (default `["inbox"]`; a value the runner doesn't know is left out; `ids` keeps only those threads, unknown ones left out; an older runner ignores it, so pick yours out of the answer) | `{ threads: ThreadSummary[] }` newest activity first |
 | `threads.search` | `{ query: string, limit?: number }` | `{ threads: ThreadSummary[] }` matches title and preview across all threads, archived included |
-| `threads.create` | `{ text: string, images?: ImageRef[], cwd?: string, accountId?: string, poolId?: string, model?: string, effort?: EffortLevel, fastMode?: boolean, permissionMode?: "full" \| "ask", title?: string, worktree?: boolean, startedBy?: { kind, label, icon?, threadId?, why? }, projectIds?: string[], confined?: true, unconfine?: true }` | `{ thread: ThreadSummary }` (the first turn starts straight away). `confined` and `unconfine`: see Sandboxed threads (a thread started from a confined one is confined unless `unconfine` says Mike allowed it). `projectIds` (New Thread on a project's page) puts it in those projects before its first turn, pinned as Mike's, so that turn already has their brief; an unknown project is `-32602` and makes no thread. In a repo that asks for worktrees (see Worktrees) the thread gets one of its own before its first turn; `worktree: false` starts it in the folder as it is. The thread's `provider` is its account's. With no `model`, the thread gets `defaults.models[provider]` from `hello`, or `defaults.model` for Claude, or else the account's own default. With no `effort`, `defaults.efforts[provider]`, or else the model's own level. With no `permissionMode`, `defaults.permissionMode`, or else `"full"`; the runner's own threads (bringing in releases, fixing a failed update, a note about this Mac) always name `"full"`. See "Models and effort across providers". `fastMode: true` asks for fast mode (see Fast mode) |
+| `threads.create` | `{ text: string, images?: ImageRef[], cwd?: string, accountId?: string, poolId?: string, model?: string, effort?: EffortLevel, fastMode?: boolean, permissionMode?: "full" \| "ask", title?: string, worktree?: boolean, startedBy?: { kind, label, icon?, threadId?, why? }, projectIds?: string[], confined?: true, unconfine?: true }` | `{ thread: ThreadSummary }` (the first turn starts straight away). `confined` and `unconfine`: see Sandboxed threads (a thread started from a confined one is confined unless `unconfine` says Mike allowed it). `projectIds` (New Thread on a project's page) puts it in those projects before its first turn, pinned as Mike's, so that turn already has their brief; an unknown project is `-32602` and makes no thread. In a repo that asks for worktrees (see Worktrees) the thread gets one of its own before its first turn; `worktree: false` starts it in the folder as it is. The thread's `provider` is its account's. With no `model`, the thread gets `defaults.models[provider]` from `hello`, or `defaults.model` for Claude, or else the account's own default. With no `effort`, `defaults.efforts[provider]`, or else the model's own level. With no `permissionMode`, `defaults.permissionMode`, or else `"full"`; the runner's own threads (bringing in releases, fixing a failed update, a note about this Mac) always name `"full"`. `fastMode: true` asks for fast mode (see Fast mode). See "Models and effort across providers" |
 | `threads.samples` | `{ cwd: string, remove?: boolean }` | `{ threads: ThreadSummary[] }`. The app's first-run tour's sample threads (`runner/src/samples.ts`): made up exchanges written as finished turns with no CLI, in `cwd` (the app's `~/ThreadbearThreads/Welcome`, where it writes an example patch), with `sample: true`; the first needs you, with a card of asks, and one is left unread. Asking again deletes any there are and makes them afresh (writing the patch again if it's gone, and trusting it as written). `remove: true` deletes them all, archived and hibernating ones too, and returns none. `threads.send` to a sample is `-32602` |
 | `threads.send` | `{ threadId, text, images?: ImageRef[], answers?: AskAnswer[], origin?: "phone", queue?: boolean }` | `{ turnId, queued?: true }`. `queue: true` (the Mac app's Cmd+Enter) never steers into a running turn: while one runs the message waits in the queue, as below, and starts its own turn once that one ends; with no turn running it starts one as usual. `queued: true` says the message went into the queue rather than into a running turn or a turn of its own, with `turnId` the id its turn will have, for `threads.unqueue`; an older runner leaves it out (and ignores `queue`, steering as usual), so a client offers removing a queued message only when it's there. Another runner's thread through the backend (Sync) passes `queue` on and answers with no `turnId` to unqueue. `text` can place the `images` among its words with `[Picture N]` markers (Pictures in a message). `origin: "phone"` is only for a phone command the primary passes on to a draining runner (Sync, "Commands"), so the message keeps its origin there; any other `origin` is `-32602`. If a turn is running and its CLI is live, the message goes into that turn straight away (a `user.message` under the running `turnId`, which is returned): the agent takes it at its next step, or right after its reply if that was already finishing, and the turn doesn't complete until it has been answered. If the thread was moved to another login (usually another provider) during the running turn, a message from Mike (or the phone) doesn't steer into the old CLI: the turn is stopped (`system.note` "Stopped here so <model> can take over.") and the message starts the next turn on the new login, with the handoff, as T3 Code does. If the agent is waiting on a card for its own tool call (an approval or a question, with an `itemId`), a message from Mike declines that card first (`approval.resolved` with `deny` and a `message` telling the agent he wrote instead), as the CLI reads nothing else until the card is answered; a background subagent's card is left open. Otherwise (the CLI is still starting or leaving, messages are already waiting, a move or fresh CLI is due on the next turn, Stop has been pressed, or the turn was opened only for a card) the message is queued and starts its own turn when the running one ends |
 | `threads.interrupt` | `{ threadId }` | `{}` |
@@ -4828,6 +4828,63 @@ Threadbear only shows the board; cards are moved in Notion, by people
 or by agents with the Notion tools. `read_project` lists the open cards,
 and a thread's brief has one line saying the board is there and how many
 are open. With no gateway, `error` says so.
+
+### Shared projects
+
+Behind the `multiplayer` experiment (docs/multiplayer-design.md). A team
+is people who each run Threadbear, with a hub on one member's Convex
+deployment (`convex/team.ts`). The runner's side is `runner/src/team.ts`;
+its member key is in `secrets/team.json` (0600), and only the key's sha256
+reaches the hub. A member key opens `team:*` alone; a runner key or phone
+token opens nothing there.
+
+```ts
+// On Project, when it's linked to the team's copy
+team?: { id: string; delivery?: "deliver"; syncedAt?: number }
+// delivery: a teammate's message to one of its threads goes straight in
+// rather than waiting. syncedAt: the hub's updatedAt last taken in (the
+// hub's clock, never compared with the Mac's).
+
+type TeamState = {
+  on: boolean; joined: boolean; connected: boolean; error?: string
+  url?: string; name?: string
+  me?: TeamMember
+  members: { memberId; name; host; me; online; seenAt? }[]
+  projects: { id; title; sharedBy; repos: string[]; updatedAt; localProjectId?; mine }[]
+  cards: { id /* team:<member>:<thread8> */; projectId; memberId; memberName; threadId
+           title; status: "working" | "needsThem" | "idle" | "done"
+           headline?; branch?; repo?; handedTo?; handedToName?; mine; updatedAt /* ms */ }[]
+  waiting: { id; kind: "message" | "handover"; projectId; localProjectId?; fromName; fromTitle
+             toThread?; toThreadTitle?; text; repo?; branch?; links?; createdAt }[]
+  log: Record<string /* shared id */, { memberName; text; threadTitle?; at /* ms */ }[]>
+}
+```
+
+Requests: `team.get` → `{ team }`; `team.create { name, memberName? }`
+(on this Mac's own deployment, with its owner key); `team.invite { days? }`
+→ `{ invite: "tbteam:<url>#<code>", expiresAt }` (the host only);
+`team.join { invite, name? }`; `team.leave`; `team.remove { member }` (the
+host); `team.share { projectId }`; `team.add { sharedId }` → `{ projectId,
+missing: string[] }` (a linked project here, its folders this Mac's clones
+of the shared repos); `team.unshare { projectId }`; `team.unlink
+{ projectId }`; `team.setDelivery { projectId, delivery: "ask" | "deliver" }`;
+`team.answer { id, action: "pass" | "dismiss" | "take" | "decline", reason? }`
+→ `{ threadId?, team }`. All but `team.get` refuse while the experiment
+is off. The notification `team.updated { team }` follows any change.
+
+A linked project's title, goals, state, notes and links go up a couple of
+seconds after they change here and come down as the hub changes them
+(last write wins, field by field); its repos are the origin remotes of
+each member's folders, added to. Each of this Mac's threads in a linked
+project has a card, sent at most every 10 seconds when it would change. A
+shared project's brief gets a block on top of the project's own: who's on
+the team, teammates' open threads by their `team:` ids, and the latest
+notes from the team's log, which `update_project`'s `appendNote` adds to.
+`read_project` lists the board and the log. `send_message` takes a `team:`
+id; the teammate's runner notes it in the thread and holds it as waiting,
+unless the project is set to deliver. `hand_over { to, note, links? }` is
+only in a thread's tools while it's on a team. Outside Full access both ask
+first, as they leave this Mac.
 
 ## Schedules
 

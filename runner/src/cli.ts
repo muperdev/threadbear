@@ -12,6 +12,7 @@ import type { Settings } from './settings.ts';
 import { backgroundFlag } from './protocol.ts';
 import { parseWhen as parseLater, relativeFuture } from './when.ts';
 import { DEV_HELP, formatModels, logsCommand, runDev } from './tb-dev.ts';
+import type { TeamState } from './team.ts';
 import { findWorktreePatch, isInside } from './patches.ts';
 import { TRUST_ALL } from './patch-trust.ts';
 import { land, landTargetFromGit, type LandTarget } from './worktrees.ts';
@@ -132,6 +133,13 @@ const HELP = `tb: talk to the Threadbear runner
   tb projects [--archived] [--json]  the projects, their folders and thread counts
   tb projects show <project>      one project: goals, state, notes, threads
   tb projects add|remove <threadId> <project>   puts a thread in a project or takes it out, as the user would
+  tb team [--json]                the team you're on, its members, shared projects and what's waiting
+  tb team create <name> [--as NAME]   makes a team hosted on this Mac's own backend
+  tb team invite [--days N]       an invite for one person (the host only)
+  tb team join <invite> [--as NAME]   joins a team with an invite (tbteam:...)
+  tb team share|unshare <project>     shares a project with the team, or stops
+  tb team add <shared project>    makes a linked project here from a shared one
+  tb team remove <name> | leave   takes someone off the team (the host), or leaves it
   tb librarian [--json]           what the librarian is doing, its queue and what it did
   tb librarian run [<threadId>]   a look at a thread now; with none, at every recent thread it hasn't seen
   tb librarian pause|resume
@@ -603,8 +611,9 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
       for (const a of r.accounts) {
         const note = a.note ? `  (${a.note})` : '';
         // The provider has its own column, so not "Codex · " again.
-        const who = a.email ?? a.title.replace(/^(Codex|Grok|Devin) · /, '');
-        console.log(`${a.id === r.defaults.accountId ? '*' : ' '} ${a.id.padEnd(12)} ${providerName(a.provider).padEnd(9)}${who}${note}`);
+        const name = providerName(a.provider);
+        const who = a.email ?? a.title.replace(new RegExp(`^${name} · `), '');
+        console.log(`${a.id === r.defaults.accountId ? '*' : ' '} ${a.id.padEnd(12)} ${name.padEnd(9)}${who}${note}`);
       }
       return 0;
     }
@@ -721,6 +730,8 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
       }
       throw new Error(`Unknown: tb projects ${action}. It's show, add or remove.`);
     }
+    case 'team':
+      return teamCommand(client, args, f);
     case 'librarian': {
       const [action, id] = args;
       let r: { librarian: LibrarianStatus };
@@ -782,6 +793,68 @@ function printModels(s: Settings): void {
   const m = s.models;
   console.log(`Small jobs on    ${m.pool === null ? 'nothing: titles and the librarian are off' : `the ${m.pool} pool`}`);
   console.log(`Private folders  ${m.privateFolders.length ? m.privateFolders.join(', ') : 'none'}`);
+}
+
+// tb team (team.ts, docs/multiplayer-design.md).
+async function teamCommand(client: RunnerClient, args: string[], f: Flags): Promise<number> {
+  const [action, a] = args;
+  const as = typeof f.as === 'string' ? f.as : undefined;
+  let r: { team: TeamState };
+  if (!action) r = await client.call('team.get', {});
+  else if (action === 'create') {
+    if (!a) throw new Error('tb team create <name> [--as YOUR-NAME]');
+    r = await client.call('team.create', { name: args.slice(1).join(' '), ...(as ? { memberName: as } : {}) });
+  } else if (action === 'invite') {
+    const inv = await client.call<{ invite: string; expiresAt: string }>('team.invite', typeof f.days === 'string' ? { days: Number(f.days) } : {});
+    console.log(inv.invite);
+    console.error(`Good for one person until ${inv.expiresAt}. They run: tb team join '${inv.invite}'`);
+    return 0;
+  } else if (action === 'join') {
+    if (!a) throw new Error('tb team join <invite> [--as YOUR-NAME]');
+    r = await client.call('team.join', { invite: a, ...(as ? { name: as } : {}) });
+  } else if (action === 'share' || action === 'unshare') {
+    if (!a) throw new Error(`tb team ${action} <project>`);
+    r = await client.call(`team.${action}`, { projectId: await projectId(client, args.slice(1).join(' ')) });
+  } else if (action === 'add') {
+    if (!a) throw new Error('tb team add <shared project>');
+    const added = await client.call<{ projectId: string; missing: string[] }>('team.add', { sharedId: args.slice(1).join(' ') });
+    console.log(`Linked as ${added.projectId}.`);
+    if (added.missing.length) console.log(`No clone here of: ${added.missing.join(', ')}. Clone them and add the folders to the project.`);
+    return 0;
+  } else if (action === 'remove') {
+    if (!a) throw new Error('tb team remove <name>');
+    r = await client.call('team.remove', { member: a });
+  } else if (action === 'leave') r = await client.call('team.leave', {});
+  else throw new Error(`Unknown: tb team ${action}. It's create, invite, join, share, unshare, add, remove or leave.`);
+  if (f.json) console.log(JSON.stringify(r.team, null, 2));
+  else printTeam(r.team);
+  return 0;
+}
+
+function printTeam(t: TeamState): void {
+  if (!t.on) {
+    console.log('Shared projects are off: turn on the multiplayer experiment first.');
+    return;
+  }
+  if (!t.joined) {
+    console.log('Not on a team. tb team create <name> makes one here; tb team join <invite> joins one.');
+    return;
+  }
+  console.log(`${t.name}  ${t.connected ? 'connected' : `not connected${t.error ? `: ${t.error}` : ''}`}  (${t.url})`);
+  for (const m of t.members) console.log(`  ${m.online ? '●' : '○'} ${m.name}${m.me ? ' (you)' : ''}${m.host ? ', host' : ''}`);
+  if (t.projects.length) {
+    console.log('Shared projects:');
+    for (const p of t.projects) console.log(`  ${p.id}  ${p.title}  shared by ${p.sharedBy}${p.localProjectId ? `  here as ${p.localProjectId}` : '  (not here: tb team add ' + p.id + ')'}`);
+  }
+  const others = t.cards.filter((c) => !c.mine && c.status !== 'done');
+  if (others.length) {
+    console.log("Teammates' threads:");
+    for (const c of others) console.log(`  ${c.id}  ${c.memberName}  ${c.status}  ${c.title}`);
+  }
+  if (t.waiting.length) {
+    console.log('Waiting for you:');
+    for (const w of t.waiting) console.log(`  ${w.id}  ${w.kind} from ${w.fromName} ("${w.fromTitle}"): ${w.text.replace(/\s+/g, ' ').slice(0, 100)}`);
+  }
 }
 
 async function modelsCommand(client: RunnerClient, args: string[], f: Flags): Promise<number> {

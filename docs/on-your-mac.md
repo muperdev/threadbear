@@ -128,13 +128,13 @@ File references are where to look.
   connects, the runner runs `lsof` and `ps` on that one connection to see
   which process it is and whether it's under a thread's CLI
   (`runner/src/peer.ts`, docs/protocol.md "Who's really calling").
-- **With the `grok` experiment on** (off by default) it also starts xAI's
-  `grok` CLI (`grok agent --no-leader stdio`, from `~/.local/bin/grok` or
-  `grokPath`) for Grok threads, and while one runs serves that thread's
-  threadbear tools to it over MCP on a free port on 127.0.0.1, at a path
-  with a random secret that goes when the thread's CLI stops
-  (`runner/src/mcp-http.ts`). With the `devin` experiment on (off by
-  default) it starts the Devin CLI the same way (`devin acp`, from
+  With the `grok` experiment on (off by default) it
+  also starts xAI's `grok` CLI (`grok agent --no-leader stdio`, from
+  `~/.local/bin/grok` or `grokPath`) for Grok threads, and while one runs
+  serves that thread's threadbear tools to it over MCP on a free port on
+  127.0.0.1, at a path with a random secret that goes when the thread's
+  CLI stops (`runner/src/mcp-http.ts`). With the `devin` experiment on
+  (off by default) it starts the Devin CLI the same way (`devin acp`, from
   `~/.local/bin/devin` or `devinPath`) for Devin threads; Devin also loads
   the MCP servers in its own config.
 - **With the `acpAgents` experiment on** (off by default) it also starts the
@@ -239,12 +239,12 @@ File references are where to look.
   Devin's own `~/.local/share/devin/cli/_versions/<version>` and pointing
   `current` at it, as Devin's installer does (`devin update` needs a
   terminal). It keeps the previous Devin version and removes older ones
-  nothing runs. Each CLI's Updates setting (Automatic, Ask me, Off) is in
-  the Updates panel. It also runs
+  nothing runs. It also runs
   any update commands you list under `cliUpdates.extra` in `runner.json`
   (none unless you add them), once a day each, and keeps when each last
   ran in `extra-updates.json` in the data folder.
-  `THREADBEAR_CLI_UPDATES=off` stops all of this.
+  Each CLI's Updates setting (Automatic, Ask me, Off) is in
+  the Updates panel. `THREADBEAR_CLI_UPDATES=off` stops all of this.
 - **Small model calls** (`runner/src/models/`): thread titles, filing
   threads into projects (the librarian, every 5 minutes) and similar jobs
   send short excerpts of your threads to `claude -p` on your own logins.

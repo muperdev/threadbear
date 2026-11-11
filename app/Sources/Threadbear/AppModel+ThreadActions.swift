@@ -425,6 +425,7 @@ extension AppModel {
     /// transcript until the runner shows it. `failed` puts back whatever
     /// the send took from the composer, if the runner doesn't take it.
     /// With no `client` the runner is restarting: it waits for the new one.
+    /// `queue` (Cmd+Return) holds the message until the running turn ends.
     private func post(threadId: String, text: String, images: [ImageRef], answers: [AskAnswer], queue: Bool = false, client: RPCClient?, failed: @escaping () -> Void = {}) {
         let pendingId = UUID().uuidString
         // The thread's own session, open already as its composer is
@@ -448,12 +449,15 @@ extension AppModel {
         // the session before this send hears of it.
         if client != nil, wasIdle, !isRemote(threadId), restartUnderWay { session?.keepThroughDrop(pendingId) }
         Task {
-            let send: @MainActor (RPCClient) async throws -> TurnResult? = { client in
+            let send: @MainActor (RPCClient) async throws -> String? = { client in
                 session?.sendingAgain(pendingId)
-                return try await client.sendMessage(threadId: threadId, text: text, images: images, answers: answers, queue: queue)
+                let result = try await client.sendMessage(threadId: threadId, text: text, images: images, answers: answers, queue: queue)
+                if result.queued == true, let turnId = result.turnId, !turnId.isEmpty {
+                    session?.markQueued(pendingId, turnId: turnId)
+                }
+                return result.turnId
             }
             do {
-                var result: TurnResult?
                 if let client {
                     do {
                         // Sent in the moment a restarting runner lets go of its
@@ -461,7 +465,7 @@ extension AppModel {
                         // turns it away (Mike saw "Thread not found", 5 Nov). It
                         // goes again, still showing as on its way through the
                         // dropped connection, once the new runner is connected.
-                        result = try await inRestartOrder(threadId, sentOn: client, waiting: { session?.holdForResend(pendingId) }, send)
+                        _ = try await inRestartOrder(threadId, sentOn: client, waiting: { session?.holdForResend(pendingId) }, send)
                     } catch RPCError.disconnected(_) where wasIdle && !isRemote(threadId) && restartUnderWay {
                         // On its way as a handing-over runner closed its port,
                         // so no answer came: a message sent at 02:36:54 on
@@ -470,7 +474,7 @@ extension AppModel {
                         // for the new runner like one sent while it's down,
                         // and goes unless the thread shows it arrived.
                         session?.holdForResend(pendingId)
-                        result = try await behindRestart { () async throws -> TurnResult? in
+                        _ = try await behindRestart { () async throws -> String? in
                             guard let next = await self.clientAfterRestart(sentOn: client, wait: Self.restartHoldWait) else { throw RPCError.disconnected(nil) }
                             // Still with the old runner (finishing a turn-end
                             // hook, say) or busy: it may sit in a queue there
@@ -500,14 +504,7 @@ extension AppModel {
                         }
                     }
                 } else {
-                    result = try await whenRestarted(threadId, send)
-                }
-                // The runner says it queued it: the clock at once, and its
-                // turn id so it can be taken back before it goes.
-                if let result, result.queued == true, let turnId = result.turnId, !turnId.isEmpty {
-                    session?.markQueued(pendingId, turnId: turnId)
-                    checkQueued(threadId)
-                    return
+                    _ = try await whenRestarted(threadId, send)
                 }
                 // Taken but not shown: it's queued behind the running
                 // turn. Its user.message usually comes just before this

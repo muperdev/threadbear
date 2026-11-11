@@ -39,6 +39,7 @@ struct SettingsView: View {
         case .pools: PoolSettings()
         case .runners: RunnersSettings()
         case .devices: DevicesSettings()
+        case .team: TeamSettings()
         case .keyboard: KeyboardSettings()
         }
     }
@@ -114,6 +115,7 @@ extension SettingsTab {
         case .pools: "Pools"
         case .runners: "Runners"
         case .devices: "Phone & browser"
+        case .team: "Team"
         case .keyboard: "Keyboard"
         }
     }
@@ -126,6 +128,7 @@ extension SettingsTab {
         case .pools: "square.stack"
         case .runners: "server.rack"
         case .devices: "iphone"
+        case .team: "person.2"
         case .keyboard: "keyboard"
         }
     }

@@ -212,6 +212,7 @@ before(() => {
   // rpc-client.mjs and the fake runner both answer the auth challenge with it.
   fs.copyFileSync(path.join(RUNNER, 'src', 'rpc-auth.ts'), path.join(rdir, 'src', 'rpc-auth.ts'));
   // deploy-backend.mjs reads this Mac's Convex credential with it.
+  // convex-admin.ts checks a self-hosted URL through secure-url.ts.
   fs.copyFileSync(path.join(RUNNER, 'src', 'convex-admin.ts'), path.join(rdir, 'src', 'convex-admin.ts'));
   fs.copyFileSync(path.join(RUNNER, 'src', 'secure-url.ts'), path.join(rdir, 'src', 'secure-url.ts'));
   fs.writeFileSync(path.join(rdir, 'bin', 'tb'), '#!/usr/bin/env node\n');

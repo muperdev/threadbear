@@ -10,7 +10,7 @@ public struct ProviderInfo: Sendable, Hashable, Decodable {
     public var name: String
     public var cliName: String
     public var loginCommand: String
-    /// "claude", "codex" (with ultra) or "none".
+    /// "claude", "codex" (with ultra), "grok", "devin" or "none".
     public var effort: String
     /// "classifier", or "asks" where Auto behaves like Ask.
     public var autoMode: String
@@ -55,20 +55,18 @@ public struct ProviderInfo: Sendable, Hashable, Decodable {
 }
 
 /// The one place the app asks what a provider is. It holds what connected
-/// runners have said, over what's built in for Claude and Codex, which is
-/// what an older runner's threads get.
+/// runners have said, over what's built in for Claude, Codex, Grok and
+/// Devin, which is what a runner's threads get before hello arrives.
 public enum Providers {
     static let builtIn: [String: ProviderInfo] = [
         "claude": ProviderInfo(id: "claude", name: "Claude", cliName: "Claude Code", loginCommand: "claude auth login", effort: "claude",
                                autoMode: "classifier", sandbox: true, rewind: true, smallJobs: true, usageReadings: true),
         "codex": ProviderInfo(id: "codex", name: "Codex", cliName: "Codex", loginCommand: "codex login", effort: "codex",
                               autoMode: "asks", sandbox: false, rewind: true, smallJobs: false, usageReadings: true),
-        // The grok experiment's, as a runner from before hello's providers had it too.
-        "grok": ProviderInfo(id: "grok", name: "Grok", cliName: "Grok Build", loginCommand: "grok login", effort: "codex",
+        "grok": ProviderInfo(id: "grok", name: "Grok", cliName: "Grok Build", loginCommand: "grok login", effort: "grok",
                              autoMode: "asks", sandbox: false, rewind: false, smallJobs: false, usageReadings: false),
-        // The devin experiment's, the same.
-        "devin": ProviderInfo(id: "devin", name: "Devin", cliName: "Devin", loginCommand: "devin auth login", effort: "codex",
-                              autoMode: "asks", sandbox: false, rewind: false, smallJobs: false, usageReadings: false),
+        "devin": ProviderInfo(id: "devin", name: "Devin", cliName: "Devin", loginCommand: "devin auth login", effort: "devin",
+                              autoMode: "classifier", sandbox: false, rewind: false, smallJobs: false, usageReadings: false),
     ]
 
     private static let told = OSAllocatedUnfairLock(initialState: [String: ProviderInfo]())

@@ -272,7 +272,9 @@ export class AccountRegistry {
     const id = this.usage.identityFor(account);
     if (id.email) out.email = id.email;
     if (id.plan) out.plan = id.plan;
-    out.title = out.provider === 'codex' || out.provider === 'grok' || out.provider === 'devin' ? providerTitle(out.provider, out.email, out.id) : out.provider === 'claude' ? (out.email ?? out.id) : out.title;
+    if (out.provider === 'claude' || out.provider === 'codex' || out.provider === 'grok' || out.provider === 'devin') {
+      out.title = providerTitle(out.provider, out.email, out.id);
+    }
     const usage = this.usage.usageFor(out);
     if (usage) out.usage = usage;
     return out;

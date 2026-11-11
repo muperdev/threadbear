@@ -16,7 +16,7 @@ import crypto from 'node:crypto';
 import type { Clock } from './clock.ts';
 import type { Logger } from './log.ts';
 import type { Notification } from './runner.ts';
-import type { Project, ProjectIcon, ProjectLink, ProjectMaker, ThreadProject, ThreadSummary } from './protocol.ts';
+import type { Project, ProjectIcon, ProjectLink, ProjectMaker, ProjectTeam, ThreadProject, ThreadSummary } from './protocol.ts';
 import { ErrorCode, RpcError } from './protocol.ts';
 import type { ThreadRecord } from './store.ts';
 import type { ProjectFolder } from './patches.ts';
@@ -78,9 +78,15 @@ export type UpdateProjectParams = {
   notion?: string;
   archived?: boolean;
   // Who's changing the title, kept as titleBy. Absent counts as Mike, so a
-  // name from somewhere unknown is never renamed by the librarian.
-  by?: ProjectMaker;
+  // name from somewhere unknown is never renamed by the librarian. "team":
+  // a teammate's change, from the team's hub (team.ts), named by a person.
+  by?: ProjectMaker | 'team';
 };
+
+// Who changed a project, for onChange: a ProjectMaker, "team" (from the
+// hub) or "link" (only its team link moved).
+export type ProjectChangeSource = ProjectMaker | 'team' | 'link';
+export type ProjectChangeListener = (rec: ProjectRecord, prev: ProjectRecord | undefined, source: ProjectChangeSource) => void;
 
 export type MembershipChange = {
   add?: string[];
@@ -108,6 +114,8 @@ export const NOTES_LONG = 12_000;
 export const LINKS_MAX = 8;
 // How much of the projects goes into a session's brief, all of them together.
 export const BRIEF_MAX = 2000;
+// And what the team adds to a shared project's, on top.
+export const TEAM_BRIEF_MAX = 1200;
 
 export class Projects {
   private file: string;
@@ -124,6 +132,10 @@ export class Projects {
   // Each project's task board from Notion (notion-tasks.ts), when the
   // runner reads them.
   private boards?: TaskBoards;
+  // Told of every change (team.ts keeps shared ones in step).
+  private listeners: ProjectChangeListener[] = [];
+  // What the team adds to a shared project's brief (team.ts).
+  private teamBrief?: (rec: ProjectRecord) => string | undefined;
 
   constructor(deps: { home: string; clock: Clock; log: Logger; userHome?: string }) {
     this.file = path.join(deps.home, 'projects.json');
@@ -188,6 +200,39 @@ export class Projects {
   // handover.ts). Never saved: projects.json is the primary's.
   adopt(rec: ProjectRecord): void {
     if (this.frozen) this.items.set(rec.id, rec);
+  }
+
+  onChange(fn: ProjectChangeListener): () => void {
+    this.listeners.push(fn);
+    return () => (this.listeners = this.listeners.filter((x) => x !== fn));
+  }
+
+  private told(rec: ProjectRecord, prev: ProjectRecord | undefined, source: ProjectChangeSource): void {
+    for (const fn of this.listeners) {
+      try {
+        fn(rec, prev, source);
+      } catch (e) {
+        this.log.warn('project listener failed', { error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+  }
+
+  useTeamBrief(fn: (rec: ProjectRecord) => string | undefined): void {
+    this.teamBrief = fn;
+  }
+
+  // Links a project to the team's copy, or unlinks it (undefined).
+  setTeam(projectId: string, team: ProjectTeam | undefined): Project {
+    const rec = this.must(projectId);
+    const next = { ...rec };
+    if (team) next.team = { id: team.id, ...(team.delivery ? { delivery: team.delivery } : {}), ...(team.syncedAt ? { syncedAt: team.syncedAt } : {}) };
+    else delete next.team;
+    if (JSON.stringify(next.team) === JSON.stringify(rec.team)) return this.withCounts(rec, this.mustHost().threadRecords());
+    this.items.set(rec.id, next);
+    this.save();
+    this.told(next, rec, 'link');
+    this.publish();
+    return this.withCounts(next, this.mustHost().threadRecords());
   }
 
   // ---------------------------------------------------------------- reads
@@ -286,7 +331,10 @@ export class Projects {
     const room = Math.max(120, max - head.length - 20);
     const goals = clip(p.goals, Math.floor(room / 2));
     const state = clip(p.state, room - goals.length);
-    return [head, goals && `Goals: ${goals}`, state && `State: ${state}`, this.tasksLine(p)].filter(Boolean).join('\n');
+    // The team's part has its own room: who else is on it and what their
+    // threads are doing is what keeps two people's agents out of each other's way.
+    const team = p.team ? this.teamBrief?.(p) : undefined;
+    return [head, goals && `Goals: ${goals}`, state && `State: ${state}`, this.tasksLine(p), team && clip(team, TEAM_BRIEF_MAX)].filter(Boolean).join('\n');
   }
 
   // One line on the project's Notion board for the brief, so an agent
@@ -354,7 +402,7 @@ export class Projects {
     const rec = this.must(projectId);
     const next = { ...rec };
     if (params.title !== undefined) next.title = checkTitle(params.title);
-    if (next.title !== rec.title) next.titleBy = params.by ?? 'mike';
+    if (next.title !== rec.title) next.titleBy = !params.by || params.by === 'team' ? 'mike' : params.by;
     if (params.folders !== undefined) next.folders = this.checkFolders(params.folders, rec.folders);
     if (params.goals !== undefined) next.goals = checkText('goals', params.goals, SHORT_MAX);
     if (params.state !== undefined) next.state = checkText('state', params.state, SHORT_MAX);
@@ -379,6 +427,7 @@ export class Projects {
       this.mustHost().touchThreads(this.threadsIn(rec.id));
     }
     if (next.notion !== rec.notion) void this.boards?.refresh(rec.id, next.notion, true).catch(() => {});
+    this.told(next, rec, params.by ?? 'mike');
     this.publish();
     return this.withCounts(next, this.mustHost().threadRecords());
   }
