@@ -12,7 +12,9 @@ struct ProjectsHome: View {
     var body: some View {
         @Bindable var app = app
         let sections = app.projectSections
-        let all = ProjectCard.build(sections)
+        // With the projectDecisions experiment on, each card says how many
+        // decisions its threads are waiting on.
+        let all = ProjectCard.build(sections, decisions: app.projectDecisionsOn)
         let cards = ProjectCard.matching(all, app.projectSearchQuery)
         let searching = !app.projectSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         ScrollView {
@@ -26,7 +28,7 @@ struct ProjectsHome: View {
                     // or squeezing the search, whose width would otherwise
                     // jump as the summary's length changes with each key.
                     Text(searching ? ProjectCard.matchCount(cards.count, of: all.count)
-                                   : Self.summary(all, overall: ProjectCard.overall(sections)))
+                                   : Self.summary(all, overall: ProjectCard.overall(sections, decisions: app.projectDecisionsOn)))
                         .font(.system(size: TypeScale.label))
                         .foregroundStyle(Color(nsColor: Theme.faintText))
                         .monospacedDigit()
@@ -74,9 +76,11 @@ struct ProjectsHome: View {
         }
     }
 
-    /// "4 projects · 2 working · 1 needs you", each thread counted once.
+    /// "4 projects · 3 decisions · 2 working · 1 needs you", each thread
+    /// counted once (decisions only with the projectDecisions experiment).
     static func summary(_ cards: [ProjectCard], overall: ProjectCardStatus) -> String {
         var parts = [cards.count == 1 ? "1 project" : "\(cards.count) projects"]
+        if overall.decisions > 0 { parts.append(ProjectDecisions.label(overall.decisions)) }
         if overall.working > 0 { parts.append("\(overall.working) working") }
         if overall.needsYou > 0 { parts.append("\(overall.needsYou) needs you") }
         return parts.joined(separator: " · ")
@@ -219,7 +223,7 @@ private struct StatusLine: View {
 
     private func color(of part: ProjectCardStatus.Part) -> Color {
         switch part {
-        case .needsYou: Color(nsColor: Theme.needsYou)
+        case .needsYou, .decisions: Color(nsColor: Theme.needsYou)
         case .working: .accentColor
         case .failed: Color(nsColor: Theme.failed)
         case .unread: .secondary

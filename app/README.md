@@ -183,7 +183,12 @@ and the perf run stay away from the real one. Install the runner itself with
   answer 2." Then "The
   runner is restarting. Reconnecting…" with a spinner while it's down. The
   app retries every half second then, and the line goes once it's back. A
-  runner that isn't back within 90 seconds gets the usual banner. The
+  runner that isn't back within 90 seconds gets the usual banner. A message
+  you send to one of this Mac's threads meanwhile doesn't bounce back
+  into the box: it shows dimmed at the end of the thread with "Runner
+  restarting. Sends when it's back." under it, and goes once the new
+  runner connects (several go in the order you sent them). If the runner
+  isn't back 90 seconds after you sent it, it goes back in the box. The
   message the runner sends to carry a thread on (`origin: "runner"`) is a
   small centred note under the "Runner restarted" one, "Sent by the runner
   after it restarted" over its text, not a bubble of yours.
@@ -551,6 +556,7 @@ is an error. Commands marked "the open thread" act on `id` when it's given
 | `drop` | `path`, `x`, `y` (window points from its top left), `hover`, `leave` | drops a file there on the view AppKit would hand it to (the deepest one under it signed up for a type it has), through the instance's own pasteboard; `hover` stops before the drop (for a shot of the mark), `leave` drags back off. Not a real drag: check one of those by hand before trusting it |
 | `paste-image` | `path`, `focused` | through the instance's own pasteboard; `focused` pastes where the cursor is (an ask's Something else box) |
 | `decide` | `pick` (`"ask:choice"`, both 1-based, choice 0 for "Something else"; picking the same again unpicks it), `clear`, `send` | the open thread's card of asks, picked as its buttons pick, waiting in the composer; `send` sends the composer with the picks. Says what's picked after |
+| `decision` | `thread` (id or title), `pick` (`"ask:choice"` as `decide`), `write` (`"ask:words"` in that ask's Something else box), `send` | a decision on the open project's page (the projectDecisions experiment), through the card's own calls: a pick that answers every ask sends it, as the card does; `send` is ⌘Return in its box. Says the page's decisions after, as `projectDecisions` in `dump` |
 | `return`, `escape` at the cursor | `focused` (`return` only) | `return` with `focused: true`, or `escape`, presses the key in whichever text box has the cursor |
 | `arrow`, `tab` | `dir` (`up` or `down`) | presses the arrow or Tab key where the cursor is: in the composer they move and take the slash command palette's pick |
 | `click` | `title`, or `tip` (with `settings`: in the Settings window) | a button in the transcript: Allow, Always allow, Deny, an option, Send answer; `tip` presses a SwiftUI control with that tooltip through the window, without moving the pointer |
@@ -572,7 +578,7 @@ is an error. Commands marked "the open thread" act on `id` when it's given
 | `select-text` | `row`, `words`, `action` | selects the first match of `words` in a message row and shows the selection bar (says its window number); `action` (`explain`, `quote` or `copy`) clicks that instead. Explain opens the pane; `dump`'s panels line shows its answers |
 | `menu` | `row`, `click` | a transcript row's context menu, or chooses an item from it |
 | `debug-info`, `copy-thread-id`, `clipboard` | `row`, `id` | what "Copy debug info" and "Copy thread id" (the open thread) copy, copied to the instance's pasteboard as the menu items do; `clipboard` reads it back |
-| `appearance`, `resize` | `mode` (light, dark, system); `w`, `h`, `review` (a review's id: resize its window instead) | |
+| `appearance`, `resize` | `mode` (light, dark, system); `w`, `h`, `review` (a review's id: resize its window instead), `settings` (true: the Settings window) | |
 | `zoom` | `to` (in, out, reset) or `percent` | the window's zoom, as ⌘=, ⌘- and ⌘0 set it; says the percent it's at |
 | `archive`, `unarchive`, `snooze` | `id`, `seconds` (default 3600) | the open thread; says which thread it acted on |
 | `undo-archive`, `open-archived` | | the Archived note's Undo, or a click on the note (opens the thread) |
@@ -585,7 +591,10 @@ is an error. Commands marked "the open thread" act on `id` when it's given
 | `trust` | `id` | does what Patches' Trust button does, for the selected thread's waiting patches (`id` for one) |
 | `panel` | `id`, `show` | the selected thread's pane sections, each a panel in the window's dock: `id` opens or brings up that section (`threadbear.highlights`, `threadbear.files`, a panel's id, or `threadbear.patches`; an error names the ones it has), `show` false closes every section and true opens them again (Highlights if none), neither toggles; `dump` lists the sections, the active one starred, and what Highlights has, and its `dock:` line is the whole layout |
 | `folder` | `open`, `select`, `click` (`count`), `expand`, `up`, `mode`, `sort` (`ascending`), `hidden`, `key` (`command`, `shift`, `characters`), `crumb`, `pathBar`, `menu`, `choose` (`row`), `quickLook` | the folder browser showing in the pane (FolderBrowser.swift): `open` is what a double-click does to that row, `select` picks it, `click` presses it through the window (`count` 2 for a double-click), `expand` is its triangle, `up` is ⌘↑, `mode` is `list` or `icons`, `sort` a column (`name`, `modified`, `size`), `hidden` is ⌘⇧., `key` a key code on the view showing, `crumb` a folder in the path bar; says the rows, and `pathBar` its words, `menu` a row's right-click menu (`""` the empty space's), `choose` picks an item of it (`row`, or the empty space's), `quickLook` what the space bar would show. `dump`'s preview line has the same summary |
-| `preview` | `path`, `url`, `close`, `back`, `edit`, `insert`, `save` | opens a file, folder or page in the selected thread's pane, as a click on a highlight does (a web URL goes to the browser); `close` goes back to the section, `back` is the bar's Back. Over a text file, `edit` true or false is the bar's pencil or Done, and `insert` types text at the end of the editor (`wait` false returns before the save), `save` true is ⌘S, `resolve` (`file` or `mine`) presses the conflict bar's button; `dump`'s preview line says `(editing)` |
+| `highlight` | `tick` (an ask's index), `edited` (true or false), `showAll` (`links`, `commits`, `subagents`, `started`), `open` (a row's title), `menu` (a row's title), `choose` (an item of it, with `row`) | Highlights' rows, as their clicks do: `open` is a click on a row (a file previews, a page goes to the browser), `menu` says its right-click menu (`---` between groups), `choose` picks an item from it (Copy path, Remove). `panels.pane` in `dump` is what's drawn |
+| `tile` | `index`, `count` (a row with at least that many pictures, default 1) | presses a picture tile on the last such row in the transcript, as a click does; Quick Look's panel is swapped for a note of what it would show, which `viewer` then reads back |
+| `viewer` | `step` (GPUI's arrows), `close` | what a tile's click opened: `ok showing 2 of 2 <path>` or `ok closed` |
+| `preview` | `path`, `url`, `close`, `back`, `edit`, `insert`, `save` | opens a file, folder or page in the selected thread's pane, as a click on a highlight does (a web URL goes to the browser); `close` goes back to the section, `back` is the bar's Back. Over a text file, `edit` true or false is the bar's pencil or Done, and `insert` types text at the end of the editor (`wait` false returns before the save), `save` true is ⌘S, `resolve` (`file` or `mine`) presses the conflict bar's button, `copyImage` true is a picture's Copy Image and says what it put on the clipboard; `dump`'s preview line says `(editing)` |
 | `waitFor` | `row`, `kind`, `status` (and `thread`), `text`, `banner` (`""` for none), `connection`, `loaded`, `ready`, `not`, `timeout` | until every condition given holds (default 10 s) |
 | `dump` | `format` (`json`, `text`), `out` | |
 | `screenshot` | `path`, `inProcess` | `screencapture -l`, or drawn in-process when that gives no image; a dev-app instance always draws in-process (`shot` runs screencapture itself). `out` and `path` are refused under ~/Desktop, ~/Documents and ~/Downloads, where macOS would ask Mike to let the temp bundle in; `shot` and `dump` write in the instance's folder and move the file |

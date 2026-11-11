@@ -147,6 +147,7 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
     @objc private func buttonsChanged() {
         guard !buttonsPending else { return }
         buttonsPending = true
+        composerCard?.buttonsChanged()
         rerender { [weak self] in self?.buttonsPending = false } where: { RenderCache.holdsButtons($0) }
     }
 
@@ -1074,6 +1075,9 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
             app.toggleCardCollapsed(threadId: thread.id, seq: card.seq)
             return
         }
+        // The composer stops clicks reaching the card during a move; this is
+        // for anything else pressing it, as an answer now would miss the move.
+        if thread.moving?.ended == false { return }
         if action.hasPrefix("next:") {
             guard card.isOpen, let n = Int(action.dropFirst(5)), card.next.indices.contains(n) else { return }
             app.toggleFollowUp(threadId: thread.id, card: card, index: n)
@@ -1100,6 +1104,9 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
             else if n != Decisions.ownAnswer, let now = app.threads[thread.id], app.picks(for: now)[index] == n {
                 composerCard?.pagePast(index)
             }
+        case "run":
+            guard thread.asksSeq == card.seq, let id = ask.run?.buttonId else { return }
+            app.pressRunButton(id, threadId: thread.id)
         case "link":
             guard ask.links.indices.contains(n), let url = ask.links[n].target else { return }
             if WorkLinks.reviewId(of: url) != nil { return openReviewLink(url) }
@@ -1122,13 +1129,18 @@ final class TranscriptController: NSObject, NSTableViewDataSource, NSTableViewDe
     /// The pencil by one of Mike's messages: its text and pictures go into
     /// the composer, and sending replaces it (docs/protocol.md, "Editing a
     /// message").
+    var canGoBack: Bool {
+        guard let session, let thread = session.app?.threads[session.threadId] else { return true }
+        return Providers.info(thread.provider).rewind
+    }
+
     func editMessage(rowId: String) {
         // A queued message still on its way: out of the queue, back in the box.
         if rowId.hasPrefix("p:"), let session, let app = session.app {
             app.editQueued(threadId: session.threadId, pendingId: String(rowId.dropFirst(2)))
             return
         }
-        guard let session, let app = session.app,
+        guard canGoBack, let session, let app = session.app,
               case .user(let message)? = session.model.item(id: rowId)?.content, message.editable,
               let row = session.model.item(id: rowId) else { return }
         app.startEditing(threadId: session.threadId, seq: row.seq, text: message.text, images: message.images)

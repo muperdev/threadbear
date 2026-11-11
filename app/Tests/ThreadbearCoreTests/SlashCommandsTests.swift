@@ -20,6 +20,28 @@ final class SlashCommandsTests: XCTestCase {
         XCTAssertNil(SlashPalette.query(in: "hi /co"))
     }
 
+    func testTypedFindsACommandAtTheStartOrPartwayThrough() {
+        XCTAssertEqual(SlashPalette.typed(in: "/co"), .init(query: "co", start: 0))
+        XCTAssertEqual(SlashPalette.typed(in: "then use /td"), .init(query: "td", start: 9))
+        XCTAssertEqual(SlashPalette.typed(in: "first line\n/"), .init(query: "", start: 11))
+        XCTAssertEqual(SlashPalette.typed(in: "café /x")?.start, 5, "UTF-16, as the text view counts")
+        XCTAssertNil(SlashPalette.typed(in: "use /tdd now"), "a space after it: done")
+        XCTAssertNil(SlashPalette.typed(in: "look in /Users/"), "a path")
+        XCTAssertNil(SlashPalette.typed(in: "and/or"), "not after a space")
+        XCTAssertFalse(SlashPalette.typed(in: "/co")!.midMessage)
+        XCTAssertTrue(SlashPalette.typed(in: "a /co")!.midMessage)
+    }
+
+    func testMidMessageOffersOnlySkillsTheAgentCanRun() {
+        let list = [
+            SlashCommand(name: "model", source: "threadbear"),
+            SlashCommand(name: "compact", source: "cli"),
+            SlashCommand(name: "tdd", source: "skill"),
+            SlashCommand(name: "alert-duty", source: "skill", userOnly: true),
+        ]
+        XCTAssertEqual(SlashPalette.midMessage(list).map(\.name), ["tdd"])
+    }
+
     func testMatchesStartsWithThenContainsThenDescription() {
         let names = SlashPalette.matches(commands, query: "co", category: .all, recent: []).map(\.name)
         XCTAssertEqual(names, ["compact", "context", "code-review", "deslop"], "deslop by its description")

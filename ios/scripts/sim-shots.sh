@@ -19,7 +19,8 @@ fi
 # Before the build, so being refused doesn't come after minutes of compiling.
 scripts/sim.sh boot >/dev/null
 DD=/tmp/threadbear-dd-$SIM
-xcodebuild -project Threadbear.xcodeproj -scheme Threadbear -configuration Debug -destination "id=$SIM" \
+# One Threadbear build at a time on this machine (scripts/one-build.sh).
+../scripts/one-build.sh xcodebuild -project Threadbear.xcodeproj -scheme Threadbear -configuration Debug -destination "id=$SIM" \
   -derivedDataPath "$DD" build | grep -E " error:|BUILD (SUCCEEDED|FAILED)"
 xcrun simctl ui "$SIM" appearance "$([[ "${2:-}" == --dark ]] && echo dark || echo light)"
 xcrun simctl status_bar "$SIM" override --time 9:41 --batteryLevel 100 --batteryState charged --cellularBars 4

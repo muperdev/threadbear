@@ -43,7 +43,8 @@
 #                  8797). A sandbox next to the real runner needs its own
 #                  --home and --label; its port defaults to 0, a free one.
 #   --node PATH    Node 24 binary to pin in the plist
-#                  (default: $THREADBEAR_NODE, else ~/.nvm/versions/node/v24.22.1/bin/node)
+#                  (default: $THREADBEAR_NODE, else the node on PATH, else
+#                  nvm's newest Node 24 or newer, or Homebrew's)
 #   --runner-app DIR  where Threadbear Runner.app goes (default:
 #                  $THREADBEAR_RUNNER_APP_DIR, else ~/Applications/Threadbear
 #                  Runner.app, or <home>/runner/Threadbear Runner.app for a
@@ -62,7 +63,7 @@ for v in $(compgen -e | grep '^THREADBARE_' || true); do n="THREADBEAR_${v#THREA
 DEFAULT_LABEL="com.mikerosoft.threadbear.runner"
 DEFAULT_HOME="$HOME/Library/Application Support/Threadbear"
 RUNNER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NODE="${THREADBEAR_NODE:-$HOME/.nvm/versions/node/v24.22.1/bin/node}"
+NODE="${THREADBEAR_NODE:-}"
 LAUNCHCTL="${THREADBEAR_LAUNCHCTL:-launchctl}"
 AGENTS_DIR="${THREADBEAR_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
 # A runner on Linux (INSTALL.md, "A runner on Linux"): systemd keeps it up.
@@ -101,8 +102,28 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# Only once the arguments are read, so --node wins. Uninstalling needs no
+# Node, so a missing one is said where installing needs it, below.
+if [ -z "$NODE" ]; then
+  . "$RUNNER_DIR/scripts/find-node.sh"
+  NODE="$(threadbear_find_node 2>/dev/null)" || NODE=""
+fi
+
 case "$DATA_HOME" in /*) ;; *) DATA_HOME="$PWD/$DATA_HOME" ;; esac
 DATA_HOME="${DATA_HOME%/}"
+
+# Whether $DATA_HOME/runner.json is there but broken (launch.mjs,
+# runnerJsonBroken). A runner from before 9 Nov reads a broken one as {}
+# and writes over it, so nothing here starts or goes back to one then.
+runner_json_broken() {
+  "$NODE" --input-type=module -e 'const { runnerJsonBroken } = await import(process.argv[1]); process.exit(runnerJsonBroken(process.argv[2]) ? 0 : 1)' "file://$RUNNER_DIR/launch.mjs" "$DATA_HOME" 2>/dev/null
+}
+
+if runner_json_broken; then
+  echo "$DATA_HOME/runner.json isn't valid JSON. Fix it first: the runner won't start on it, and one from before 9 Nov would write over it." >&2
+  exit 1
+fi
+
 
 # Same folder, even through a symlink (/tmp is /private/tmp).
 same_dir() {
@@ -238,6 +259,10 @@ if [ "$MODE" = "uninstall" ]; then
   exit 0
 fi
 
+if [ -z "$NODE" ]; then
+  echo "No Node 24 or newer on PATH, in nvm or in Homebrew. Install it, or pass --node /path/to/node." >&2
+  exit 1
+fi
 if [ ! -x "$NODE" ]; then
   echo "No Node binary at $NODE. Pass --node /path/to/node (Node 24 or newer)." >&2
   exit 1
@@ -381,7 +406,9 @@ fi
 
 # deploy-runner.sh, on the Node the plist pins.
 deploy() {
-  THREADBEAR_NODE="$NODE" bash "$RUNNER_DIR/scripts/deploy-runner.sh" --home "$DATA_HOME" --label "$LABEL" "$@"
+  # THREADBEAR_DEPLOY_NODE_GIVEN: this is the Node being installed, which
+  # the plist may not name yet, so deploy.mjs takes it as it is.
+  THREADBEAR_NODE="$NODE" THREADBEAR_DEPLOY_NODE_GIVEN=1 bash "$RUNNER_DIR/scripts/deploy-runner.sh" --home "$DATA_HOME" --label "$LABEL" "$@"
 }
 
 # Loads $PLIST and starts it. Straight after a bootout, bootstrap can fail
@@ -551,7 +578,12 @@ fail_back() {
       if [ "$HAD_LAUNCH" = 1 ]; then mv -f "$PREV_LAUNCH" "$RDIR/launch.mjs"; else rm -f "$RDIR/launch.mjs"; fi
     fi
     if [ "$BUILT" = 1 ] && [ -n "$OLD_CURRENT" ]; then
-      point_current "$OLD_CURRENT" && echo "current points at $OLD_CURRENT again." >&2
+      if runner_json_broken; then
+        # Why the new release wouldn't start; the old one could write over it.
+        echo "$DATA_HOME/runner.json isn't valid JSON, so current stays on the new release rather than going back to $OLD_CURRENT, which could write over it. Fix runner.json and run this again." >&2
+      else
+        point_current "$OLD_CURRENT" && echo "current points at $OLD_CURRENT again." >&2
+      fi
     fi
     if reload; then
       echo "Back as it was. The log above says what went wrong; fix it and run this again." >&2

@@ -472,6 +472,9 @@ all meet. So:
 - Change the backend so it still takes what the old runner sends and still
   returns what the old phone reads (new fields optional, nothing removed or
   renamed), and only later stop accepting the old shape.
+- Since API 67 `sync:heartbeat` takes `followProblem`, a runner's word that it
+  can't follow GitHub's main (docs/dev-tools.md); the main key reads it from
+  `sync:otherRunnersList`.
 - `convex/version.ts` has `API_VERSION`, returned by `sync:heartbeat` and
   `phone:me`. Bump it when a client starts relying on something new, along
   with `BACKEND_API_VERSION` in `runner/src/sync.ts` (a unit test keeps them
@@ -553,8 +556,12 @@ Queries:
   too (`role: "tool"`, a one-line `text` such as "Run the unit tests" or
   "Edited ~/dev/x.ts", and `toolKind`). It reads Convex alone, so it works
   while the Mac is asleep. The website watches only the newest 30 with it and
-  reads older pages once, with `beforeSeq` (`web/src/transcript.ts`); the
-  iPhone still raises `limit` as you scroll back. `phone:thread` stays as API 1 had it (newest 20 text messages plus
+  reads older pages once, with `beforeSeq` (`web/src/transcript.ts`). The
+  iPhone does the same with an 80-row live page and chunks of 200
+  (`MessageHistory.swift`), watching `phone:images` from the first row read
+  once for pictures that finish uploading late; builds before 1.0.5 raise `limit` as you scroll
+  back, re-reading up to 2,000 rows for each new message (37.6 MB on 8 Nov),
+  which is why `PAGE_MAX` stays 2,000 until they're gone. `phone:thread` stays as API 1 had it (newest 20 text messages plus
   any paged ones, never tool rows), for phone apps built before.
 - `phone:threadsAt({ token, view })` (API 43) → `{ rows, at }`, a list once;
   `phone:threadsSince({ token, since })` → `{ rows, gone, more? }`, every row
@@ -619,6 +626,10 @@ phone names must be one that has heartbeated (or `"any"`), else
   with its `threads.commands` list as the command's `result` (kept by
   `sync:finishCommand` as for a `call`); an older runner fails it as
   unknown.
+- `phone:interrupt({ token, threadId })` (API 69) → commandId: Stop,
+  queued as an `interrupt` command, which ends the thread's running turn as
+  Stop on the Mac does. Runners have applied it since API 44 (the main
+  Mac sends it for another runner's thread).
 - `phone:respond({ token, threadId, approvalId, decision: "allow" |
   "allowAlways" | "deny", message? })`
 - `phone:answer({ token, threadId, approvalId, answers: Record<string,
@@ -660,7 +671,11 @@ phone names must be one that has heartbeated (or `"any"`), else
   after a day, so the phone should ask again rather than expect them to
   stay.
 - `phone:registerDevice({ token, apnsToken, environment: "sandbox" |
-  "production" })`. `apnsToken` is the device token in hex. A phone token
+  "production", pushKey?, platform? })`. `apnsToken` is the device token in hex.
+  `platform: "android"` (API 66) says it is instead the phone's Firebase token
+  (letters, digits and `_ - :`); the row keeps the name and gets a `platform`,
+  and its pushes go through the relay to Firebase, even from a backend with its
+  own Apple key. An iPhone sends no platform. A phone token
   keeps at most 5 registrations; a new one past that replaces its oldest.
   Revoking a token takes effect in that one small write (its phones get no
   more pushes at once, `devices:targets`); their rows are deleted after, 100
@@ -937,8 +952,9 @@ seconds (73% of row changes on the M5, each re-running a 30 to 40 KB
 rather than all of them, and a new reading time alone isn't a change; the
 website watches a 30-row tail, reads older pages once, watches pictures apart
 (`phone:images`) and lets go of its live queries after a minute hidden. The
-iPhone app still raises `limit` and uses `phone:thread`, which costs about
-70 KB for each message that arrives while a thread is open.
+iPhone app watched `phone:thread` then, about 70 KB for each message that
+arrives while a thread is open; it now watches an 80-row page of
+`phone:messages` and reads older chunks once (9 Nov).
 
 Since measured below: the inbox follows only what changed (API 43), and a
 reading copied from another runner goes up at most every 10 minutes, or at once

@@ -41,7 +41,10 @@ enum ScreenshotRunner {
         try? await Task.sleep(for: .milliseconds(500))
 
         let only = arguments.firstIndex(of: "--only").flatMap { $0 + 1 < arguments.count ? arguments[$0 + 1] : nil }
-        func wanted(_ name: String) -> Bool { only == nil || name.hasPrefix(only!) }
+        // Groups are gated by their number ("12") and take each shot's
+        // full name too ("12c"), so --only 12c runs group 12 rather than
+        // matching nothing and saving no shots at all.
+        func wanted(_ name: String) -> Bool { only == nil || name.hasPrefix(only!) || only!.hasPrefix(name) }
 
         // 1. The demo thread at the bottom: images, a footer and an approval card.
         let demo = "demo_upload_resume"
@@ -229,6 +232,25 @@ enum ScreenshotRunner {
             app.transcript.scrollToBottom()
             try? await Task.sleep(for: .milliseconds(400))
             await capture(window, dir.appendingPathComponent("12c-codex-limit-and-footers.png"))
+            // 12e. The limit box at the top of the composer: the login at
+            // its limit and the thread waiting to carry on by itself, then
+            // 12f with carrying on turned off.
+            if let before = app.threads[codex] {
+                var waiting = before
+                waiting.poolId = nil
+                waiting.waitingForRoom = WaitingForRoom(until: Date().addingTimeInterval(95 * 60))
+                app.failedOnAccount[codex] = waiting.accountId
+                app.threads[codex] = waiting
+                try? await Task.sleep(for: .milliseconds(400))
+                await capture(window, dir.appendingPathComponent("12e-limit-box-waiting.png"))
+                var off = waiting
+                off.waitingForRoom = nil
+                off.carryOnAtReset = false
+                app.threads[codex] = off
+                try? await Task.sleep(for: .milliseconds(400))
+                await capture(window, dir.appendingPathComponent("12f-limit-box-off.png"))
+                app.threads[codex] = before
+            }
         }
         // 13. The composer's pickers for a new thread with a runner older
         // than pools: the accounts with the room each has, then the model

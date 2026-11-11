@@ -1,5 +1,4 @@
-// Keeping the Mac awake while threads work (experiment keepAwake,
-// src/keep-awake.ts).
+// Keeping the Mac awake while threads work (src/keep-awake.ts).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FakeClock } from '../../src/clock.ts';
@@ -42,7 +41,7 @@ test('keepAwake: holds while a thread works, lingers a few minutes, then lets go
   assert.equal(state.stopped, 1);
 });
 
-test('keepAwake: does nothing with the experiment off, and lets go when it is turned off', () => {
+test('keepAwake: does nothing with the setting off, and lets go when it is turned off', () => {
   const { clock, state, k } = setup({ on: false });
   state.busy = 2;
   clock.advance(SWEEP_MS);

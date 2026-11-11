@@ -133,6 +133,11 @@ export class SecretStore {
   open(sealed: Sealed, approvalId: string): string {
     return openSealed(this.privateKey(), sealed, approvalId);
   }
+
+  // A moving thread's bundle, sealed to this runner with sealBytes.
+  openBytes(sealed: Buffer, info: string): Buffer {
+    return openBytes(this.privateKey(), sealed, info);
+  }
 }
 
 function rawPublic(k: crypto.KeyObject): Buffer {
@@ -174,6 +179,40 @@ export function openSealed(privateKey: crypto.KeyObject, sealed: Sealed, approva
     const d = crypto.createDecipheriv('aes-256-gcm', boxKey(shared, epk, recipient, approvalId), nonce);
     d.setAuthTag(box.subarray(box.length - 16));
     return Buffer.concat([d.update(box.subarray(0, box.length - 16)), d.final()]).toString('utf8');
+  } catch {
+    throw fail();
+  }
+}
+
+// Bytes sealed the same way, for what's too big for a Sealed's base64 (a
+// moving thread's bundle, docs/protocol.md "Moving a thread to another
+// runner"): the ephemeral key, the nonce, the ciphertext and its tag, one
+// after the other. `info` says what it's for, so it opens only as that.
+export function sealBytes(recipientRawB64: string, data: Buffer, info: string): Buffer {
+  const recipient = Buffer.from(recipientRawB64, 'base64');
+  const eph = crypto.generateKeyPairSync('x25519');
+  const epk = rawPublic(eph.publicKey);
+  const shared = crypto.diffieHellman({ privateKey: eph.privateKey, publicKey: publicFromRaw(recipient) });
+  const nonce = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', bytesKey(shared, epk, recipient, info), nonce);
+  return Buffer.concat([epk, nonce, c.update(data), c.final(), c.getAuthTag()]);
+}
+
+function bytesKey(shared: Buffer, epk: Buffer, recipient: Buffer, info: string): Buffer {
+  return Buffer.from(crypto.hkdfSync('sha256', shared, Buffer.concat([epk, recipient]), Buffer.from(info, 'utf8'), 32));
+}
+
+export function openBytes(privateKey: crypto.KeyObject, sealed: Buffer, info: string): Buffer {
+  const fail = () => new Error("The moved thread's bundle couldn't be opened.");
+  if (sealed.length < 32 + 12 + 16) throw fail();
+  try {
+    const epk = sealed.subarray(0, 32);
+    const nonce = sealed.subarray(32, 44);
+    const recipient = rawPublic(crypto.createPublicKey(privateKey));
+    const shared = crypto.diffieHellman({ privateKey, publicKey: publicFromRaw(epk) });
+    const d = crypto.createDecipheriv('aes-256-gcm', bytesKey(shared, epk, recipient, info), nonce);
+    d.setAuthTag(sealed.subarray(sealed.length - 16));
+    return Buffer.concat([d.update(sealed.subarray(44, sealed.length - 16)), d.final()]);
   } catch {
     throw fail();
   }

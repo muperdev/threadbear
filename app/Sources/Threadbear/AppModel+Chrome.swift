@@ -52,6 +52,7 @@ extension AppModel {
                 self.updateRestart { $0.status(status.pendingRestart, now: Date()) }
                 if self.websiteURL != status.websiteURL { self.websiteURL = status.websiteURL }
                 if self.pushOff != status.pushOff { self.pushOff = status.pushOff }
+                if self.localOnly != status.localOnly { self.localOnly = status.localOnly }
             } catch RPCError.server(let code, _) where code == -32601 {
                 // A runner older than runner.status: its notices are all there is.
             } catch {
@@ -184,8 +185,28 @@ extension AppModel {
     /// The sidebar's panel, from the View menu: closed, or opened down the
     /// left of the window.
     func toggleThreadsPanel() {
-        if dock.layout.contains(WindowDock.threads) { dock.close(WindowDock.threads) } else { dock.open(WindowDock.threads, .window(.left)) }
+        if dock.layout.contains(WindowDock.threads), !threadsCollapsed {
+            dock.close(WindowDock.threads)
+        } else {
+            threadsCollapsed = false
+            if !dock.layout.contains(WindowDock.threads) { dock.open(WindowDock.threads, .window(.left)) }
+        }
     }
+
+    /// ⌘/: folds the Threads panel away, or brings it back as it was. The
+    /// activity bar stays. If Hide Threads had taken the panel out of the
+    /// layout, this puts it back instead.
+    func toggleThreadsCollapsed() {
+        guard dock.layout.contains(WindowDock.threads) else {
+            threadsCollapsed = false
+            dock.open(WindowDock.threads, .window(.left))
+            return
+        }
+        threadsCollapsed.toggle()
+    }
+
+    /// Whether the Threads panel is on screen (in the layout and not folded).
+    var threadsShowing: Bool { dock.layout.contains(WindowDock.threads) && !threadsCollapsed }
 
     static func actionKey(threadId: String, actionId: String) -> String { "\(threadId)/\(actionId)" }
 

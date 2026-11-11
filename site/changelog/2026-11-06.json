@@ -1,0 +1,61 @@
+{
+  "release": "2026-11-06",
+  "highlights": [
+    {
+      "kind": "added",
+      "title": "Browse folders in the side pane like the Finder",
+      "text": "Clicking a link to a folder now opens it in the side pane as a list with sortable columns or as icons with thumbnails. Double-click to go in or preview a file, press Space for Quick Look and ⌘↑ to go up, drag files out, and right-click for Show as. It works for folders on your other Macs too.",
+      "media": {
+        "type": "image",
+        "src": "folder-browser.webp",
+        "width": 1640,
+        "height": 1640,
+        "alt": "A thread with the side pane beside it showing a folder as icons, with thumbnails of the pictures in it and the folder's path along the bottom"
+      }
+    },
+    {
+      "kind": "added",
+      "title": "See your runners and how busy they are",
+      "text": "When you have more than one runner, a Runners panel on the left-hand rail shows which machines are online, what version they're on and which threads they're running. Click a runner's name to see its CPU, memory and disk.",
+      "media": {
+        "type": "image",
+        "src": "runners-panel.webp",
+        "width": 663,
+        "height": 484,
+        "alt": "The Runners panel listing two machines, m5 and bruce, both online, with the threads each is running"
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Watch the agent's browser beside the thread",
+      "text": "The Browser panel (the globe on a thread's right-hand rail) shows the pages an agent opens through BrowserBear in one of your own Chrome profiles, with its sign-ins, and you can click and type in them right there. When the agent needs you to sign in or approve something, the page opens in the panel with Your turn and Done buttons, so it no longer takes over your Chrome window."
+    }
+  ],
+  "added": [
+    "Archive now asks how it went: Worked, Didn't work, Not needed, or Okey-dokey for a thread that's simply done (Mac, iPhone and website)",
+    "Paste a thread's id into another thread's message box and it turns into a chip with that thread's title, which opens the thread when clicked",
+    "A thread that's waiting on other threads hibernates until they finish, then carries on with what they said, and its row says Waiting on and which",
+    "Scroll or pinch to zoom into a big image in the Compare window, then drag around it or jump about with the small map of the whole page",
+    "Run a schedule on a pool, so each run starts on whichever login has room",
+    "The website has a rail down the left for Threads, Scheduled, Projects, Runners and Usage, where you can see each runner's CPU, memory and disk and Pause or Run now a schedule",
+    "The website's sidebar can be resized, folds and counts every section, sorts the inbox, and searches and filters threads, archived ones included",
+    "Pictures you paste into a message now show on the website, and a project's page there lists all its threads, archived ones too",
+    "Run Threadbear's runner on a Linux server, where it installs as a background service"
+  ],
+  "changed": [
+    "Threads on your other Macs and servers open from this Mac without pairing it with each one first",
+    "Pools are shared between all your runners, see each login's latest usage from any machine, and start new threads on the login whose week resets soonest, so less of each week goes unused",
+    "Usage says what each window's pace means (how long before it runs out, or how much will go unused) and its charts fill the panel's width",
+    "The model picker shows Anthropic and Codex logos",
+    "Each Settings section explains what it's for behind an ⓘ, with what to ask your agent if you want it changed",
+    "Threadbear asks before a cloned repo's own Claude Code hooks, MCP servers or settings run, with a Trust button in Patches",
+    "The homepage plays clips of the app, installing is copying one prompt into Claude Code or Codex, and the code is now public on GitHub"
+  ],
+  "fixed": [
+    "Icons now show in menus, which macOS had been hiding",
+    "Clicking a picture in the side pane no longer crashes the app",
+    "A thread whose last turn was very long no longer opens halfway down with nothing above it",
+    "A message sent while the runner restarts now waits and goes through, rather than bouncing back to the message box with an error",
+    "Closed several ways a repo, a link or another machine could get past an approval check, and the iPhone now asks before any pairing or Quick Ask link changes which server it uses"
+  ]
+}

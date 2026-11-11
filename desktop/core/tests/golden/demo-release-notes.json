@@ -1,0 +1,81 @@
+{
+  "closed" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Draft release notes for 0.4 from the merged PRs since 0.3.",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "g:t:turn_1_gh",
+      "inGroup" : false,
+      "kind" : "group",
+      "seq" : 3,
+      "text" : "Worked for 18s",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 5,
+      "text" : "## 0.4 - **Uploads resume** after the app quits or the network drops. - The thumbnail grid scrolls …",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 6,
+      "text" : "18s, $0.05",
+      "turn" : "turn_1"
+    }
+  ],
+  "open" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Draft release notes for 0.4 from the merged PRs since 0.3.",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : true,
+      "id" : "g:t:turn_1_gh",
+      "inGroup" : false,
+      "kind" : "group",
+      "seq" : 3,
+      "text" : "Worked for 18s",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:turn_1_gh",
+      "inGroup" : true,
+      "kind" : "tool",
+      "seq" : 3,
+      "text" : "List merged PRs since v0.3",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 5,
+      "text" : "## 0.4 - **Uploads resume** after the app quits or the network drops. - The thumbnail grid scrolls …",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 6,
+      "text" : "18s, $0.05",
+      "turn" : "turn_1"
+    }
+  ]
+}

@@ -674,9 +674,9 @@ struct ThreadSettings {
 
     func permissionMenu() -> NSMenu {
         let menu = NSMenu()
-        // Auto is Claude Code's; Codex has nothing like it, so it's only offered
-        // for Claude (or if a thread is somehow on it already).
-        let modes: [PermissionMode] = provider == "claude" || permissionMode == .auto ? [.full, .auto, .ask, .plan] : [.full, .ask, .plan]
+        // Auto needs a provider with its own judge of each action. Without one
+        // it's only there for a thread that is somehow on it already.
+        let modes: [PermissionMode] = Providers.info(provider).autoMode == "classifier" || permissionMode == .auto ? [.full, .auto, .ask, .plan] : [.full, .ask, .plan]
         for mode in modes {
             let item = ActionMenuItem(mode.composerTitle, symbol: mode.composerIcon, checked: permissionMode == mode) { setPermission(mode) }
             item.subtitle = mode.composerHelp
@@ -737,6 +737,7 @@ private extension PermissionMode {
         case .ask: "Ask before edits"
         case .auto: "Auto"
         case .plan: "Plan first"
+        case .unknown: "Unknown mode"
         }
     }
 
@@ -746,6 +747,7 @@ private extension PermissionMode {
         case .ask: "lock"
         case .auto: "lock.shield"
         case .plan: "list.bullet.clipboard"
+        case .unknown: "questionmark.circle"
         }
     }
 
@@ -755,6 +757,7 @@ private extension PermissionMode {
         case .ask: "Asks before editing files or running commands"
         case .auto: "A safety check approves or blocks each action, and asks only when unsure"
         case .plan: "Reads and plans, and changes nothing until you approve its plan"
+        case .unknown: "A mode from a newer runner that this app doesn't know. Update the app to see it. Anything made from this thread here asks before edits"
         }
     }
 }
@@ -895,6 +898,9 @@ private struct ContextRing: View {
 /// The ring's popover: the context in tokens, what happens when it fills,
 /// then the model and login the thread is really running on and what it
 /// has cost. Reads the thread live, so it moves while a turn runs.
+/// On a Claude thread it also shows what fills the context, in Claude's
+/// own words (ContextBreakdown, after Ghostex's panel): asked when it
+/// opens and from its refresh button, never on a timer.
 struct ContextPopover: View {
     @Environment(AppModel.self) private var app
     let threadId: String
@@ -903,16 +909,27 @@ struct ContextPopover: View {
         let thread = app.threads[threadId]
         VStack(alignment: .leading, spacing: 6) {
             if let thread, let meter = ContextMeter(thread) {
-                Text("Context").font(.system(size: 13, weight: .semibold))
-                ProgressView(value: meter.fraction)
-                    .progressViewStyle(.linear)
-                    .tint(meter.isNearlyFull ? .orange : .secondary)
+                let claude = thread.provider == "claude"
+                let answer = app.contextUsage[threadId]
+                let breakdown = claude ? ContextBreakdown(answer?.usage) : nil
                 HStack {
-                    Text(meter.amount)
+                    Text("Context").font(.system(size: 13, weight: .semibold))
                     Spacer()
-                    Text("\(meter.percent)%").foregroundStyle(.secondary)
+                    if claude { refreshButton(answer) }
                 }
-                .font(.system(size: 12))
+                if let breakdown {
+                    BreakdownView(breakdown: breakdown, note: answer?.note)
+                } else {
+                    ProgressView(value: meter.fraction)
+                        .progressViewStyle(.linear)
+                        .tint(meter.isNearlyFull ? .orange : .secondary)
+                    HStack {
+                        Text(meter.amount)
+                        Spacer()
+                        Text("\(meter.percent)%").foregroundStyle(.secondary)
+                    }
+                    .font(.system(size: 12))
+                }
                 Text(ContextMeter.compactNote(provider: thread.provider))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -925,7 +942,31 @@ struct ContextPopover: View {
             }
         }
         .padding(14)
-        .frame(width: 260)
+        // Room for a breakdown row's name, tokens and share on a Claude
+        // thread; a Codex thread's popover is as it was.
+        .frame(width: app.threads[threadId]?.provider == "claude" ? 290 : 260)
+        .onAppear { app.loadContextUsage(threadId) }
+    }
+
+    /// Asks Claude again. Spins while it asks; off once the runner has said
+    /// the thread has no CLI running to ask (it answers the kept one then).
+    private func refreshButton(_ answer: ContextUsageAnswer?) -> some View {
+        let loading = app.contextUsageLoading.contains(threadId)
+        let asleep = answer.map { !$0.live } ?? false
+        return Button {
+            app.loadContextUsage(threadId)
+        } label: {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 11, weight: .medium))
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .disabled(asleep)
+        .opacity(asleep ? 0.4 : 1)
+        .busy(loading)
+        .tip(asleep ? "Claude isn't running for this thread now. It can say again after your next message." : "Ask Claude again what fills the context")
     }
 
     private func row(_ name: String, _ value: String) -> some View {
@@ -935,6 +976,129 @@ struct ContextPopover: View {
             Text(value).lineLimit(1).truncationMode(.middle)
         }
         .font(.system(size: 12))
+    }
+}
+
+extension AppModel {
+    /// Asks for a Claude thread's context breakdown: when the ring's
+    /// popover opens and from its refresh button, never on a timer. The
+    /// last answer stays meanwhile, so the popover opens on it.
+    func loadContextUsage(_ threadId: String) {
+        guard !contextUsageLoading.contains(threadId), threads[threadId]?.provider == "claude", let client = client(for: threadId) else { return }
+        contextUsageLoading.insert(threadId)
+        Task { [weak self] in
+            do {
+                let answer = try await client.contextUsage(threadId: threadId)
+                self?.contextUsage[threadId] = answer
+            } catch {
+                // An older runner (-32601), or another Mac's thread through
+                // the backend: the popover keeps to the totals. A breakdown
+                // kept from before (the thread was on this Mac's runner
+                // until it moved) goes, as nobody can bring it up to date.
+                self?.contextUsage[threadId] = nil
+                AppLog.write("rpc", "threads.contextUsage failed: \(error.localizedDescription)")
+            }
+            self?.contextUsageLoading.remove(threadId)
+        }
+    }
+}
+
+/// "32% used  323k / 1M", the stacked bar, a row each, and how old it is.
+private struct BreakdownView: View {
+    let breakdown: ContextBreakdown
+    let note: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(breakdown.headline).font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text(breakdown.amount).font(.system(size: 12)).foregroundStyle(.secondary).monospacedDigit()
+            }
+            bar.padding(.bottom, 2)
+            ForEach(breakdown.rows) { row in
+                HStack(spacing: 7) {
+                    Swatch(swatch: row.swatch, hollow: row.deferred)
+                    Text(row.name)
+                        .foregroundStyle(row.deferred || row.swatch == .buffer || row.swatch == .free ? .secondary : .primary)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text(row.tokenText).foregroundStyle(.secondary).monospacedDigit()
+                    Text(row.percentText ?? "")
+                        .foregroundStyle(.secondary).monospacedDigit()
+                        .frame(width: 38, alignment: .trailing)
+                }
+                .font(.system(size: 12))
+                .tip(row.deferred ? "Tool definitions Claude loads only when it needs one, so they aren't in the context yet." : "")
+            }
+            if let at = breakdown.at {
+                // Ticks over by itself while the popover stays open.
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    HStack(spacing: 4) {
+                        Text("Breakdown from \(ContextBreakdown.age(at, now: context.date))")
+                        if let note {
+                            Image(systemName: "exclamationmark.circle").tip(note)
+                        }
+                    }
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                }
+                .padding(.top, 2)
+            }
+        }
+    }
+
+    /// What's used from the left, the buffer Claude keeps for compacting
+    /// at the right, the free space between.
+    private var bar: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            let size = { (row: ContextBreakdown.Row) -> CGFloat in
+                // A sliver for a small row, so it still shows; never wider
+                // than the bar, whatever count a runner sent.
+                max(1.5, width * CGFloat(min(1, max(0, row.fraction ?? 0))))
+            }
+            ZStack(alignment: .leading) {
+                Rectangle().fill(Swatch.color(.free))
+                HStack(spacing: 0) {
+                    ForEach(breakdown.bar.filter { $0.swatch != .buffer }) { Rectangle().fill(Swatch.color($0.swatch)).frame(width: size($0)) }
+                }
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    ForEach(breakdown.bar.filter { $0.swatch == .buffer }) { Rectangle().fill(Swatch.color($0.swatch)).frame(width: size($0)) }
+                }
+            }
+            .clipShape(Capsule())
+        }
+        .frame(height: 6)
+    }
+}
+
+/// A row's colour square: muted, so the bar reads at a glance without the
+/// popover turning into a rainbow.
+private struct Swatch: View {
+    let swatch: ContextBreakdown.Swatch
+    var hollow = false
+
+    static func color(_ swatch: ContextBreakdown.Swatch) -> Color {
+        switch swatch {
+        case .messages: Color(red: 0.42, green: 0.58, blue: 0.95)
+        case .memory: Color(red: 0.40, green: 0.75, blue: 0.58)
+        case .skills: Color(red: 0.68, green: 0.55, blue: 0.92)
+        case .agents: Color(red: 0.35, green: 0.72, blue: 0.80)
+        case .mcp: Color(red: 0.86, green: 0.68, blue: 0.32)
+        case .system: Color.primary.opacity(0.42)
+        case .other: Color.primary.opacity(0.30)
+        case .buffer: Color.primary.opacity(0.22)
+        case .free: Color.primary.opacity(0.10)
+        }
+    }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 2)
+            .fill(hollow ? Color.clear : Self.color(swatch))
+            .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(hollow ? Color.secondary : .clear, lineWidth: 1))
+            .frame(width: 9, height: 9)
     }
 }
 
@@ -1163,7 +1327,9 @@ struct ModelPickerView: View {
                 .frame(maxHeight: Self.listMaxHeight(pools: pools, speed: settings.offersFastMode))
                 .fixedSize(horizontal: false, vertical: true)
                 Divider()
-                EffortRow(levels: settings.effortLevels, chosen: settings.effectiveEffort, tight: settings.offersFastMode) { settings.setEffort($0) }
+                if !settings.effortLevels.isEmpty {
+                    EffortRow(levels: settings.effortLevels, chosen: settings.effectiveEffort, tight: settings.offersFastMode) { settings.setEffort($0) }
+                }
                 if settings.offersFastMode {
                     SpeedRow(fast: settings.fastMode) { settings.setFastMode($0) }
                 }

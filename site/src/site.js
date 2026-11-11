@@ -241,3 +241,24 @@ for (const card of document.querySelectorAll(".video-card[data-video]")) {
     card.replaceWith(box);
   });
 }
+
+// The changelog (/changelog). A before/after: the slider moves where the before picture is cut
+// off (a CSS variable, set through the CSSOM, which the CSP allows). Without this it stays
+// halfway, so both halves still show. A clip only plays while it's on screen, and not at all
+// for someone who's asked for less motion (its poster stays).
+for (const box of document.querySelectorAll(".cl-compare")) {
+  const slider = box.querySelector(".cl-slider");
+  const set = () => box.style.setProperty("--cut", `${slider.value}%`);
+  slider.addEventListener("input", set);
+  set();
+}
+const clips = document.querySelectorAll("video.cl-shot");
+if (clips.length && "IntersectionObserver" in window && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  const watcher = new IntersectionObserver((entries) => {
+    for (const { target, isIntersecting } of entries) {
+      if (isIntersecting) target.play().catch(() => {});
+      else target.pause();
+    }
+  }, { threshold: 0.4 });
+  for (const clip of clips) watcher.observe(clip);
+}

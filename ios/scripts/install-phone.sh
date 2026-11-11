@@ -44,7 +44,8 @@ if [[ -d "$DD/SourcePackages" ]]; then
 fi
 # Release says production for APNs (the App Store build), but this build is
 # development-signed, so its pushes come through the sandbox.
-xcodebuild -project Threadbear.xcodeproj -scheme Threadbear -configuration "$CONFIG" \
+# One Threadbear build at a time on this machine (scripts/one-build.sh).
+../scripts/one-build.sh xcodebuild -project Threadbear.xcodeproj -scheme Threadbear -configuration "$CONFIG" \
   -destination 'generic/platform=iOS' -derivedDataPath "$DD" "${extra[@]}" \
   THREADBEAR_APS_ENVIRONMENT=development build | grep -E "(^| )error:|BUILD (SUCCEEDED|FAILED)"
 APP="$DD/Build/Products/$CONFIG-iphoneos/Threadbear.app"

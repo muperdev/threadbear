@@ -9,12 +9,29 @@
 # has, as the two can break in different ways. The iPhone app builds with
 # the newest only: the image has the iOS platform installed for its newest
 # Xcode and not the older ones. Nothing is signed, run or uploaded.
+#
+# Free, as runner.yml is: a public repo on GitHub's standard runners. It only
+# runs when something it builds changed, so a runner-only change spends no
+# macOS minutes. Everything both builds read is under app/, dock/ and ios/
+# (the iPhone project takes ../app/SentryBinary, and ThreadbearKit links
+# files from app/Sources), so a new path outside those belongs here too.
 name: Builds on Xcode 26
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'app/**'
+      - 'dock/**'
+      - 'ios/**'
+      - '.github/workflows/xcode-26.yml'
   pull_request:
+    # The same list as push's, kept in step by hand.
+    paths:
+      - 'app/**'
+      - 'dock/**'
+      - 'ios/**'
+      - '.github/workflows/xcode-26.yml'
   workflow_dispatch:
 
 permissions:
@@ -38,7 +55,29 @@ jobs:
           - app: iphone
             xcode: oldest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
+      # SwiftPM's downloads, kept between runs: the packages it clones and
+      # the prebuilt libraries (Sentry, whisper.cpp, Convex's) it fetches
+      # from GitHub releases. On 9 Nov those downloads kept answering 504 and
+      # failed every build, though nothing in them had changed. Keyed on
+      # what pins them: the Package.resolved files, and the Package.swift
+      # files that name the prebuilt libraries' URLs. A new key starts from
+      # the last one (restore-keys), so only what changed is fetched. Free:
+      # caches count against the repo's 10 GB, not money. Saved as soon as
+      # the packages are in (below), so a build that fails later still keeps
+      # them; a PR's run saves only for that PR.
+      - name: Restore SwiftPM's downloads
+        id: spm
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            ~/ios-source-packages
+          key: spm-${{ matrix.app }}-${{ matrix.xcode }}-${{ hashFiles('app/Package.resolved', 'ios/ThreadbearKit/Package.resolved', 'app/**/Package.swift', 'dock/Package.swift', 'ios/**/Package.swift') }}
+          restore-keys: |
+            spm-${{ matrix.app }}-${{ matrix.xcode }}-
+            spm-${{ matrix.app }}-
 
       - name: Pick the Xcode
         run: |
@@ -50,6 +89,30 @@ jobs:
           echo "DEVELOPER_DIR=$pick/Contents/Developer" >> "$GITHUB_ENV"
           DEVELOPER_DIR="$pick/Contents/Developer" xcodebuild -version
           DEVELOPER_DIR="$pick/Contents/Developer" swift --version
+
+      - name: Fetch the packages
+        # Before the build, and up to three times: GitHub's release downloads
+        # answer 504 now and then, and a minute later they work.
+        run: |
+          for try in 1 2 3; do
+            if [ "${{ matrix.app }}" = mac ]; then
+              (cd app && swift package resolve) && exit 0
+            else
+              (cd ios && xcodebuild -resolvePackageDependencies -project Threadbear.xcodeproj -scheme Threadbear \
+                -clonedSourcePackagesDirPath "$HOME/ios-source-packages") && exit 0
+            fi
+            [ "$try" = 3 ] || { echo "Fetching failed (try $try of 3); again in a minute."; sleep 60; }
+          done
+          exit 1
+
+      - name: Save SwiftPM's downloads
+        if: steps.spm.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            ~/ios-source-packages
+          key: ${{ steps.spm.outputs.cache-primary-key }}
 
       - name: Build the Mac app
         if: matrix.app == 'mac'
@@ -63,7 +126,8 @@ jobs:
         # For a phone, as ios/scripts/install-phone.sh builds it: Convex's
         # prebuilt library has no Intel simulator slice, so a generic
         # simulator build can't link.
+        # -clonedSourcePackagesDirPath: the packages fetched above.
         run: |
           xcodebuild -project Threadbear.xcodeproj -scheme Threadbear -configuration Debug \
-            -destination 'generic/platform=iOS' \
+            -destination 'generic/platform=iOS' -clonedSourcePackagesDirPath "$HOME/ios-source-packages" \
             CODE_SIGNING_ALLOWED=NO THREADBEAR_APS_ENVIRONMENT=development build

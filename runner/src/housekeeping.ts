@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { paths, readRunnerJson } from './config.ts';
+import { paths, peekRunnerJson } from './config.ts';
 import type { Logger } from './log.ts';
 
 // Keeps the data dir and logs from growing forever (Mike, 29 Oct: after a
@@ -102,7 +102,7 @@ export function tidy(opts: { home: string; logs: LogToCap[]; now: number; log?: 
   }
 
   // Read each time, so a change to runner.json counts without a restart.
-  const days = readRunnerJson(home).archivedMediaDays;
+  const days = peekRunnerJson(home).archivedMediaDays;
   const keepMs = typeof days === 'number' && days > 0 ? days * DAY : undefined;
   for (const id of keepMs === undefined ? [] : entries(paths.threads(home))) {
     attempt(`thread ${id}`, () => {

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Hunk, PlanEntry, ToolKind } from './protocol.ts';
-import { MAYBE_RUNS_AS_CODE, RUNS_AS_CODE } from './code-writes.ts';
+import { MAYBE_RUNS_AS_CODE, RUNS_AS_CODE, type CodeWrite } from './code-writes.ts';
 import { LIMITS } from './protocol.ts';
 import { applyReplace, diffLines } from './diff.ts';
 import { firstLineSafely, safeEnd } from './safe-cut.ts';
@@ -213,13 +213,22 @@ export function truncateInput(input: unknown): Record<string, unknown> {
   return r && typeof r === 'object' && !Array.isArray(r) ? (r as Record<string, unknown>) : { value: r };
 }
 
+// Which of a call's strings its approval card must show whole
+// (`cardInput`'s `decisive`): every argument of an MCP tool or a file edit,
+// and the command of anything else. A file edit's content is what Allow
+// writes: cut at 16 KB, a Write showed harmless comments and `[truncated]`
+// while Allow wrote the rest (Codex review, 10 Nov 2026), so one too long to
+// show is refused like a command, and the agent writes it in smaller steps.
+export function cardDecisive(name: string, code: CodeWrite = false): readonly string[] | 'all' {
+  return name.startsWith('mcp__') || code !== false || EDIT_TOOLS.has(name) || name === 'NotebookEdit' ? 'all' : ['command'];
+}
+
 // What an approval card shows of a call's input. The strings that decide
-// what Mike is allowing (`decisive`: a command, or every string of a call
-// that acts for the agent elsewhere) go whole, never cut: Allow on a card
-// that shows the start of a command runs all of it (Daybreak, 7 Nov 2026).
-// One longer than an event takes (LIMITS.toolInputString) is `tooLong`, and
-// the caller refuses the call with no card. The rest are cut as
-// truncateInput cuts them (a Write's content shows as a diff anyway).
+// what Mike is allowing (`decisive`, from cardDecisive) go whole, never cut:
+// Allow on a card that shows the start of a command runs all of it
+// (Daybreak, 7 Nov 2026). One longer than an event takes
+// (LIMITS.toolInputString) is `tooLong`, and the caller refuses the call
+// with no card. The rest are cut as truncateInput cuts them.
 export function cardInput(input: Record<string, unknown>, decisive: readonly string[] | 'all'): { input: Record<string, unknown>; tooLong?: string } {
   let tooLong: string | undefined;
   const whole = (v: unknown, where: string, depth: number): unknown => {
@@ -252,32 +261,83 @@ export function cardInput(input: Record<string, unknown>, decisive: readonly str
 // refused (Runner.respondApproval). An edit shows its path, as before.
 export const REMOTE_COMMAND_CHARS = 160;
 // What such a card says there, and what an allow from there is told.
-export const REMOTE_ALLOW_REFUSED = "It's too long to show in full here, so it can only be allowed in the Mac app connected straight to its runner.";
+export const REMOTE_ALLOW_REFUSED = "It can't be shown in full here, so it can only be allowed in the Mac app connected straight to its runner.";
+// A card's Run (end_turn asks[].run) whose command or folder the scrub
+// changes: it goes up without its button, saying this, and a press from off
+// the Mac is refused with it (Daybreak, 10 Nov: comment lines dressed as a
+// PEM key hid a statement from the phone, and Run ran it).
+export const REMOTE_RUN_REFUSED = "Its command can't be shown in full here, so it can only be run in the Mac app connected straight to its runner.";
 // `cwd` is the thread's folder: a command that runs anywhere else, or asks
 // for the network, has more to it than its line (Codex review, 7 Nov 2026).
 // An edit of a file that runs as code shows all it writes on the Mac, and
 // only its path here (its title says it is one), so it counts too.
 export function remoteCardShowsAll(name: string, input: Record<string, unknown>, cwd?: string, title = ''): boolean {
   if (name === 'permissions' || title.includes(RUNS_AS_CODE) || title.includes(MAYBE_RUNS_AS_CODE)) return false;
-  const fits = (v: string) => v.trim().length <= REMOTE_COMMAND_CHARS && !/[\r\n]/.test(v.trim());
+  // A file edit shows only its path there, and Allow writes all of it: the
+  // Mac's card shows every line, so only the Mac allows one (Mike chose
+  // this on 10 Nov 2026, after Codex's review of the approval-card fixes;
+  // it had been "an edit shows its path, as before").
+  if (REMOTE_EDIT_TOOLS.has(name)) return false;
+  // A command's spaces and line breaks at its ends change nothing it does.
+  const fits = (v: string) => drawnAsWritten(v.replace(/^[ \n]+|[ \n]+$/g, ''));
   // An MCP tool's arguments say what it does (a threadbear tool's own ask,
   // in Ask mode, or any other server's), a `command` among them or not:
   // whole only when its one string that isn't an id is the line shown, and short.
   if (name.startsWith('mcp__')) {
     // Only ours are known to be ids; another server's `id` can be what it acts on.
     const ids = name.startsWith('mcp__threadbear__') ? ID_KEYS : new Set<string>();
-    const values = Object.entries(input).filter(([k, v]) => v !== undefined && v !== null && !ids.has(k));
+    // An empty string is something another server's tool is handed too: a
+    // write_file with `content: ""` empties the file, and its path alone
+    // isn't all of it (Codex review, 10 Nov 2026). Only ours leave one out.
+    const ours = name.startsWith('mcp__threadbear__');
+    const values = Object.entries(input).filter(([k, v]) => v !== undefined && v !== null && !(ours && v === '') && !ids.has(k));
     if (values.some(([, v]) => typeof v === 'object')) return false;
-    const words = values.map(([, v]) => String(v)).filter((v) => v.trim());
-    return words.length === 0 || (words.length === 1 && summaryField(input) === words[0] && fits(words[0]!));
+    // A tool's value is taken as it is, not as a command: its spaces at the
+    // ends can be a file's name, and one of only spaces or separators is
+    // still something it's handed (Codex review, 9 Nov 2026).
+    const words = values.map(([, v]) => String(v));
+    return words.length === 0 || (words.length === 1 && summaryField(input) === words[0] && words[0] === words[0].trim() && drawnAsWritten(words[0]));
   }
   if (typeof input.command === 'string') {
     if (input.network !== undefined || (typeof input.cwd === 'string' && input.cwd !== cwd)) return false;
     return fits(input.command);
   }
-  return true;
+  // Codex's patch names its files in `paths` (adapters/codex/approvals.ts):
+  // the line shows the one file (summaryField), so more than one, or a
+  // folder it asks to write anywhere under (grantRoot), is more than the
+  // line (Codex review, 9 Nov 2026: the line showed only its reason).
+  if (input.grantRoot !== undefined) return false;
+  if (input.paths !== undefined && !(Array.isArray(input.paths) && input.paths.length === 1 && typeof input.paths[0] === 'string')) return false;
+  // An edit's path, a page's address: the line is all it shows, so it must
+  // fit and draw as it is too, every character of it (a name's spaces count).
+  const line = summaryField(input);
+  return line === undefined || (line === line.trim() && drawnAsWritten(line));
 }
 const ID_KEYS = new Set(['threadId', 'id', 'scheduleId', 'project']);
+// Every name a file edit's card comes under: Claude's tools, and Codex's,
+// OpenCode's and Cursor's patches (adapters/codex/approvals.ts, acp/adapter.ts).
+const REMOTE_EDIT_TOOLS = new Set([...EDIT_TOOLS, 'NotebookEdit', 'apply_patch']);
+
+// What a line the phone, the website or another Mac's view shows may hold
+// for Allow to be offered there: printable ASCII, a space to a tilde, and
+// no more than REMOTE_COMMAND_CHARS of it. Anything else can draw
+// differently from how a shell reads it: U+2028 and U+2029 draw as new
+// lines and bash takes them as part of a word (`ls`, six U+2028 and a
+// second command looked like `ls` alone on the phone), bidi controls and
+// even plain Hebrew or Arabic letters reorder the `;` and `|` around them,
+// a no-break space looks like a space and isn't one to a shell, some
+// letters draw as nothing, marks draw over the character before, and a
+// wide character makes the line longer than its count (the backend cuts
+// the line at 300 bytes). Such a call can only be allowed on the Mac
+// connected straight to its runner, which names each one (the app's
+// ApprovalText.shown). Security review and Codex's review of the fix,
+// 9 Nov 2026.
+export const REMOTE_LINE = /^[\x20-\x7e]*$/;
+
+// Whether `v` draws on a remote card exactly as it reads (REMOTE_LINE).
+export function drawnAsWritten(v: string): boolean {
+  return v.length <= REMOTE_COMMAND_CHARS && REMOTE_LINE.test(v);
+}
 
 // The string a remote card's one line is made from (sync.ts inputSummary):
 // the command, the path, or the first string in the input.
@@ -286,6 +346,8 @@ export function summaryField(input: Record<string, unknown>): string | undefined
     const v = input[k];
     if (typeof v === 'string' && v.trim()) return v;
   }
+  // A Codex patch's one file, before its reason.
+  if (Array.isArray(input.paths) && input.paths.length === 1 && typeof input.paths[0] === 'string' && input.paths[0].trim()) return input.paths[0];
   for (const v of Object.values(input)) if (typeof v === 'string' && v.trim()) return v;
   return undefined;
 }

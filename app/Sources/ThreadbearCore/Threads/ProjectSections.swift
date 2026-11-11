@@ -286,6 +286,15 @@ public enum ProjectPane {
 
 /// The words the Librarian view uses.
 public enum LibrarianText {
+    /// A line for each project the look filed the thread in, in the row's
+    /// order: "Walkies: Plans the dog walk route". Nothing on other looks.
+    public static func filingReasons(_ entry: LibrarianEntry, title: (String) -> String?) -> [String] {
+        entry.projectIds.compactMap { id in
+            guard let why = entry.reasons[id], !why.isEmpty else { return nil }
+            return title(id).map { "\($0): \(why)" } ?? why
+        }
+    }
+
     /// "Idle", "Looking at Rename the Settings tabs", "Paused", "Off: Needs
     /// a Claude pool to run on".
     public static func state(_ status: LibrarianStatus) -> String {

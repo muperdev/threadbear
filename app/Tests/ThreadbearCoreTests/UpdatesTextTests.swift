@@ -19,6 +19,22 @@ final class UpdatesTextTests: XCTestCase {
         XCTAssertTrue(UpdatesText.shown(app: Side(), runner: RunnerUpdates(state: "failed", reason: "tests failed")))
     }
 
+    func testAMachineNotFollowingGitHubIsShownAndNeedsMike() {
+        let mine = RunnerUpdates(followProblem: "main in ~/dev/me/threadbear has 1 commit GitHub's main doesn't.")
+        let other = RunnerUpdates(behindRunners: [.init(name: "bruce", problem: "This runner is 30 hours behind GitHub's main.")])
+        for u in [mine, other] {
+            XCTAssertTrue(UpdatesText.shown(app: Side(), runner: u))
+            XCTAssertTrue(UpdatesText.needsYou(app: Side(), runner: u))
+        }
+        XCTAssertEqual(UpdatesText.runnerLines(other), ["bruce isn't following GitHub's main properly: This runner is 30 hours behind GitHub's main."])
+        XCTAssertTrue(UpdatesText.runnerLines(mine)[0].hasPrefix("This runner isn't following GitHub's main properly: "))
+        // Older runners send neither.
+        let old = try! JSONDecoder().decode(RunnerUpdates.self, from: Data(#"{"state":"idle"}"#.utf8))
+        XCTAssertNil(old.followProblem)
+        XCTAssertEqual(old.behindRunners, [])
+        XCTAssertFalse(UpdatesText.needsYou(app: Side(), runner: old))
+    }
+
     func testOnlyALaunchMjsNeedsMike() {
         XCTAssertFalse(UpdatesText.needsYou(app: Side(staged: "def5678"), runner: RunnerUpdates(state: "building")))
         XCTAssertFalse(UpdatesText.needsYou(app: Side(), runner: RunnerUpdates(oldRunners: [.init(version: "old", threads: ["t1"])])))

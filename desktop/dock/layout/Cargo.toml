@@ -1,0 +1,10 @@
+[package]
+name = "threadbear-dock-layout"
+version = "0.1.0"
+description = "BearDock's layout tree and drag decisions, with no UI: splits, tab groups, drop rules, hit testing"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

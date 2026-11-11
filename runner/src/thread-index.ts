@@ -36,16 +36,19 @@ export type IndexRow = {
   starredAt?: string;
   startedBy?: { kind: string; label: string; icon?: string; threadTitle?: string; why?: string };
   asked?: string;
+  recap?: string;
 };
 
 // What the Mac app gets (docs/protocol.md, "Other runners' threads").
-export type RemoteRunner = { id: string; name: string; icon?: string; online: boolean; lastSeenAt: string; rpcUrl?: string; tokenFile?: string };
-export type RemoteThread = IndexRow & { runnerId: string };
+export type RemoteRunner = { id: string; name: string; icon?: string; online: boolean; lastSeenAt: string; rpcUrl?: string; tokenFile?: string; followProblem?: string };
+// `moving`: set by the main Mac's runner for a move it knows of (main.ts
+// remoteMoving), never by the backend's rows.
+export type RemoteThread = IndexRow & { runnerId: string; moving?: import('./moves.ts').ThreadMoving };
 // `order`: Mike's runner order (backend API 58), every runner's id, this
 // one's too, for the app's Settings > Runners. Left out before it's heard.
 export type RemoteThreads = { runners: RemoteRunner[]; threads: RemoteThread[]; order?: string[] };
 
-type RawRunner = { runnerId: string; name: string; icon?: string; lastSeenAt: number; rpcUrl?: string };
+type RawRunner = { runnerId: string; name: string; icon?: string; lastSeenAt: number; rpcUrl?: string; followProblem?: string };
 type SinceRow = RemoteThread & { updatedMs?: number; deleted?: boolean };
 
 const FLUSH_MS = 1000;
@@ -61,7 +64,7 @@ const ONLINE_MS = 3 * 60_000;
 const WATCH_CHECK_MS = 15_000;
 const UNWATCH_AFTER_MS = 2 * 60_000;
 
-export function toIndexRow(t: ThreadSummary, withStartedBy = true, withStars = true, withAsked = true): IndexRow {
+export function toIndexRow(t: ThreadSummary, withStartedBy = true, withStars = true, withAsked = true, withRecap = true): IndexRow {
   const row: IndexRow = {
     threadId: t.id,
     title: t.title,
@@ -82,6 +85,8 @@ export function toIndexRow(t: ThreadSummary, withStartedBy = true, withStars = t
   // Changes only when Mike sends, which moves the status anyway, so it
   // costs no writes of its own.
   if (withAsked && t.asked) row.asked = t.asked;
+  // Changes only after a turn, which moves the status anyway.
+  if (withRecap && t.recap) row.recap = t.recap;
   if (withStartedBy && t.startedBy) {
     // Not the thread's id: only the row's tooltip uses this, by that title.
     const { kind, label, icon, threadTitle, why } = t.startedBy;
@@ -119,6 +124,7 @@ export class ThreadIndex {
     takesStars?: () => boolean;
     // Whether it knows `asked` (API 32).
     takesAsked?: () => boolean;
+    takesRecap?: () => boolean;
     // Whether the backend can answer with only the rows changed since the
     // last answer (API 29). Without it, every re-run reads every row.
     takesSince?: () => boolean;
@@ -445,7 +451,7 @@ export class ThreadIndex {
   }
 
   private mark(t: ThreadSummary): void {
-    const row = toIndexRow(t, this.deps.takesStartedBy?.() ?? true, this.deps.takesStars?.() ?? true, this.deps.takesAsked?.() ?? true);
+    const row = toIndexRow(t, this.deps.takesStartedBy?.() ?? true, this.deps.takesStars?.() ?? true, this.deps.takesAsked?.() ?? true, this.deps.takesRecap?.() ?? true);
     if (this.sent.get(t.id) === writeKey(row)) {
       this.dirty.delete(t.id);
       return;
@@ -520,6 +526,7 @@ export class ThreadIndex {
           online: now - r.lastSeenAt < ONLINE_MS,
           lastSeenAt: new Date(r.lastSeenAt).toISOString(),
           ...(r.rpcUrl ? { rpcUrl: r.rpcUrl } : {}),
+          ...(r.followProblem ? { followProblem: r.followProblem } : {}),
         })),
       threads: value?.threads ?? [],
       ...(this.order ? { order: this.order } : {}),

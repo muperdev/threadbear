@@ -41,9 +41,15 @@ struct PendingCard: View {
                 Label(title, systemImage: "hand.raised")
                     .font(.headline)
                 if let inputSummary, !inputSummary.isEmpty {
+                    // Never cut short: Allow allows all of it. The runner only
+                    // offers Allow here for a line of 160 characters or fewer
+                    // that draws as written (runner/src/tools.ts,
+                    // remoteCardShowsAll), but wide or blank characters, or a
+                    // large text size, could still push its end past a line
+                    // limit (security review, 9 Nov 2026).
                     Text(inputSummary)
                         .font(.system(.footnote, design: .monospaced))
-                        .lineLimit(6)
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
                         .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8))

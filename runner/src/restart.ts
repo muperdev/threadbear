@@ -91,6 +91,9 @@ export type RunnerStatus = {
   update?: UpdateStatus;
   // Mike's releases, for a fork (upstream.ts; main.ts adds it).
   upstream?: UpstreamStatus;
+  // Other runners that aren't following GitHub's main properly, from their
+  // heartbeats (the main Mac's runner only; main.ts adds it).
+  behindRunners?: { name: string; problem: string }[];
   // The Convex mirror (src/sync.ts; main.ts adds it).
   sync?: SyncStatus;
   secretCheck?: SecretCheckStatus;
@@ -129,15 +132,26 @@ export const BIN_DIR = path.resolve(import.meta.dirname, '..', 'bin');
 // tb reads, and agents point it at a dev runner; THREADBEAR_RUNNER_HOME
 // always names the runner the thread is on, so the scripts' guards against
 // restarting it from inside one of its threads go by that.
-export function threadEnv(threadId: string, home: string, basePath = process.env.PATH): Record<string, string> {
+// `key` is the thread's own RPC credential (docs/protocol.md, "A thread's own
+// key"), only for a thread's CLI: a patch's action and a worktree's setup run
+// on the runner's say-so, so tb there still reads the token. The empty value
+// matters: a dev runner started from a thread would otherwise pass its parent
+// thread's key on to everything it starts.
+export function threadEnv(threadId: string, home: string, basePath = process.env.PATH, key?: string): Record<string, string> {
   return {
     THREADBEAR_THREAD_ID: threadId,
+    THREADBEAR_THREAD_KEY: key ?? '',
     THREADBEAR_HOME: home,
     THREADBEAR_RUNNER_HOME: home,
     THREADBEAR_RUNNER_VERSION: RUNNER_VERSION,
     // A picture copied in here can be on the thread's shared page; one
     // anywhere else can't (docs/protocol.md, "Sharing").
     THREADBEAR_MEDIA_DIR: paths.media(home, threadId),
+    // The Node this runner runs on, which the repo's scripts take before
+    // looking on PATH (scripts/find-node.sh): a thread's checks, landing and
+    // deploys then use the runner's own Node on any Mac, not one at a path
+    // only Mike's has (a fork's commit, 8 Nov).
+    THREADBEAR_NODE: process.execPath,
     // The old names too, for skills and scripts written before the rename.
     THREADBARE_THREAD_ID: threadId,
     THREADBARE_HOME: home,

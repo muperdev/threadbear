@@ -38,7 +38,7 @@ const DEFAULT_HOME = path.join(os.homedir(), 'Library', 'Application Support', '
 // dependency's version, so they count for both.
 const FUNCTION_PATHS = ['convex', 'convex.json', 'package.json', 'package-lock.json'];
 const SITE_PATHS = ['web', 'package.json', 'package-lock.json'];
-const EXPORT_PATHS = ['convex', 'convex.json', 'web', 'package.json', 'package-lock.json'];
+const EXPORT_PATHS = ['convex', 'convex.json', 'web', 'package.json', 'package-lock.json', '.npmrc'];
 
 class Fail extends Error {}
 const say = (msg) => console.log(msg);
@@ -277,7 +277,12 @@ function main(argv) {
   if (unlocked) throw new Fail('No lockf or flock here to keep two backend deploys apart. Install flock (util-linux).');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-backend-'));
   process.on('exit', () => fs.rmSync(tmp, { recursive: true, force: true }));
-  const archive = spawnSync('git', ['-C', repo, 'archive', '--format=tar', commit, '--', ...EXPORT_PATHS], { maxBuffer: 512 * 1024 * 1024 });
+  // Only the paths that commit has: git archive fails on a missing one, and an
+  // older commit (or a fork) may have no .npmrc (cross-lab review, 10 Nov 2026).
+  const present = spawnSync('git', ['-C', repo, 'ls-tree', '--name-only', commit, '--', ...EXPORT_PATHS], { encoding: 'utf8' });
+  if (present.status !== 0) throw new Fail(`git ls-tree failed: ${String(present.stderr).trim()}`);
+  const paths = present.stdout.split('\n').filter(Boolean);
+  const archive = spawnSync('git', ['-C', repo, 'archive', '--format=tar', commit, '--', ...paths], { maxBuffer: 512 * 1024 * 1024 });
   if (archive.status !== 0) throw new Fail(`git archive failed: ${String(archive.stderr).trim()}`);
   const untar = spawnSync('tar', ['-x', '-C', tmp], { input: archive.stdout });
   if (untar.status !== 0) throw new Fail(`tar failed: ${String(untar.stderr).trim()}`);

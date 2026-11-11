@@ -26,9 +26,21 @@ final class RunnerStatusSiteTests: XCTestCase {
         XCTAssertNil(s.websiteURL)
     }
 
+    func testABackendOnThisMacOnlyHasAnHTTPSiteOnLoopback() throws {
+        let s = try status(#"{"url":"http://127.0.0.1:13210","site":"http://127.0.0.1:13211","pushOff":true}"#)
+        XCTAssertEqual(s.websiteURL?.absoluteString, "http://127.0.0.1:13211")
+        XCTAssertTrue(s.localOnly)
+        XCTAssertFalse(try status(#"{"url":"https://mac.tail1.ts.net:3210"}"#).localOnly)
+        XCTAssertFalse(try status(#"{"url":"https://quick-fox-77.convex.cloud"}"#).localOnly)
+        // A name that only starts like loopback is someone else's host.
+        XCTAssertFalse(try status(#"{"url":"http://127.0.0.1.evil.com:13210"}"#).localOnly)
+        XCTAssertNil(try status(#"{"url":"http://127.0.0.1:13210","site":"http://127.0.0.1.evil.com:13211"}"#).websiteURL)
+    }
+
     func testAnOlderRunnerWithNoSyncStillDecodes() throws {
         let s = try JSONDecoder().decode(RunnerStatus.self, from: Data(#"{"version":"1","running":[]}"#.utf8))
         XCTAssertNil(s.websiteURL)
         XCTAssertFalse(s.pushOff)
+        XCTAssertFalse(s.localOnly)
     }
 }

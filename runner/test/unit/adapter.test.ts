@@ -7,6 +7,7 @@ import type { SessionSink, AdapterOutput, ToolApprovalAnswer, ToolApprovalReques
 import { ProcessRegistry } from '../../src/proc.ts';
 import { nullLogger } from '../../src/log.ts';
 import { tmpDir } from '../helpers/fakes.ts';
+import { cardDecisive } from '../../src/tools.ts';
 import { ALWAYS_ASK_TOOLS, NEVER_ASK_TOOLS } from '../../src/threadbear-mcp.ts';
 import { END_TURN_FULL_NAME, END_TURN_NUDGE, ONE_REPLY_END_TURN_NUDGE, ONE_REPLY_WRITE_NUDGE, oneReplyAccepted, oneReplyAlreadyWritten } from '../../src/needs.ts';
 
@@ -123,7 +124,8 @@ test("a folder's own settings load normally; with untrusted Claude settings, onl
 test("F2/F8: a session started in Full with a folder's untrusted permission rules can make every tool ask once the thread leaves Full", async () => {
   const plain = start();
   assert.equal(plain.state.options.hooks.PreToolUse.length, 1, "only the edit check's hook, and no round trip per tool, where none is needed");
-  assert.doesNotMatch('Read', new RegExp(`^(${plain.state.options.hooks.PreToolUse[0].matcher})$`), 'not for tools that never queue');
+  // Reads are checked for the secrets folder on every session: one on Full can be lowered mid-session.
+  assert.match('Read', new RegExp(`^(${plain.state.options.hooks.PreToolUse[0].matcher})$`));
   plain.state.close!();
   const held = start([], { permissionMode: 'full', heldGrants: true });
   assert.ok(held.state.options.hooks.PreToolUse[0].matcher, 'the edit check stays');
@@ -494,10 +496,31 @@ test('a command goes on its card whole, and one too long to show is refused with
   assert.equal(approvals.at(-1)!.input.text, text);
   const r2 = await state.options.canUseTool('mcp__other__run', { code: 'y'.repeat(17 * 1024) }, opts('t4'));
   assert.equal(r2.behavior, 'deny');
-  // A Write's content is still cut as before (its card is a diff).
-  await state.options.canUseTool('Write', { file_path: '/tmp/x.txt', content: 'z'.repeat(20_000) }, opts('t5'));
-  assert.match(String(approvals.at(-1)!.input.content), /\[truncated\]$/);
+  // An edit's content is what Allow writes, so it goes whole too (Codex
+  // review, 10 Nov 2026: a Write cut at 16 KB hid what came after its
+  // harmless start), and one too long to show is refused with no card.
+  const script = '# harmless\n'.repeat(1300) + 'rm -rf "$HOME/Documents"\n';
+  assert.ok(script.length > 8000 && script.length < 16 * 1024);
+  await state.options.canUseTool('Write', { file_path: '/tmp/build.sh.txt', content: script }, opts('t5'));
+  assert.equal(approvals.at(-1)!.input.content, script);
+  for (const [name, input] of [
+    ['Write', { file_path: '/tmp/x.txt', content: 'z'.repeat(20_000) }],
+    ['Edit', { file_path: '/tmp/x.txt', old_string: 'a', new_string: 'z'.repeat(20_000) }],
+    ['MultiEdit', { file_path: '/tmp/x.txt', edits: [{ old_string: 'a', new_string: 'z'.repeat(20_000) }] }],
+    ['NotebookEdit', { notebook_path: '/tmp/n.ipynb', new_source: 'z'.repeat(20_000) }],
+  ] as const) {
+    const n = approvals.length;
+    const refused = await state.options.canUseTool(name, input, opts(`t6-${name}`));
+    assert.equal(refused.behavior, 'deny', name);
+    assert.equal(approvals.length, n, `${name}: no card to allow from its start`);
+  }
   state.close!();
+});
+
+test('cardDecisive: file edits and MCP tools show every argument, anything else its command', () => {
+  for (const name of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'mcp__x__y']) assert.equal(cardDecisive(name), 'all', name);
+  assert.deepEqual(cardDecisive('Bash'), ['command']);
+  assert.equal(cardDecisive('Bash', 'unsure'), 'all');
 });
 
 // Eight edits in one reply asked one card at a time, each taking the last
@@ -667,5 +690,22 @@ test('two cards listing the same call: each answer holds for the call as its own
   await again;
   releases[1]({ decision: 'deny' });
   await b;
+  state.close!();
+});
+
+// David, 8 Nov 2026: an Auto thread's deploy waited on a card that never said
+// why the safety check had handed it to him. The CLI's reason goes on the card.
+test("a card says why it's asking, but not that the mode asks", async () => {
+  const { state, approvals } = start();
+  const opts = (id: string, extra: Record<string, unknown>) => ({ signal: new AbortController().signal, toolUseID: id, agentID: 'a', ...extra });
+  await state.options.canUseTool('Bash', { command: './deploy.sh' }, opts('t1', { decisionReason: 'Deploys to a remote production host.', decisionReasonType: 'classifier' }));
+  assert.equal(approvals.at(-1)!.reason, "Auto mode's safety check couldn't clear this: Deploys to a remote production host.");
+  await state.options.canUseTool('Bash', { command: 'ls' }, opts('t2', { decisionReason: "The folder's permission rules aren't trusted for this thread.", decisionReasonType: 'hook' }));
+  assert.equal(approvals.at(-1)!.reason, "The folder's permission rules aren't trusted for this thread.");
+  // Every card in Ask before edits would say this.
+  await state.options.canUseTool('Bash', { command: 'ls' }, opts('t3', { decisionReason: 'Current permission mode requires approval', decisionReasonType: 'mode' }));
+  assert.equal(approvals.at(-1)!.reason, undefined);
+  await state.options.canUseTool('Bash', { command: 'ls' }, opts('t4', { decisionReason: '  ' }));
+  assert.equal(approvals.at(-1)!.reason, undefined);
   state.close!();
 });

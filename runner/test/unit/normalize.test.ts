@@ -639,3 +639,15 @@ test("the context window is the session model's, not a sub-agent's", () => {
   assert.equal(window({ 'claude-haiku-5-5': { contextWindow: 1_000_000 }, 'claude-sonnet-5-5': { contextWindow: 1_000_000 } }), undefined);
   assert.deepEqual(window({ 'claude-opus-5-5': { contextWindow: 1_000_000 } }, 'opus'), [5030, 1_000_000]);
 });
+
+// David, 8 Nov 2026: what auto mode stops without asking says why in the thread.
+test("a call auto mode stops says why, as a note", () => {
+  const n = new ClaudeNormalizer(ctx());
+  const deny = { type: 'system', subtype: 'permission_denied', tool_name: 'Bash', tool_use_id: 'toolu_1', message: 'denied', uuid: 'u', session_id: 's' };
+  const outs = n.handle({ ...deny, decision_reason_type: 'classifier', decision_reason: 'Rsyncs with --delete to a production host.' });
+  assertProtocol(outs);
+  assert.deepEqual(events(outs), [{ type: 'system.note', text: "Auto mode's safety check stopped Bash: Rsyncs with --delete to a production host." }]);
+  assert.deepEqual(events(n.handle({ ...deny, decision_reason_type: 'rule', decision_reason: 'A deny rule matched.' })), [{ type: 'system.note', text: 'Bash was refused: A deny rule matched.' }]);
+  // With no reason the tool's own result already says it was refused.
+  assert.deepEqual(events(n.handle(deny)), []);
+});

@@ -52,7 +52,6 @@ struct KeyboardSettings: View {
             .padding(.top, 8)
             .padding(.bottom, 14)
         }
-        .frame(height: 620)
         .onDisappear { ShortcutRecorder.shared.cancel() }
     }
 

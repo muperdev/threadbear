@@ -176,6 +176,15 @@ public enum Turns {
         return []
     }
 
+    /// The last message the thread view shows: a row for one of
+    /// Threadbear's own tools (end_turn above all) or ToolSearch isn't one.
+    /// An agent that writes its reply and then calls end_turn ends on that
+    /// tool's row, and the done card went by the very last row, so it never
+    /// showed there while the Mac and the website did (the parity run, 9 Nov).
+    public static func lastShown(_ messages: [PhoneMessage]) -> PhoneMessage? {
+        messages.last { $0.role != .tool || isStep($0) }
+    }
+
     /// A step of work: a tool call outside Threadbear's own tools and
     /// ToolSearch (which say nothing Mike has to read), or a message sent
     /// into the turn.
@@ -195,17 +204,24 @@ public struct PhoneAsk: Codable, Sendable, Hashable {
     /// The words the agent wants back once it's done ("done").
     public var reply: String?
     public var options: [String]?
+    /// What each option does, one per option (backend API 61), as the Mac
+    /// draws under each answer. The parity run found the phone drawing bare
+    /// chips without them (9 Nov).
+    public var optionNotes: [String]?
     /// The agent's own pick, an index into options (a Convex number).
     public var suggested: Double?
     /// Web pages to go to; files on the Mac never come to the phone.
     public var links: [PhoneAskLink]?
     public var ticked: Bool?
+    /// A command with a Run button (backend API 71), shown whole.
+    public var run: PhoneAskRun?
 
-    public init(action: String, why: String? = nil, reply: String? = nil, options: [String]? = nil, suggested: Double? = nil, links: [PhoneAskLink]? = nil, ticked: Bool? = nil) {
+    public init(action: String, why: String? = nil, reply: String? = nil, options: [String]? = nil, optionNotes: [String]? = nil, suggested: Double? = nil, links: [PhoneAskLink]? = nil, ticked: Bool? = nil) {
         self.action = action
         self.why = why
         self.reply = reply
         self.options = options
+        self.optionNotes = optionNotes
         self.suggested = suggested
         self.links = links
         self.ticked = ticked
@@ -233,9 +249,36 @@ public struct PhoneAsk: Codable, Sendable, Hashable {
         return []
     }
 
+    /// What choosing `choice` does, when the agent said: only for its
+    /// options, and only when there's a note for each.
+    public func note(_ choice: Int) -> String? {
+        guard let options, !options.isEmpty, let notes = optionNotes, notes.count == options.count, notes.indices.contains(choice) else { return nil }
+        let note = notes[choice].trimmingCharacters(in: .whitespacesAndNewlines)
+        return note.isEmpty ? nil : note
+    }
+
+    /// Whether any option says what it does: the card then draws rows, as the Mac does.
+    public var hasNotes: Bool { (0..<choices.count).contains { note($0) != nil } }
+
     /// The agent's pick, as a Convex number: one that isn't a whole index
     /// is none (Int(_:) of 1e100 traps).
     public var suggestedIndex: Int? { suggested.flatMap { $0.wholeCount() } }
+}
+
+public struct PhoneAskRun: Codable, Sendable, Hashable {
+    public var command: String
+    public var buttonId: String
+    public var cwd: String?
+    public var running: Bool?
+    public var failed: String?
+
+    public init(command: String, buttonId: String, cwd: String? = nil, running: Bool? = nil, failed: String? = nil) {
+        self.command = command
+        self.buttonId = buttonId
+        self.cwd = cwd
+        self.running = running
+        self.failed = failed
+    }
 }
 
 public struct PhoneAskLink: Codable, Sendable, Hashable {

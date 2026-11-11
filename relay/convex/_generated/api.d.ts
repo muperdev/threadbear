@@ -9,6 +9,8 @@
  */
 
 import type * as apns from "../apns.js";
+import type * as fcm from "../fcm.js";
+import type * as fcmMessage from "../fcmMessage.js";
 import type * as http from "../http.js";
 import type * as reasons from "../reasons.js";
 import type * as relay from "../relay.js";
@@ -23,6 +25,8 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   apns: typeof apns;
+  fcm: typeof fcm;
+  fcmMessage: typeof fcmMessage;
   http: typeof http;
   reasons: typeof reasons;
   relay: typeof relay;

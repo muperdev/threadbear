@@ -125,3 +125,17 @@ export async function saveRunnerOrder(ctx: MutationCtx, runnerIds: string[]): Pr
   if (row) await ctx.db.patch(row._id, { runnerIds: ids });
   else await ctx.db.insert('runnerOrder', { runnerIds: ids });
 }
+
+// A repo's address with nothing in it that could be a password or token
+// (runner/src/move-git.ts withoutCredentials, the same rule): what a move
+// stores about a thread's repo is for knowing which repo it is, and the
+// runner it goes to can read it. An older runner may still send one whole.
+export function withoutCredentials(url: string): string {
+  const m = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*@)?([^?#]*)(?:[?#].*)?$/i.exec(url.trim());
+  if (!m) return url.trim();
+  const [, scheme, userinfo, rest] = m;
+  if (!userinfo) return `${scheme}${rest}`;
+  if (/^(https?|ftps?):\/\//i.test(scheme!)) return `${scheme}${rest}`;
+  const user = userinfo.slice(0, -1).split(':')[0];
+  return `${scheme}${user ? `${user}@` : ''}${rest}`;
+}

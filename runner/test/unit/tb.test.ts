@@ -248,3 +248,23 @@ test('tb pools lists the pools with their logins, and tb new --pool starts a thr
     await server.close();
   }
 });
+
+test('tb new starts on the runner\'s default mode; --full, --ask and --auto pick one', async () => {
+  const h = makeHarness(undefined, { defaults: { cwd: '', permissionMode: 'auto' } });
+  h.cfg.defaults.cwd = path.join(h.home, 'work');
+  const server = new RpcServer({ host: '127.0.0.1', port: 0, token: readToken(h.home), runner: h.runner, log: nullLogger });
+  const { port } = await server.listen();
+  const url = `ws://127.0.0.1:${port}/rpc`;
+  try {
+    for (const [flags, mode] of [[[], 'auto'], [['--full'], 'full'], [['--ask'], 'ask']] as const) {
+      const n = tb(h, url, ['new', 'draw a bear', '--account', 'claude-3', ...flags]);
+      assert.equal(await n.exited, 0, n.out());
+      assert.equal(h.runner.get(n.out().trim()).permissionMode, mode, flags.join(' '));
+    }
+    const two = tb(h, url, ['new', 'x', '--full', '--ask']);
+    assert.equal(await two.exited, 1);
+    assert.match(two.out(), /one of --ask, --auto, --plan and --full/);
+  } finally {
+    await server.close();
+  }
+});

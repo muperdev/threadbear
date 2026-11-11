@@ -24,6 +24,11 @@ export const Up = () => (
     <path d="M8 13.5v-11M3.5 7 8 2.5 12.5 7" />
   </svg>
 );
+export const Stop = () => (
+  <svg {...base} fill="currentColor" stroke="none">
+    <rect x="4" y="4" width="8" height="8" rx="1.5" />
+  </svg>
+);
 export const Chevron = ({ className }: { className?: string }) => (
   <svg {...base} className={className}>
     <path d="m6 3.5 4.5 4.5L6 12.5" />

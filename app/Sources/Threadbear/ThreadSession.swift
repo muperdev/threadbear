@@ -303,8 +303,34 @@ final class ThreadSession {
     /// restart turned them away; a dropped connection keeps them showing.
     @ObservationIgnored private var resending: Set<String> = []
 
+    /// Held for the new runner: it stays through a dropped connection, and
+    /// its bubble says it goes when the runner's back.
     func holdForResend(_ id: String) {
-        if hasPending(id) { resending.insert(id) }
+        guard hasPending(id) else { return }
+        resending.insert(id)
+        updatePending { list in
+            if let index = list.firstIndex(where: { $0.id == id }) { list[index].waitingForRunner = true }
+        }
+    }
+
+    /// Sent while a restart is under way: a drop as the old runner closes
+    /// doesn't take its bubble away before the send hears of it and holds
+    /// it for the new runner (AppModel.post). No note under it yet.
+    func keepThroughDrop(_ id: String) {
+        guard hasPending(id) else { return }
+        resending.insert(id)
+    }
+
+    /// Messages waiting to go again on a new runner: if the app quits
+    /// first, their words go in the box for next time (DraftStore).
+    var heldForResend: [PendingMessage] { pending.filter { resending.contains($0.id) } }
+
+    /// The new runner is up and it's going now: the spinner again, and
+    /// the note goes.
+    func sendingAgain(_ id: String) {
+        updatePending { list in
+            if let index = list.firstIndex(where: { $0.id == id }), list[index].waitingForRunner { list[index].waitingForRunner = false }
+        }
     }
 
     /// Reads the thread again from scratch, when the way it's reached has

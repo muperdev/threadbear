@@ -105,7 +105,7 @@ export function reviewInput(raw: unknown, cwd: string): { title: string; note?: 
   });
   if (images > maxReviewImages) bad(`A review can have at most ${maxReviewImages} images in all; this has ${images}.`);
   if (mediaBytes > maxReviewMediaBytes) bad(`A review's videos and pages can be at most 500 MB in all; these are ${Math.ceil(mediaBytes / 1024 / 1024)} MB.`);
-  // The agent's own pick, which the window marks "my pick" as an asks card
+  // The agent's own pick, which the window marks with a star and "Recommended" as an asks card
   // does (Mike, 7 Nov: agents wrote "I'd pick C" in the middle of the note,
   // where it was hard to find).
   const recommended = text(p.recommended, 'recommended', 200) || undefined;
@@ -162,9 +162,18 @@ export function sameDraft(a: ReviewDraft | undefined, b: ReviewDraft): boolean {
   return ids.length === Object.keys(b.notes).length && ids.every(id => a.notes[id] === b.notes[id]);
 }
 
+// The end of the "Passed over:" line, which the Mac, phone and GPUI bubbles
+// look for to leave the line out (ReviewAnswer), so change them with it.
+export const PASSED_OVER_TAIL = "Don't offer one of these later (a next step, a follow-up) as if it were new: say it's one they passed over.";
+
 // What the agent reads. "Picked A." with one, "Picked A + D." with more, as
 // the window's Send button says. The Mac and the phone read it back
 // (ReviewAnswer) for Mike's bubble, so change them with it.
+//
+// With a pick, the last line names the options he passed over. On 10 Nov an
+// agent's done card offered the option he'd turned down, in neutral words,
+// as a follow-up; he ticked it without recognising it and got the big card
+// he hadn't wanted. The agent writing follow-ups needs this in front of it.
 export function reviewReply(review: DesignReview, draft: ReviewDraft): string {
   const lines = [`Review: ${review.title} (${review.id})`];
   const picks = draft.pickedIds ?? (draft.pickedId ? [draft.pickedId] : []);
@@ -172,5 +181,7 @@ export function reviewReply(review: DesignReview, draft: ReviewDraft): string {
   if (draft.none) lines.push('Picked none of them.');
   if (draft.reply) lines.push(draft.reply);
   for (const o of review.options) if (Object.hasOwn(draft.notes, o.id) && draft.notes[o.id]) lines.push(`Notes on ${o.id} (${o.title}): ${draft.notes[o.id]}`);
+  const passed = picks.length ? review.options.filter(o => !o.reference && !picks.includes(o.id)) : [];
+  if (passed.length) lines.push(`Passed over: ${passed.map(o => `${o.id}. ${o.title}`).join('; ')}. ${PASSED_OVER_TAIL}`);
   return lines.join('\n\n');
 }

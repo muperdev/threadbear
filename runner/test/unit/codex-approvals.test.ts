@@ -18,6 +18,7 @@ import path from 'node:path';
 import { dynamicToolSpecs, NAMESPACE_DESCRIPTION_MAX, type ToolDefinition } from '../../src/adapters/codex/tools.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { nullLogger } from '../../src/log.ts';
+import { remoteCardShowsAll } from '../../src/tools.ts';
 import type { QuestionAnswer, QuestionRequest, ToolApprovalAnswer, ToolApprovalRequest } from '../../src/adapters/types.ts';
 import type { CommandExecutionRequestApprovalParams } from '../../src/adapters/codex/types.ts';
 
@@ -572,4 +573,13 @@ test("a legacy command only loses a wrapper that's the system's shell: a repo's 
   assert.equal(h.asked.length, 2);
   assert.equal(h.asked[1]!.canAlwaysAllow, false);
   assert.equal(unwrapShell("bash -lc 'ls'"), "bash -lc 'ls'");
+});
+
+test("a legacy rename's card names where it goes, so the phone can't allow it from one line (Codex review, 9 Nov 2026)", async () => {
+  const h = harness();
+  h.answerWith(async () => ({ decision: 'deny' }));
+  h.a.handle(0, 'applyPatchApproval', { conversationId: 't', callId: 'c', fileChanges: { '/w/notes.txt': { type: 'update', unified_diff: '', move_path: '/elsewhere/notes.txt' } }, reason: null }, { fromChild: false });
+  await flush();
+  assert.deepEqual(h.asked[0].input.paths, ['/w/notes.txt', '/elsewhere/notes.txt']);
+  assert.equal(remoteCardShowsAll('apply_patch', h.asked[0].input), false);
 });

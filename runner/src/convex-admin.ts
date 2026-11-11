@@ -13,6 +13,7 @@
 // built-ins only, as setup runs it before any packages are installed.
 import fs from 'node:fs';
 import path from 'node:path';
+import { isLoopbackHost } from './secure-url.ts';
 
 export const DEPLOY_ENV_FILE = 'convex-deploy.env';
 export const SELF_HOSTED_ENV_FILE = 'convex-self-hosted.env';
@@ -100,6 +101,18 @@ export function convexEnv(admin: ConvexAdmin, base: NodeJS.ProcessEnv = process.
 // refuses the flag on a self-hosted backend (there's only one deployment).
 export function prodArgs(admin: ConvexAdmin): string[] {
   return admin.kind === 'cloud' ? ['--prod'] : [];
+}
+
+// A backend only this Mac can reach: setup --self-hosted --local puts it on
+// 127.0.0.1 (docs/self-hosting.md, "On this Mac only"). No phone or other
+// Mac can pair with it, and its website and share links only open here.
+export function localOnly(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    return isLoopbackHost(new URL(url).hostname);
+  } catch {
+    return false;
+  }
 }
 
 // Where the website is: runner.json's sync.site when set (a self-hosted

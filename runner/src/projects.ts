@@ -772,7 +772,7 @@ export function projectMethods(projects: Projects): Record<string, (p: Record<st
     'projects.merge': (p) => ({ project: projects.merge(reqStr(p, 'projectId'), reqStr(p, 'intoId')) }),
     'projects.delete': (p) => projects.delete(reqStr(p, 'projectId')),
     'threads.setProjects': (p) => ({
-      thread: projects.changeMembership(reqStr(p, 'threadId'), { add: strList(p, 'add'), remove: strList(p, 'remove'), by: 'mike' }).thread,
+      thread: projects.changeMembership(reqStr(p, 'threadId'), { add: strList(p, 'add'), remove: strList(p, 'remove'), by: p.by === 'agent' ? 'agent' : 'mike' }).thread,
     }),
   };
 }

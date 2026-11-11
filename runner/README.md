@@ -46,8 +46,9 @@ was. It keeps the old plist, `launch.mjs` and `current` until the new runner
 has come up and stayed up long enough to be marked good (about a minute),
 and puts all three back if launchd won't load the new plist (bootstrap gets
 a few tries first) or the runner doesn't get that far. The plist
-pins the Node binary (`~/.nvm/versions/node/v24.22.1/bin/node` by default;
-change it with `--node` or `THREADBEAR_NODE`) and the PATH your login shell
+pins a Node 24 or newer: `--node` or `THREADBEAR_NODE` if you give one, else
+the `node` on your PATH, else the newest Node 24 or newer nvm installed, or Homebrew's
+(`scripts/find-node.sh`, which every script uses) and the PATH your login shell
 has, so agents can run the same commands a terminal can. Pass `--path` to set
 it yourself. Logs go to `~/Library/Logs/threadbear-runner.log`.
 
@@ -285,7 +286,7 @@ Environment variables, mainly for tests:
 | `THREADBEAR_CLAUDE_MAIN_DIR`, `THREADBEAR_CLAUDE_MAIN_JSON` | The main login (default `~/.claude` and `~/.claude.json`). |
 | `THREADBEAR_DEBUG=1` | Log CLI stderr and other detail. |
 | `THREADBEAR_LOG_STDERR=1` | Also print the log to stderr. |
-| `THREADBEAR_NODE` | The Node binary the scripts pin (default `~/.nvm/versions/node/v24.22.1/bin/node`). |
+| `THREADBEAR_NODE` | The Node binary the scripts use. The runner sets it in every thread to the Node it runs on. Unset, they take the `node` on PATH, else nvm's newest Node 24 or newer, else Homebrew's (`scripts/find-node.sh`). |
 | `THREADBEAR_GOOD_AFTER_MS` | How long a release has to stay up before it is marked `lastGood` (default 60 s; the tests shorten it). |
 | `THREADBEAR_START_TIMEOUT_MS` | How long `launch.mjs` gives a release to start listening before stopping it (default 90 s). |
 | `THREADBEAR_LAUNCHCTL`, `THREADBEAR_LAUNCH_AGENTS_DIR` | Stand-ins for `launchctl` and `~/Library/LaunchAgents` in the install and deploy scripts (the deploy tests use both). |

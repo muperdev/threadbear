@@ -36,7 +36,7 @@ struct SetupChecklist: Equatable {
     }
 
     static func build(threads: some Collection<ThreadSummary>, accounts: [Account], devices: [Device],
-                      canPair: Bool) -> SetupChecklist {
+                      canPair: Bool, localOnly: Bool = false) -> SetupChecklist {
         // A turn that reached the model (it reported a cost or how full
         // the context is): the login worked. Not the session id, which a
         // thread gets when it's made, the tour's turnless Welcome one too.
@@ -44,7 +44,8 @@ struct SetupChecklist: Equatable {
         var items: [(SetupItem, Bool)] = [(.firstThread, ran)]
         if canPair {
             let live = devices.filter { !$0.expired }
-            items.append((.phone, live.contains { $0.kind == .phone }))
+            // A backend on this Mac only can't be reached from a phone.
+            if !localOnly { items.append((.phone, live.contains { $0.kind == .phone })) }
             items.append((.website, live.contains { $0.kind == .browser }))
         }
         return SetupChecklist(items: items, noLogin: accounts.isEmpty)
@@ -72,7 +73,8 @@ final class SetupState {
 extension AppModel {
     var setupChecklist: SetupChecklist {
         SetupChecklist.build(threads: threads.values, accounts: accounts, devices: devices,
-                             canPair: devicesLoaded && devicesReason == nil && !devicesUnsupported)
+                             canPair: devicesLoaded && devicesReason == nil && !devicesUnsupported,
+                             localOnly: localOnly)
     }
 
     /// The activity bar's icon for it shows while something's left and
@@ -190,7 +192,9 @@ private struct SetupRow: View {
                 ? "There's no Claude Code or Codex login on this Mac yet. Run claude or codex in Terminal and log in, then come back."
                 : "It shows your Claude Code or Codex login works. Try asking what's in the folder."
         case .phone: "Ask questions and steer your threads while you're out, and see how they're getting on."
-        case .website: "Check on your threads from any browser, with a link for each."
+        case .website: app.localOnly
+            ? "Check on your threads from a browser on this Mac, with a link for each."
+            : "Check on your threads from any browser, with a link for each."
         }
     }
 

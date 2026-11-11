@@ -39,8 +39,9 @@ const MESSAGES_SHOWN = 20;
 const THREAD_SCAN = 400;
 // phone:messages page sizes.
 const PAGE_DEFAULT = 50;
-// The website asks for more as you scroll back by raising limit, so one
-// live query covers everything it shows.
+// The website and iPhone keep their live page small and read older rows with
+// beforeSeq, once each. iPhone builds before 1.0.5 still raise limit as you
+// scroll back, and have no other way back, so this stays until they're gone.
 const PAGE_MAX = 2000;
 // Without tools: true, how many tool rows a page may look past for its text
 // messages. Most rows are one-line tool rows, so a page stops at this many
@@ -713,6 +714,19 @@ export const slashCommands = mutation({
   },
 });
 
+// Stop (API 69): ends the thread's running turn, as Stop on the Mac does.
+// The `interrupt` command the main Mac sends another runner (relay.ts),
+// which every runner from API 44 on applies.
+export const interrupt = mutation({
+  args: { token: v.string(), threadId: v.string() },
+  returns: v.id('commands'),
+  handler: async (ctx, { token, threadId }) => {
+    await checkPhoneToken(ctx, token);
+    const t = await findThread(ctx, threadId);
+    return queue(ctx, t.runnerId, 'interrupt', threadId, {});
+  },
+});
+
 export const respond = mutation({
   args: { token: v.string(), threadId: v.string(), approvalId: v.string(), decision: v.union(v.literal('allow'), v.literal('allowAlways'), v.literal('deny')), message: v.optional(v.string()) },
   returns: v.id('commands'),
@@ -990,23 +1004,32 @@ export const loadEarlier = mutation({
 // An APNs device token as the phone sends it: hex (32 bytes today; Apple
 // says it can grow, so up to 100).
 const APNS_TOKEN = /^[0-9a-fA-F]{16,200}$/;
+// A Firebase registration token, as an Android phone sends it (platform
+// 'android'): letters, digits, "_", "-" and ":". About 160 characters today;
+// Firebase promises no length, so there is room.
+const FCM_TOKEN = /^[A-Za-z0-9_:-]{20,4096}$/;
 export const MAX_DEVICES_PER_TOKEN = 5;
 
 export const registerDevice = mutation({
   // pushKey (API 4): the phone's own key for what goes through the push
   // relay, base64 of 32 bytes. Kept from an earlier registration if left out.
-  args: { token: v.string(), apnsToken: v.string(), environment: v.union(v.literal('sandbox'), v.literal('production')), pushKey: v.optional(v.string()) },
+  // platform (API 66): "android" when apnsToken is the phone's Firebase token,
+  // not an Apple one (the field keeps its name; the table is indexed by it).
+  // Left out, as every iPhone does, it is an Apple token.
+  args: { token: v.string(), apnsToken: v.string(), environment: v.union(v.literal('sandbox'), v.literal('production')), pushKey: v.optional(v.string()), platform: v.optional(v.literal('android')) },
   returns: v.null(),
-  handler: async (ctx, { token, apnsToken, environment, pushKey }) => {
+  handler: async (ctx, { token, apnsToken, environment, pushKey, platform }) => {
     if (pushKey !== undefined && !/^[A-Za-z0-9+/]{43}=$/.test(pushKey)) throw new ConvexError({ kind: 'invalid', message: 'pushKey must be base64 of 32 bytes' });
-    if (!APNS_TOKEN.test(apnsToken)) throw new ConvexError({ kind: 'invalid', message: 'apnsToken must be the device token in hex' });
+    if (platform === 'android') {
+      if (!FCM_TOKEN.test(apnsToken)) throw new ConvexError({ kind: 'invalid', message: 'apnsToken must be the phone\'s Firebase token' });
+    } else if (!APNS_TOKEN.test(apnsToken)) throw new ConvexError({ kind: 'invalid', message: 'apnsToken must be the device token in hex' });
     const t = await checkPhoneToken(ctx, token);
     const existing = await ctx.db
       .query('devices')
       .withIndex('by_apnsToken', (q) => q.eq('apnsToken', apnsToken))
       .unique();
     const key = pushKey ?? existing?.pushKey;
-    const row = { apnsToken, environment, tokenName: t.name, tokenId: t.id, updatedAt: Date.now(), ...(existing?.notify ? { notify: existing.notify } : {}), ...(key ? { pushKey: key } : {}) };
+    const row = { apnsToken, environment, tokenName: t.name, tokenId: t.id, updatedAt: Date.now(), ...(existing?.notify ? { notify: existing.notify } : {}), ...(key ? { pushKey: key } : {}), ...(platform ? { platform } : {}) };
     // A phone token's oldest registrations give way to a new one (or one it
     // takes over from another token), so a token holds at most
     // MAX_DEVICES_PER_TOKEN rows: a phone reinstalled gets a new APNs token,
@@ -1081,7 +1104,7 @@ async function knownRunner(ctx: QueryCtx, runnerId: string): Promise<string> {
 // what the runner's own pendingCommands reads. One that waits too long goes
 // (sync:pruneFiles, COMMAND_KEEP_MS). Its photos are recorded in commandFiles
 // so a delete elsewhere sees they're still on their way (sync.ts storageInUse).
-async function queue(ctx: MutationCtx, runnerId: string, kind: 'send' | 'respond' | 'update' | 'create' | 'page' | 'share' | 'quickAsk' | 'schedule' | 'picture' | 'press' | 'slashCommands', threadId: string | undefined, args: Record<string, unknown>) {
+async function queue(ctx: MutationCtx, runnerId: string, kind: 'send' | 'respond' | 'update' | 'create' | 'page' | 'share' | 'quickAsk' | 'schedule' | 'picture' | 'press' | 'slashCommands' | 'interrupt', threadId: string | undefined, args: Record<string, unknown>) {
   let n = 0;
   let bytes = docBytes(args);
   for await (const c of ctx.db.query('commands').withIndex('by_runner_state', (q) => q.eq('runnerId', runnerId).eq('state', 'pending'))) {

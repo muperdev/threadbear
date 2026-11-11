@@ -58,13 +58,16 @@ export function isSnoozed(r: ThreadRow, now: number): boolean {
   return !!r.snoozedUntil && Date.parse(r.snoozedUntil) > now;
 }
 
-// How much an inbox thread wants Mike, lowest first. 0: stuck on his answer.
-// 1: finished unread with a failure. 2: finished unread. 3: read but failed
-// or stopped. 4: done.
+// How much an inbox thread wants Mike, lowest first: a copy of the rule the
+// Mac and phone share (app/Sources/ThreadbearCore/Threads/InboxUrgency.swift),
+// kept to it by the cases in app/Tests/Fixtures/inbox-urgency-cases.json.
+// 0: stuck on his answer. 1: finished, wanting him, failed or stopped. 2:
+// finished, wanting him. 3: read but failed or stopped. 4: done. Unread alone
+// isn't wanting him: a turn that said "nothing" is done (Mike, 9 Nov).
 export function urgency(r: ThreadRow): number {
   const broken = r.status === 'error' || r.status === 'stopped';
   if (reviewWaiting(r) || needsAnswer(r)) return 0;
-  if (r.needsYou || r.unread) return broken ? 1 : 2;
+  if (r.needsYou) return broken ? 1 : 2;
   return broken ? 3 : 4;
 }
 

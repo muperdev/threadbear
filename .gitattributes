@@ -1,3 +1,6 @@
 # Made from runner/src/experiments/*.md, one line per entry: two threads
 # adding an experiment at once both keep theirs (runner/src/experiment-docs.ts).
 docs/experiments.md merge=union
+
+# Log entries from threads arrive at once; keep them all.
+docs/gpui-port/PARITY.md merge=union

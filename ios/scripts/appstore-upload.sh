@@ -78,7 +78,7 @@ if [[ -n "${BUILD_NUMBER:-}" && -e "$ARCHIVE" ]]; then
 else
   rm -rf "$ARCHIVE" "$OUT/archived.txt"
   echo "Archiving Release for iOS, build number $BUILD…"
-  xcodebuild archive -project Threadbear.xcodeproj -scheme Threadbear -configuration Release \
+  ../scripts/one-build.sh xcodebuild archive -project Threadbear.xcodeproj -scheme Threadbear -configuration Release \
     -destination 'generic/platform=iOS' -archivePath "$ARCHIVE" -derivedDataPath "$DD" \
     CURRENT_PROJECT_VERSION="$BUILD" THREADBEAR_APS_ENVIRONMENT=production "${auth[@]}" > "$OUT/archive.log" 2>&1 \
     || { grep -E " error:|ARCHIVE FAILED" "$OUT/archive.log" >&2; echo "Archive failed, see $OUT/archive.log" >&2; exit 1; }

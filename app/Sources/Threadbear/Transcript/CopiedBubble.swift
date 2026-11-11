@@ -11,9 +11,9 @@ final class CopiedBubble: NSView {
     /// Shows one centred above `rect` (in `view`'s coordinates), replacing
     /// any bubble already there.
     @discardableResult
-    static func show(above rect: NSRect, in view: NSView) -> CopiedBubble {
+    static func show(above rect: NSRect, in view: NSView, text: String = "Copied to clipboard") -> CopiedBubble {
         view.subviews.compactMap { $0 as? CopiedBubble }.forEach { $0.removeFromSuperview() }
-        let bubble = CopiedBubble()
+        let bubble = CopiedBubble(text: text)
         let size = bubble.fittingSize
         let gap = zoomed(4)
         let y = view.isFlipped ? rect.minY - gap - size.height : rect.maxY + gap
@@ -25,7 +25,7 @@ final class CopiedBubble: NSView {
         return bubble
     }
 
-    private init() {
+    private init(text: String) {
         super.init(frame: .zero)
         wantsLayer = true
         let layer = self.layer!
@@ -36,12 +36,12 @@ final class CopiedBubble: NSView {
         layer.shadowOffset = CGSize(width: 0, height: -1)
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
-        setAccessibilityLabel("Copied to clipboard")
+        setAccessibilityLabel(text)
 
         let tick = NSImageView()
         let config = NSImage.SymbolConfiguration(pointSize: TypeScale.detail, weight: .semibold).applying(.init(paletteColors: [.white, .systemGreen]))
         tick.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: nil)?.withSymbolConfiguration(config)
-        let label = NSTextField(labelWithString: "Copied to clipboard")
+        let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: TypeScale.detail, weight: .medium)
         label.textColor = .labelColor
         let row = NSStackView(views: [tick, label])

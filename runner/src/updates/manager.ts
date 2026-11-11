@@ -17,8 +17,10 @@ import type { Config } from '../config.ts';
 import type { Logger } from '../log.ts';
 import { paths } from '../config.ts';
 import type { CliPolicy, CliStatus, Provider } from '../protocol.ts';
+
 // The CLIs Threadbear checks and updates. Grok and Devin are listed only
-// once they're installed: most copies never run them.
+// once they're installed: most copies never run them. An ACP agent's CLI
+// is reported and updated only when asked (acpStatus), never on the hour.
 export const MANAGED_CLIS = ['claude', 'codex', 'grok', 'devin'] as const;
 const LISTED_WHEN_INSTALLED: readonly ManagedCli[] = ['grok', 'devin'];
 export type ManagedCli = (typeof MANAGED_CLIS)[number];
@@ -30,6 +32,7 @@ import { grokInstalledVersion, grokLatestVersion, runGrokUpdate } from './grok.t
 import { cleanupDevinVersions, devinInstall, devinInstalledVersion, devinLatestVersion, runDevinUpdate, updatableInstall } from './devin.ts';
 import { CodexCopies, NPM_LATEST, codexPackageVersion, type CodexResolver, type SurfaceCheck } from './codex.ts';
 import { VERSION_RE, compareVersions, defaultExec, defaultFetchText, type Exec, type FetchText } from './exec.ts';
+import { cliName } from '../providers.ts';
 import { UpdateHistory, type ProviderState, type UpdatesFile } from './history.ts';
 
 export const FIRST_CHECK_MS = 60_000;
@@ -70,9 +73,13 @@ export type CliUpdatesDeps = {
   env?: NodeJS.ProcessEnv;
   execPath?: string; // the runner's Node: npm and the fallback codex sit next to it
   random?: () => number;
+  // The ACP agents, with the experiment's switch.
+  acp?: { on(): boolean; providers: Provider[]; binary(p: Provider): string | undefined; updateArgs(p: Provider): string[] };
 };
 
 type UpdateOptions = { version?: string; force?: boolean; bootstrap?: boolean };
+
+const ACP_UPDATE_TIMEOUT_MS = 5 * 60_000;
 
 export class CliUpdates {
   private d: CliUpdatesDeps;
@@ -117,7 +124,7 @@ export class CliUpdates {
     });
     // A previous update that was running when the runner stopped didn't
     // finish; say so rather than show it running forever.
-    for (const p of MANAGED_CLIS) {
+    for (const p of Object.keys(this.st) as Provider[]) {
       const u = this.st[p]?.update;
       if (u && (u.state === 'running' || u.state === 'waiting')) this.st[p]!.update = { ...u, state: 'failed', message: 'The runner stopped before this finished.' };
     }
@@ -127,6 +134,7 @@ export class CliUpdates {
     this.stopped = false;
     if (this.managedCodex() && this.copies.cleanPartials().length) this.d.log.info('cli updates: removed an unfinished Codex install');
     this.track('claude', this.refreshInstalled());
+    for (const p of this.acpProviders()) this.track(p, this.refreshAcp(p));
     this.schedule('check', FIRST_CHECK_MS);
   }
 
@@ -153,7 +161,7 @@ export class CliUpdates {
   }
 
   list(): CliStatus[] {
-    return MANAGED_CLIS.filter((p) => !LISTED_WHEN_INSTALLED.includes(p) || fs.existsSync(this.binaryOf(p))).map((p) => this.status(p));
+    return [...this.listed().map((p) => this.status(p)), ...this.acpProviders().map((p) => this.acpStatus(p))];
   }
 
   // The binary each CLI's new sessions start.
@@ -165,13 +173,20 @@ export class CliUpdates {
   }
 
   check(p?: Provider): CliStatus[] {
-    if (p && !isManagedCli(p)) return this.list();
+    if (p && !isManagedCli(p)) {
+      if (this.acpProviders().includes(p)) this.track(p, this.refreshAcp(p));
+      return this.list();
+    }
     for (const prov of p ? [p] : this.listed()) this.track(prov, this.runCheck(prov, true));
+    if (!p) for (const prov of this.acpProviders()) this.track(prov, this.refreshAcp(prov));
     return this.list();
   }
 
   update(p: Provider, o: { version?: string; force?: boolean } = {}): CliStatus[] {
-    if (!isManagedCli(p)) return this.list();
+    if (!isManagedCli(p)) {
+      if (this.acpProviders().includes(p) && !this.configOff(p)) this.track(p, this.updateAcp(p));
+      return this.list();
+    }
     this.startUpdate(p, o);
     return this.list();
   }
@@ -223,6 +238,59 @@ export class CliUpdates {
 
   // ---- status
 
+  // ---- The ACP agents (adapters/acp/): only what can be known without a
+  // version feed. Never updated without being asked.
+
+  private acpProviders(): Provider[] {
+    const acp = this.d.acp;
+    return acp?.on() ? acp.providers.filter((p) => acp.binary(p)) : [];
+  }
+
+  private acpStatus(p: Provider): CliStatus {
+    const installedVersion = this.installed[p];
+    const s = this.st[p] ?? {};
+    return {
+      provider: p,
+      path: this.d.acp!.binary(p) ?? '',
+      managedBy: 'cli',
+      status: 'unknown',
+      policy: 'off',
+      canUpdateNow: true,
+      inUse: this.d.hooks.versionsInUse(p),
+      ...(installedVersion ? { installedVersion } : {}),
+      ...(s.update ? { update: { ...s.update } } : {}),
+    };
+  }
+
+  private async refreshAcp(p: Provider): Promise<void> {
+    const binary = this.d.acp?.binary(p);
+    if (!binary) return;
+    const r = await this.exec(binary, ['--version'], { timeoutMs: LOOKUP_TIMEOUT_MS });
+    const version = r.code === 0 ? /^\S{1,60}/.exec(r.stdout.trim())?.[0] : undefined;
+    if (version && this.installed[p] !== version) {
+      this.installed[p] = version;
+      this.changed();
+    }
+  }
+
+  private async updateAcp(p: Provider): Promise<void> {
+    const binary = this.d.acp?.binary(p);
+    if (!binary || this.ps(p).update?.state === 'running') return;
+    this.setUpdate(p, { state: 'running', message: `Updating ${cliName(p)}` });
+    await this.refreshAcp(p);
+    const before = this.installed[p];
+    const r = await this.exec(binary, this.d.acp!.updateArgs(p), { timeoutMs: ACP_UPDATE_TIMEOUT_MS });
+    await this.refreshAcp(p);
+    const now = this.installed[p];
+    if (r.code !== 0) {
+      this.history.append({ at: this.iso(), provider: p, action: 'update', ok: false, message: 'failed', output: r.stderr || r.stdout });
+      return this.finish(p, { state: 'failed', message: (r.stderr || r.stdout).trim().split('\n').at(-1)?.slice(0, 200) || `${cliName(p)} didn't update.` });
+    }
+    this.history.append({ at: this.iso(), provider: p, action: 'update', ok: true, ...(now ? { version: now } : {}), message: `from ${before ?? 'unknown'}` });
+    this.finish(p, { state: now && now !== before ? 'succeeded' : 'unchanged', ...(now ? { targetVersion: now } : {}) });
+    if (now && now !== before) this.d.hooks.releaseIdle(p, now);
+  }
+
   private status(p: ManagedCli): CliStatus {
     const s = this.st[p] ?? {};
     const installedVersion = this.installed[p];
@@ -263,7 +331,7 @@ export class CliUpdates {
   }
 
   private listed(): ManagedCli[] {
-    return this.list().map((c) => c.provider as ManagedCli);
+    return MANAGED_CLIS.filter((p) => !LISTED_WHEN_INSTALLED.includes(p) || fs.existsSync(this.binaryOf(p)));
   }
 
   // THREADBEAR_CLI_UPDATES=off (tests, dev runners) and runner.json's own
@@ -273,10 +341,10 @@ export class CliUpdates {
     if (this.configOff(p)) return 'off';
     if (p === 'codex' && this.cfg.codexPath) return 'off';
     if (p === 'devin' && this.managedBy('devin') === 'none') return 'off';
-    return this.st[p]?.policy ?? this.cfg.cliUpdates[p];
+    return this.st[p]?.policy ?? this.cfg.cliUpdates[p] ?? 'off';
   }
 
-  private configOff(p: ManagedCli): boolean {
+  private configOff(p: Provider): boolean {
     return this.env.THREADBEAR_CLI_UPDATES === 'off' || this.cfg.cliUpdates[p] === 'off';
   }
 
@@ -295,7 +363,7 @@ export class CliUpdates {
     const grok = fs.existsSync(this.cfg.grokPath) ? await grokInstalledVersion(this.cfg.grokPath, this.exec) : undefined;
     const devin = await devinInstalledVersion(this.cfg.devinPath, this.exec);
     const changed = claude !== this.installed.claude || codex !== this.installed.codex || grok !== this.installed.grok || devin !== this.installed.devin;
-    this.installed = { claude, codex, grok, devin };
+    this.installed = { ...this.installed, claude, codex, grok, devin };
     if (claude) this.lastClaude ??= claude;
     if (changed) this.changed();
   }
@@ -311,6 +379,7 @@ export class CliUpdates {
         this.timers.delete(name);
         if (name === 'check') {
           for (const p of this.listed()) this.track(p, this.runCheck(p, false));
+          for (const prov of this.acpProviders()) this.track(prov, this.refreshAcp(prov));
           const jitter = Math.floor((this.d.random ?? Math.random)() * CHECK_JITTER_MS);
           this.schedule('check', this.cfg.cliUpdates.checkMinutes * 60_000 + jitter);
         } else if (name.startsWith('retry:')) {
@@ -543,17 +612,17 @@ export class CliUpdates {
 
   // ---- state
 
-  private ps(p: ManagedCli): ProviderState {
+  private ps(p: Provider): ProviderState {
     return (this.st[p] ??= {});
   }
 
-  private setUpdate(p: ManagedCli, u: NonNullable<CliStatus['update']>): void {
+  private setUpdate(p: Provider, u: NonNullable<CliStatus['update']>): void {
     this.ps(p).update = stripUndefined(u);
     this.save();
     this.changed();
   }
 
-  private finish(p: ManagedCli, u: NonNullable<CliStatus['update']>): void {
+  private finish(p: Provider, u: NonNullable<CliStatus['update']>): void {
     this.setUpdate(p, { ...u, finishedAt: this.iso() });
   }
 
@@ -576,7 +645,7 @@ export class CliUpdates {
     }
   }
 
-  private track(_p: ManagedCli, promise: Promise<void>): void {
+  private track(_p: Provider, promise: Promise<void>): void {
     const tracked = promise.catch((e: Error) => this.d.log.error('cli updates: failed', { error: e.message }));
     this.work.add(tracked);
     void tracked.finally(() => this.work.delete(tracked));

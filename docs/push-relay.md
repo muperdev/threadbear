@@ -47,6 +47,31 @@ each person's own Mac and their own Convex deployment.
 A backend with its own Apple key (`APNS_*` env: Mike's) sends directly and
 skips the relay. `PUSH_VIA=relay` sends through the relay anyway, for testing.
 
+### An Android phone
+
+The same, through Firebase Cloud Messaging (API 66):
+
+1. The Android app makes its 32 bytes (kept wrapped by an Android Keystore key)
+   and registers them, with its Firebase token as `apnsToken` and
+   `platform: "android"`, with `phone:registerDevice`.
+2. `convex/push.ts` seals the same `{title, body}` and posts it to the relay's
+   `/send` with `platform: "android"`, the Firebase token as `deviceToken` and
+   no environment. This goes through the relay even for a backend with its own
+   Apple key, which is no use to Android.
+3. The relay (`relay/convex/fcm.ts`) sends Firebase a data-only message,
+   `{ threadId, e }`, at high priority with an hour to live. It holds the service
+   account key (`FCM_SERVICE_ACCOUNT`) of the Firebase project the app was built
+   for, which is whoever publishes the app's. It sees the token and the thread
+   id, and the sealed text it cannot open.
+4. The Android app's `FirebaseMessagingService` opens `e` with
+   its key and posts the notification; if it can't, it posts "A thread needs
+   you". A token Firebase says is unregistered (404) is dropped like an Apple
+   one.
+
+A relay with no `FCM_SERVICE_ACCOUNT` answers an Android send with
+`relay not configured`, which the backend reports as failing pushes
+(`pushHealth`). Deploy the relay before a backend that has Android phones.
+
 ## Registering
 
 `/register` is open to anyone, so it can't simply hand out installs from

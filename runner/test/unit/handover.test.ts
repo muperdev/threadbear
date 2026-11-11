@@ -528,13 +528,15 @@ test("the phone's commands reach a thread a draining runner still has", async ()
   await host.update({ threadId: busy.id, archived: true });
   await host.respondApproval({ threadId: busy.id, approvalId: 'a1', decision: 'allow' });
   await host.share(busy.id, { access: 'link' });
-  assert.deepEqual(sent.map(([m]) => m), ['threads.send', 'threads.markSeen', 'threads.update', 'approvals.respond', 'threads.share']);
+  // Its buttons too, which a press from the phone checks first (Codex's review, 10 Nov).
+  await host.listButtons!(busy.id);
+  assert.deepEqual(sent.map(([m]) => m), ['threads.send', 'threads.markSeen', 'threads.update', 'approvals.respond', 'threads.share', 'buttons.list']);
   assert.deepEqual(sent[0][1], { threadId: busy.id, text: 'from my phone', origin: 'phone' });
   assert.ok((sent[1][1].seq as number) >= Number.MAX_SAFE_INTEGER, 'seen up to whatever it has');
   // The primary's own threads are done here.
   await host.update({ threadId: idle.id, title: 'Renamed' });
   assert.equal(b.runner.get(idle.id).title, 'Renamed');
-  assert.equal(sent.length, 5);
+  assert.equal(sent.length, 6);
   // Handed over just as the command went: done here instead.
   moved = true;
   await host.update({ threadId: busy.id, title: 'Came across' });

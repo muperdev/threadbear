@@ -229,6 +229,18 @@ test('codex: the first start installs the latest into its own copy and activates
   assert.equal(resolve(t.u.codexBinary()).native, true);
 });
 
+test('codex: npm installs from public npm whatever ~/.npmrc says (a stale company token gave E401)', async () => {
+  const npmArgs: string[][] = [];
+  const t = setup({ exec: (cmd, args, opts) => { if (cmd.endsWith('/npm')) npmArgs.push(args); return cmd === '/bin/ps' ? Promise.resolve({ code: 0, stdout: '', stderr: '' }) : defaultExec(cmd, args, opts); } });
+  t.u.start();
+  t.clock.advance(60_000);
+  await t.u.settled();
+  t.u.stop();
+  assert.equal(npmArgs.length, 1);
+  const i = npmArgs[0].indexOf('--registry');
+  assert.ok(i >= 0 && npmArgs[0][i + 1] === 'https://registry.npmjs.org/', npmArgs[0].join(' '));
+});
+
 test('codex: a version whose schema lacks a method we use is held; the first start falls back to the tested one; force installs it anyway', async () => {
   const t = setup({ latest: { codex: '0.166.0' } });
   fs.writeFileSync(path.join(t.root, 'drop-0.166.0'), '');
@@ -491,4 +503,91 @@ test('a run left "running" by a stopped runner reads as failed after a restart',
 test('compareVersions orders releases and pre-releases', () => {
   const vs = ['0.165.0', '0.164.0', '0.165.0-alpha.2', '0.99.1', '0.165.0-alpha.10', '1.0.0'];
   assert.deepEqual([...vs].sort(compareVersions), ['0.99.1', '0.164.0', '0.165.0-alpha.2', '0.165.0-alpha.10', '0.165.0', '1.0.0']);
+});
+
+function acpSetup(o: { on?: boolean; env?: NodeJS.ProcessEnv; version?: () => string; fail?: boolean } = {}) {
+  const calls: string[][] = [];
+  const exec: Exec = async (cmd, args) => {
+    if (cmd === '/bin/opencode') {
+      calls.push(args);
+      if (args[0] === '--version') return { code: 0, stdout: `${(o.version ?? (() => '1.0.0'))()}\n`, stderr: '' };
+      return o.fail ? { code: 1, stdout: '', stderr: 'no network\n' } : { code: 0, stdout: '', stderr: '' };
+    }
+    return { code: 1, stdout: '', stderr: '' };
+  };
+  const ctx = setup({ exec, env: o.env });
+  (ctx.u as unknown as { d: Record<string, unknown> }).d.acp = { on: () => o.on !== false, providers: ['opencode'], binary: () => '/bin/opencode', updateArgs: () => ['upgrade'] };
+  return { ...ctx, calls };
+}
+
+test('with the experiment off, an ACP agent has no row and clis.* do nothing', async () => {
+  const c = acpSetup({ on: false });
+  assert.ok(!c.u.list().some((r) => r.provider === 'opencode'));
+  c.u.update('opencode');
+  c.u.check('opencode');
+  c.u.setPolicy('opencode', 'auto');
+  await c.u.settled();
+  assert.deepEqual(c.calls, []);
+});
+
+test('an ACP agent shows its version, and never updates by itself', async () => {
+  const c = acpSetup();
+  c.u.check('opencode');
+  await c.u.settled();
+  const row = c.u.list().find((r) => r.provider === 'opencode')!;
+  assert.equal(row.installedVersion, '1.0.0');
+  assert.equal(row.policy, 'off');
+  assert.equal(row.canUpdateNow, true);
+  assert.deepEqual(c.calls, [['--version']]);
+  c.u.setPolicy('opencode', 'auto');
+  assert.equal(c.u.list().find((r) => r.provider === 'opencode')!.policy, 'off');
+});
+
+test('Update runs the agent\'s own updater and reports what happened', async () => {
+  let v = '1.0.0';
+  const c = acpSetup({ version: () => v });
+  const exec = (c.u as unknown as { exec: Exec }).exec;
+  (c.u as unknown as { exec: Exec }).exec = async (cmd, args, opts) => {
+    const r = await exec(cmd, args, opts);
+    if (args[0] === 'upgrade') v = '2.0.0';
+    return r;
+  };
+  c.u.update('opencode');
+  await c.u.settled();
+  assert.ok(c.calls.some((a) => a[0] === 'upgrade'));
+  const row = c.u.list().find((r) => r.provider === 'opencode')!;
+  assert.equal(row.update?.state, 'succeeded');
+  assert.equal(row.installedVersion, '2.0.0');
+});
+
+test('a failed update says why', async () => {
+  const c = acpSetup({ fail: true });
+  c.u.update('opencode');
+  await c.u.settled();
+  const row = c.u.list().find((r) => r.provider === 'opencode')!;
+  assert.equal(row.update?.state, 'failed');
+  assert.match(String(row.update?.message), /no network/);
+});
+
+test('THREADBEAR_CLI_UPDATES=off covers them too', async () => {
+  const c = acpSetup({ env: { PATH: '/usr/bin:/bin', THREADBEAR_CLI_UPDATES: 'off' } });
+  c.u.update('opencode');
+  await c.u.settled();
+  assert.ok(!c.calls.some((a) => a[0] === 'upgrade'));
+});
+
+test('an update left running across a restart is marked failed, so it can be tried again', async () => {
+  const c = acpSetup();
+  (c.u as unknown as { setUpdate(p: string, u: unknown): void }).setUpdate('opencode', { state: 'running', message: 'Updating' });
+  const after = c.make();
+  (after as unknown as { d: Record<string, unknown> }).d.acp = { on: () => true, providers: ['opencode'], binary: () => '/bin/opencode', updateArgs: () => ['upgrade'] };
+  assert.equal(after.list().find((r) => r.provider === 'opencode')!.update?.state, 'failed');
+});
+
+test('a routine check keeps an ACP agent\'s version', async () => {
+  const c = acpSetup();
+  c.u.check('opencode');
+  await c.u.settled();
+  await (c.u as unknown as { refreshInstalled(): Promise<void> }).refreshInstalled();
+  assert.equal(c.u.list().find((r) => r.provider === 'opencode')!.installedVersion, '1.0.0');
 });

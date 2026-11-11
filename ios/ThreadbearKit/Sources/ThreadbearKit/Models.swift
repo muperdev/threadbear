@@ -253,6 +253,9 @@ public struct PhoneThread: Codable, Sendable, Hashable, Identifiable {
     /// What Mike last said to it, one line (backend API 31): the row's
     /// "You: ...". Nil until he's sent one, and from an older runner.
     public var asked: String?
+    /// The librarian's recap (backend API 70): the recap box above the
+    /// message box. Nil until it has written one, and from an older runner.
+    public var recap: String?
     @OptionalFlexibleDate public var archivedAt: Date?
     /// Mike starred it: the Starred section at the top (backend API 27).
     @OptionalFlexibleDate public var starredAt: Date?
@@ -611,9 +614,9 @@ public struct MessagePage: Codable, Sendable, Hashable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        messages = try c.decode([PhoneMessage].self, forKey: .messages)
+        messages = try c.decode(LossyList<PhoneMessage>.self, forKey: .messages).elements
         hasMore = try c.decode(Bool.self, forKey: .hasMore)
-        images = try c.decodeIfPresent([MessageImage].self, forKey: .images) ?? []
+        images = ((try? c.decodeIfPresent(LossyList<MessageImage>.self, forKey: .images)) ?? nil)?.elements ?? []
     }
 }
 
@@ -763,6 +766,48 @@ public struct ThreadDetail: Codable, Sendable, Hashable {
         self.thread = thread
         self.messages = messages
     }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        thread = try c.decode(PhoneThread.self, forKey: .thread)
+        messages = ((try? c.decodeIfPresent(LossyList<PhoneMessage>.self, forKey: .messages)) ?? nil)?.elements ?? []
+    }
+}
+
+/// A list read one item at a time: an item this build can't read (a role
+/// it doesn't know, a field shaped the way a newer backend sends it) is
+/// skipped and the rest still show. Decoded as a plain array, one such
+/// message hid the whole thread page, and one such row ended a live list
+/// (9 Nov review). As the Mac's LossyArray.
+public struct LossyList<Element: Decodable>: Decodable {
+    public var elements: [Element]
+
+    public init(from decoder: Decoder) throws {
+        var container = try decoder.unkeyedContainer()
+        var elements: [Element] = []
+        while !container.isAtEnd {
+            if let element = try? container.decode(Element.self) {
+                elements.append(element)
+            } else if (try? container.decode(JSONValue.self)) == nil {
+                // Can't even step past it: stop rather than spin.
+                break
+            }
+        }
+        self.elements = elements
+    }
+}
+
+extension LossyList: Sendable where Element: Sendable {}
+
+/// A list the backend's answers decode leniently (Backend.decode).
+protocol LossyListDecodable {
+    static func decodeLossily(_ data: Data) throws -> Any
+}
+
+extension Array: LossyListDecodable where Element: Decodable {
+    static func decodeLossily(_ data: Data) throws -> Any {
+        try JSONDecoder().decode(LossyList<Element>.self, from: data).elements
+    }
 }
 
 public struct PhoneRunner: Codable, Sendable, Hashable, Identifiable {
@@ -890,6 +935,13 @@ public enum BackendCompatibility {
     /// commands, for the palette over the reply box. Older backends get no
     /// palette; what's typed still runs as a command.
     public static let slashCommandsAPIVersion = 62
+    /// From 69 phone:interrupt stops a thread's running turn, so Send turns
+    /// into Stop while one runs with nothing typed. Older backends have no Stop.
+    public static let stopAPIVersion = 69
+    /// From 37 phone:images watches a thread's pictures from a seq on, so a
+    /// picture that finishes uploading after its row has left the live page
+    /// still turns up.
+    public static let imagesAPIVersion = 37
 
     /// The line to show, or nil when the backend is fine.
     public static func problem(_ identity: PhoneIdentity) -> String? {

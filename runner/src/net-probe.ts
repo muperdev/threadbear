@@ -22,6 +22,9 @@ const HOSTS: Record<Provider, string> = {
   grok: 'cli-chat-proxy.grok.com',
   // The Devin CLI's API server (`devin auth status`).
   devin: 'server.codeium.com',
+  cursor: 'api2.cursor.sh',
+  // Its free models; a login's own provider may be elsewhere.
+  opencode: 'opencode.ai',
 };
 
 // How long a probe may take in all, whatever arrives meanwhile: a proxy

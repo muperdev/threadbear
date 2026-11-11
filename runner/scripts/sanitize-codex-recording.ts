@@ -182,16 +182,26 @@ export function leaks(text: string, secrets: string[] = [], local = localNames()
   return found;
 }
 
-function localNames(): string[] {
+// Names a machine has without anyone choosing them (GitHub's runners are
+// "runner", a container is "root"): they say nothing private, and a fixture can
+// well hold the word, so a check run there failed on text that was fine.
+const GENERIC_NAMES = new Set(['runner', 'runneradmin', 'root', 'admin', 'administrator', 'ubuntu', 'debian', 'docker', 'vagrant', 'localhost']);
+
+export function localNames(user: string | undefined = currentUser(), hostname: string = os.hostname()): string[] {
   const names = new Set<string>();
+  if (user) names.add(user);
+  const host = hostname.replace(/\.(local|localdomain|lan)$/i, '');
+  if (host) names.add(host);
+  return [...names].filter((n) => n.length >= 4 && !GENERIC_NAMES.has(n.toLowerCase()));
+}
+
+function currentUser(): string | undefined {
   try {
-    names.add(os.userInfo().username);
+    return os.userInfo().username;
   } catch {
     // No user name to check for.
+    return undefined;
   }
-  const host = os.hostname().replace(/\.(local|localdomain|lan)$/i, '');
-  if (host) names.add(host);
-  return [...names].filter((n) => n.length >= 4);
 }
 
 export function toNdjson(records: Rec[]): string {

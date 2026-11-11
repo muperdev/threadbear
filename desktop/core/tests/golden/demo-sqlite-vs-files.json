@@ -1,0 +1,54 @@
+{
+  "closed" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "For the runner, should events go in SQLite or plain NDJSON files?",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 3,
+      "text" : "Plain files win here: 1. Events are append-only, which is what NDJSON is good at. 2. Each thread is…",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 4,
+      "text" : "18s, $0.05",
+      "turn" : "turn_1"
+    }
+  ],
+  "open" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "For the runner, should events go in SQLite or plain NDJSON files?",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 3,
+      "text" : "Plain files win here: 1. Events are append-only, which is what NDJSON is good at. 2. Each thread is…",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 4,
+      "text" : "18s, $0.05",
+      "turn" : "turn_1"
+    }
+  ]
+}

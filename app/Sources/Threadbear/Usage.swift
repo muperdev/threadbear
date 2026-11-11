@@ -108,6 +108,16 @@ extension AppModel {
     struct LimitAdvice: Equatable {
         var text: String
         var target: Account?
+        /// A turn stopped at the limit (or the thread is waiting for room),
+        /// so there's something to carry on: the box offers to do it by
+        /// itself. Not for another Mac's thread, whose runner the setting
+        /// can't reach through the backend yet.
+        var stopped = false
+        /// It's waiting and will carry on by itself at this time.
+        var carriesOnAt: Date?
+        /// Its pool will move it rather than wait for this login, so the
+        /// Switch button pins it outside the pool.
+        var pool = false
     }
 
     func limitAdvice(for thread: ThreadSummary) -> LimitAdvice? {
@@ -116,10 +126,12 @@ extension AppModel {
         // has a login with room, and say when it carries on once it's
         // waiting. The button still offers a login outside the pool, which
         // pins it there.
+        let target = AccountUsageText.switchTarget(accounts, from: thread.accountId)
+        let local = !thread.isRemote
         if usesPools, let poolId = thread.poolId, let pool = pool(poolId) {
             if let waiting = thread.waitingForRoom {
-                return LimitAdvice(text: Pools.waitingSentence(poolTitle: pool.title, waiting, now: now),
-                                   target: AccountUsageText.switchTarget(accounts, from: thread.accountId))
+                return LimitAdvice(text: "Every login in \(pool.title) is out of room.", target: target,
+                                   stopped: local, carriesOnAt: waiting.until, pool: true)
             }
             if Pools.logins(pool, accounts: accounts).contains(where: Pools.hasRoom) { return nil }
         }
@@ -129,12 +141,21 @@ extension AppModel {
         // turn, and the line blamed the new account.
         let failedOnLimit = thread.status == .error && failedOnAccount[thread.id] == thread.accountId
             && loadedSession(thread.id)?.lastTurnErrorKind == .usageLimit
-        guard blocked || failedOnLimit else { return nil }
+        let waiting = thread.waitingForRoom
+        guard blocked || failedOnLimit || waiting != nil else { return nil }
         var text = "\(accountShortTitle(thread.accountId)) has reached its limit"
         if let reset = AccountUsageText.mainWindows(account?.usage).filter({ $0.remainingPercent < 1 }).compactMap(\.resetsAt).min() {
             text += ", resets " + AccountUsageText.resetTime(reset, now: now)
         }
-        return LimitAdvice(text: text + ".", target: AccountUsageText.switchTarget(accounts, from: thread.accountId))
+        return LimitAdvice(text: text + ".", target: target, stopped: local && (failedOnLimit || waiting != nil),
+                           carriesOnAt: waiting?.until, pool: thread.poolId != nil && usesPools)
+    }
+
+    /// The limit box's Carry on menu: whether the thread carries on by
+    /// itself once its login (or its pool) has room. Shows at once; the
+    /// runner's answer says when it'll carry on.
+    func setCarryOnAtReset(_ threadId: String, _ on: Bool) {
+        update(threadId, ThreadUpdate(carryOnAtReset: on))
     }
 
     // MARK: Signed out
@@ -271,15 +292,18 @@ enum SignIn {
         var env = ""
         if codex, !account.configDir.isEmpty { env = "CODEX_HOME=\(quoted(account.configDir)) " }
         if grok, account.id != "grok-main", !account.configDir.isEmpty { env = "GROK_HOME=\(quoted(account.configDir)) " }
-        if !codex, !grok, !devin, account.id != "claude-main", !account.configDir.isEmpty { env = "CLAUDE_CONFIG_DIR=\(quoted(account.configDir)) " }
-        let binary = cliPath.isEmpty ? (codex ? "codex" : grok ? "grok" : devin ? "devin" : "claude") : quoted(cliPath)
-        let name = codex ? "Codex" : grok ? "Grok" : devin ? "Devin" : "Claude"
+        if account.provider == "claude" || account.provider.isEmpty, account.id != "claude-main", !account.configDir.isEmpty { env = "CLAUDE_CONFIG_DIR=\(quoted(account.configDir)) " }
+        let info = Providers.info(account.provider)
+        // "opencode auth login": the program, then what it's asked to do.
+        let words = info.loginCommand.split(separator: " ").map(String.init)
+        let binary = cliPath.isEmpty ? (words.first ?? "claude") : quoted(cliPath)
+        let command = words.dropFirst().joined(separator: " ")
         return """
         #!/bin/zsh -l
         export PATH="$HOME/.local/bin:$PATH"
-        printf '%s\\n' \(quoted("Signing in to \(name) for Threadbear (\(Self.oneLine(account.title)))."))
+        printf '%s\\n' \(quoted("Signing in to \(info.name) for Threadbear (\(Self.oneLine(account.title)))."))
         echo
-        \(env)\(binary) \(codex || grok ? "login" : "auth login")
+        \(env)\(binary) \(command)
         echo
         echo "Done. Go back to Threadbear and press Send again. You can close this window."
 

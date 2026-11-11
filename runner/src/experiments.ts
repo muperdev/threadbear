@@ -21,7 +21,7 @@
 // go with the code.
 import fs from 'node:fs';
 import path from 'node:path';
-import { readRunnerJson } from './config.ts';
+import { peekRunnerJson } from './config.ts';
 
 export type Experiment = {
   id: string;
@@ -89,8 +89,8 @@ export type ExperimentId = string;
 
 // Read from runner.json each time, so turning one on or off takes effect
 // at the next turn, with no restart.
-export function experimentOn(home: string, id: ExperimentId): boolean {
-  const said = readRunnerJson(home).experiments?.[id];
+export function experimentOn(home: string, id: ExperimentId, list: readonly Experiment[] = EXPERIMENTS): boolean {
+  const said = peekRunnerJson(home).experiments?.[id];
   if (typeof said === 'boolean') return said;
-  return EXPERIMENTS.find((x) => x.id === id)?.on ?? false;
+  return list.find((x) => x.id === id)?.on ?? false;
 }

@@ -77,7 +77,7 @@ final class SwipeNavigationTests: XCTestCase {
         move(8, .began)
         XCTAssertEqual(swipes.swipe.direction, .back)
         XCTAssertFalse(swipes.swipe.armed)
-        move(160, .changed)
+        move(230, .changed)
         XCTAssertTrue(swipes.swipe.armed)
         XCTAssertEqual(app.selection, "b", "not until the fingers lift")
         move(0, .ended)
@@ -131,21 +131,10 @@ final class SwipeNavigationTests: XCTestCase {
         XCTAssertTrue(swipes.handle(momentum, in: window))
     }
 
-    /// Fingers going right are Back with natural scrolling and Forward
-    /// without, as in Safari: a row gives up whichever that is.
-    func testWhichWayIsBackFollowsNaturalScrolling() async {
-        let app = await app()
-        let swipes = swipeNavigation(app)
-        XCTAssertTrue(swipes.takesFingersRight(inverted: true), "natural: Back, and there's somewhere to go back to")
-        XCTAssertFalse(swipes.takesFingersRight(inverted: false), "not natural: Forward, and there's nowhere to go")
-        app.goBack()
-        XCTAssertTrue(swipes.takesFingersRight(inverted: false))
-    }
-
     func testOffInSystemSettings() async {
         let app = await app()
         let swipes = swipeNavigation(app, on: false)
-        XCTAssertFalse(swipes.takesFingersRight(inverted: true))
+        XCTAssertFalse(swipes.takesBack)
         gesture(swipes, [(8, 0), (40, 0), (80, 0)])
         XCTAssertEqual(app.selection, "b")
     }
@@ -221,7 +210,7 @@ final class SwipeNavigationTests: XCTestCase {
         row.setWidth(300)
         row.setHovered(true)
         func send(_ dx: Double, _ dy: Double, _ phase: RowSwipeEvents.Phase) -> Bool {
-            RowSwipeEvents.event(dx: dx, dy: dy, phase: phase).map { row.handle($0) } ?? false
+            RowSwipeEvents.event(dx: dx, dy: dy, phase: phase, content: true).map { row.handle($0) } ?? false
         }
         // Left the row in the middle of deciding: the list took the rest.
         _ = send(0, 1, .began)

@@ -1,6 +1,7 @@
 // node --test web/src/sections.test.ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { archived, archiveShown, build, clampWidth, hibernating, isFiltering, matches, neighbour, NO_FILTER, passes, placeChoices, readFolded, readOrder, readWidth, shows, SIDEBAR_DEFAULT, SIDEBAR_MIN, urgency, wakeLine, wakesOf, type ThreadRow } from './sections.ts';
 
 const NOW = Date.parse('2026-11-05T10:00:00Z');
@@ -66,7 +67,7 @@ test('Hibernating is soonest to wake first, back on restart last, each once', ()
 test('the inbox sorts by what needs Mike, newest or oldest', () => {
   const old = row({ lastActivityMs: NOW - 5000 });
   const failedRead = row({ status: 'error', lastActivityMs: NOW - 4000 });
-  const unread = row({ unread: true, lastActivityMs: NOW - 3000 });
+  const unread = row({ needsYou: true, unread: true, lastActivityMs: NOW - 3000 });
   const asked = row({ status: 'waiting', lastActivityMs: NOW - 2000 });
   const fresh = row({ lastActivityMs: NOW - 1000 });
   const all = [old, failedRead, unread, asked, fresh];
@@ -75,11 +76,25 @@ test('the inbox sorts by what needs Mike, newest or oldest', () => {
   assert.deepEqual(ids(build(all, NOW, none, 'oldest').inbox), ids([old, failedRead, unread, asked, fresh]));
 });
 
-test('urgency: a failure that is unread outranks a plain unread', () => {
-  assert.equal(urgency(row({ unread: true, status: 'error' })), 1);
-  assert.equal(urgency(row({ unread: true })), 2);
+test('urgency: a failure that wants Mike outranks a plain one', () => {
+  assert.equal(urgency(row({ needsYou: true, unread: true, status: 'error' })), 1);
+  assert.equal(urgency(row({ needsYou: true, unread: true })), 2);
   assert.equal(urgency(row({ status: 'stopped' })), 3);
   assert.equal(urgency(row()), 4);
+});
+
+// The cases the Mac and phone run too: one rule for all three
+// (app/Sources/ThreadbearCore/Threads/InboxUrgency.swift).
+test('urgency and the Needs you filter follow the shared cases', () => {
+  type Case = { name: string; thread: { status?: ThreadRow['status']; needsYou?: boolean; unread?: boolean; pendingReviews?: number }; urgency: number; counted: boolean };
+  const file = new URL('../../app/Tests/Fixtures/inbox-urgency-cases.json', import.meta.url);
+  const { cases } = JSON.parse(readFileSync(file, 'utf8')) as { cases: Case[] };
+  assert.ok(cases.length >= 9);
+  for (const c of cases) {
+    const r = row({ status: c.thread.status ?? 'idle', needsYou: c.thread.needsYou ?? false, unread: c.thread.unread ?? false, ...(c.thread.pendingReviews ? { pendingReviews: c.thread.pendingReviews } : {}) });
+    assert.equal(urgency(r), c.urgency, c.name);
+    assert.equal(passes(r, { show: 'needsYou' }, NOW), c.counted, c.name);
+  }
 });
 
 test('stars stay in the order they were starred', () => {

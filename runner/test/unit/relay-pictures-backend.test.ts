@@ -11,7 +11,7 @@
 // between uploading and queueing left it in storage for good).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { call, load, memoryBackend, outcome } from '../helpers/convex-memory.ts';
+import { call, load, memoryBackend, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
 
 const OWNER = 'owner-key';
 const BRUCE_KEY = 'tbr_bruce';
@@ -38,7 +38,7 @@ async function setup() {
   for (const [runnerId, byOwner] of [[M5, true], [BRUCE, false]] as const) {
     await b.ctx.db.insert('runners', { runnerId, name: runnerId, version: 'v', startedAt: 'x', draining: false, threadCount: 1, lastSeenAt: now, ...(byOwner ? { byOwner } : {}) });
   }
-  await call(b.ctx, sync.upsertThreads, { key: BRUCE_KEY, threads: [{ threadId: 'B', runnerId: BRUCE, title: 'T', view: 'inbox', needsYou: false }] });
+  await call(b.ctx, sync.upsertThreads, { key: BRUCE_KEY, threads: [{ threadId: 'B', runnerId: BRUCE, ...THREAD_BASICS, title: 'T', view: 'inbox', needsYou: false }] });
   return b;
 }
 type S = Awaited<ReturnType<typeof setup>>;
@@ -98,7 +98,7 @@ test("a command can't name a file that's gone, in use, a runner key's or a phone
   await call(s.ctx, sync.addShareImage, { key: BRUCE_KEY, threadId: 'B', seq: 1, path: 'a.png', storageId: share, mediaType: 'image/png' });
   assert.equal(await queue([share]), 'forbidden');
   // The owner's own reply picture, in use.
-  await call(s.ctx, sync.upsertThreads, { key: OWNER, threads: [{ threadId: 'O', runnerId: M5, title: 'T', view: 'inbox', needsYou: false }] });
+  await call(s.ctx, sync.upsertThreads, { key: OWNER, threads: [{ threadId: 'O', runnerId: M5, ...THREAD_BASICS, title: 'T', view: 'inbox', needsYou: false }] });
   const reply = s.file('reply');
   await call(s.ctx, sync.addReplyImage, { key: OWNER, threadId: 'O', seq: 1, path: 'r.png', storageId: reply, mediaType: 'image/png' });
   assert.equal(await queue([reply]), 'forbidden');

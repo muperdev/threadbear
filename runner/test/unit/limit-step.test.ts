@@ -17,6 +17,13 @@ function alive(pid: number) {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+async function assertGone(pid: number, message: string) {
+  // A delivered signal can precede reaping, especially at background priority.
+  const until = Date.now() + 10_000;
+  while (alive(pid) && Date.now() < until) await new Promise((done) => setTimeout(done, 50));
+  assert.equal(alive(pid), false, message);
+}
+
 test('a step that finishes keeps its output and exit code', () => {
   const ok = run('echo out; echo err >&2');
   assert.equal(ok.status, 0);
@@ -48,7 +55,7 @@ test('a step that keeps printing still stops at the total limit', () => {
   assert.match(r.stdout, /no test was running\. Last line: tick/);
 });
 
-test('what a step started goes too, even in a process group of its own', () => {
+test('what a step started goes too, even in a process group of its own', async () => {
   // As swift test starts xctest: `set -m` gives each background job its own group.
   const dir = tmpDir('limit-step-');
   const pidFile = path.join(dir, 'pid');
@@ -56,10 +63,10 @@ test('what a step started goes too, even in a process group of its own', () => {
   assert.equal(r.status, 124);
   const pid = Number(fs.readFileSync(pidFile, 'utf8'));
   assert.ok(pid > 0);
-  assert.equal(alive(pid), false, 'the frozen process is gone');
+  await assertGone(pid, 'the frozen process is gone');
 });
 
-test('a process that ignores SIGTERM goes too, even when the step itself stops at once', () => {
+test('a process that ignores SIGTERM goes too, even when the step itself stops at once', async () => {
   const dir = tmpDir('limit-step-');
   const pidFile = path.join(dir, 'pid');
   // The ignored signal carries through exec; the bash above it dies on SIGTERM.
@@ -67,7 +74,34 @@ test('a process that ignores SIGTERM goes too, even when the step itself stops a
   assert.equal(r.status, 124);
   const pid = Number(fs.readFileSync(pidFile, 'utf8'));
   assert.ok(pid > 0);
-  assert.equal(alive(pid), false, 'it got the SIGKILL');
+  await assertGone(pid, 'it got the SIGKILL');
+});
+
+test('a late stop check still sends SIGKILL before its final deadline', async (t) => {
+  const dir = tmpDir('limit-step-');
+  const pidFile = path.join(dir, 'pid');
+  const count = path.join(dir, 'count');
+  const late = path.join(dir, 'late');
+  const clock = path.join(dir, 'clock.mjs');
+  // The third ps is the first stop check, after the initial tree and the
+  // post-sample tree. Advance its clock past both deadlines without a sleep.
+  fs.writeFileSync(path.join(dir, 'ps'), `#!/bin/sh\nn=0\n[ ! -f "${count}" ] || read n <"${count}"\nn=$((n + 1))\nprintf '%s\\n' "$n" >"${count}"\nif [ "$n" -ge 3 ]; then : >"${late}"; fi\nexec /bin/ps "$@"\n`, { mode: 0o755 });
+  fs.writeFileSync(clock, `import fs from 'node:fs';\nconst now = Date.now;\nDate.now = () => now() + (fs.existsSync(${JSON.stringify(late)}) ? 10_000 : 0);\n`);
+  t.after(() => {
+    if (fs.existsSync(pidFile)) {
+      const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+      if (pid > 0) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+    }
+  });
+  const r = spawnSync(process.execPath, ['--import', clock, SCRIPT, '--silence', '1', '--total', '60', '--', 'bash', '-c', `(trap '' TERM; exec sleep 60) & echo $! >"${pidFile}"; wait`], {
+    encoding: 'utf8', timeout: 60_000, env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+  });
+  assert.ifError(r.error);
+  assert.equal(r.status, 124);
+  assert.ok(fs.existsSync(late), 'the stop check crossed both deadlines');
+  const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+  assert.ok(pid > 0);
+  await assertGone(pid, 'a delayed timer must not skip SIGKILL');
 });
 
 test('a process holding the output open after the step exits does not hold up the check', () => {

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { makeHarness, tick } from '../helpers/fakes.ts';
 import { nullLogger } from '../../src/log.ts';
-import { LOOK_MS, MacScreen, TELL_AFTER_MS, canOpen, parseDialogCount, type ScreenProbe } from '../../src/mac-screen.ts';
+import { LOOK_MS, MacScreen, TELL_AFTER_MS, IS_DIALOG, canOpen, parseDialogCount, realProbe, type ScreenProbe } from '../../src/mac-screen.ts';
 
 class FakeProbe implements ScreenProbe {
   count: number | undefined = 0;
@@ -281,4 +281,23 @@ test("a dialog going while the access can't be told keeps the access notice", as
   assert.match(notes(id).at(-1)!, /has gone/);
   assert.equal(noticeThreads()[0]?.id, id);
   assert.equal(noticeThreads()[0]?.needsYou, true);
+});
+
+test('only UserNotificationCenter windows shown at the size of a dialog count', () => {
+  const isDialog = (0, eval)(IS_DIALOG) as (w: unknown, locked: boolean) => boolean;
+  const unc = (Width: number, Height: number, more = {}) => ({ kCGWindowOwnerName: 'UserNotificationCenter', kCGWindowLayer: 8, kCGWindowIsOnscreen: true, kCGWindowBounds: { Width, Height }, ...more });
+  const hidden = { kCGWindowIsOnscreen: undefined };
+  assert.equal(isDialog(unc(262, 202), false), true, 'a real alert');
+  assert.equal(isDialog(unc(262, 202, hidden), false), false, 'a dismissed alert it keeps');
+  assert.equal(isDialog(unc(1004, 30, { ...hidden, kCGWindowLayer: 1000 }), false), false, 'the strip it makes on waking');
+  assert.equal(isDialog(unc(262, 202, hidden), true), true, 'on a locked screen, shown or not');
+  assert.equal(isDialog(unc(1004, 30, { ...hidden, kCGWindowLayer: 1000 }), true), false, 'the strip, even locked');
+  assert.equal(isDialog(unc(4, 2), false), false, 'one queued behind another');
+  assert.equal(isDialog(unc(262, 202, { kCGWindowLayer: 0 }), false), false);
+  assert.equal(isDialog({ ...unc(262, 202), kCGWindowOwnerName: 'Finder' }, false), false);
+});
+
+test('the real probe runs on this Mac', { skip: process.platform !== 'darwin' }, async () => {
+  const n = await realProbe().dialogs();
+  assert.equal(typeof n, 'number');
 });

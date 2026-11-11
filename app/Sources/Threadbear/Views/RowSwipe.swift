@@ -123,14 +123,18 @@ final class RowSwipeController {
                 if !leaving { cancelGesture() }
                 return false
             }
-            swipe.begin(rightTaken: SwipeNavigation.shared.takesFingersRight(inverted: event.isDirectionInvertedFromDevice))
+            swipe.begin(rightTaken: SwipeNavigation.shared.takesBack)
             eatingMomentum = false
         }
         if event.phase.contains(.changed) || event.phase.contains(.began) {
-            // Follow the fingers whichever way the system scrolls: with
-            // natural scrolling the delta already goes the fingers' way.
-            let sign: CGFloat = event.isDirectionInvertedFromDevice ? 1 : -1
-            return move(dx: event.scrollingDeltaX * sign, dy: event.scrollingDeltaY)
+            // The row moves the way the system scrolls content, as a page
+            // swipe does: so archiving (the row going left) is never the
+            // same gesture as Back (content going right). With natural
+            // scrolling that's the fingers' way; without, the other way.
+            // It followed the fingers until 9 Nov, and with natural
+            // scrolling off Mike's swipe left over a row archived it where
+            // he meant Back ("Back wins").
+            return move(dx: event.scrollingDeltaX, dy: event.scrollingDeltaY)
         }
         if event.phase.contains(.ended) {
             let wasSwiping = swipe.isSwiping
@@ -223,7 +227,7 @@ enum RowSwipeEvents {
     /// than the sidebar's rows.
     /// `content`: `dx` and `dy` are the content's way instead (positive
     /// right and down as it scrolls), the same whatever the system's
-    /// natural scrolling is, for page swipes, where right is Back.
+    /// natural scrolling is: what rows and page swipes go by.
     static func event(dx: Double, dy: Double = 0, phase: Phase, middle: Bool = false, content: Bool = false) -> NSEvent? {
         guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: 0, wheel3: 0) else { return nil }
         cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)

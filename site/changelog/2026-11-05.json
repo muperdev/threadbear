@@ -1,0 +1,49 @@
+{
+  "release": "2026-11-05",
+  "highlights": [
+    {
+      "kind": "added",
+      "title": "Give an agent a password without it landing in the thread",
+      "text": "When an agent needs a password or key, it asks with a private card on the Mac or iPhone instead of in its reply. What you type goes only to the computer running the agent (sealed on the way from your phone), never into the transcript, and it's deleted after 24 hours.",
+      "media": {
+        "type": "image",
+        "src": "password-card.webp",
+        "width": 1004,
+        "height": 645,
+        "alt": "A thread with the card asking for the Mac administrator password, with a box to paste it, Save securely and Decline"
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Pick several designs, or none, when an agent shows you options",
+      "text": "Each option's screenshots now sit together in the options window, so you can step through them, tick as many options as you like or None, and answer in one reply box. Hold Space to see today's version in place of the option on show.",
+      "media": {
+        "type": "image",
+        "src": "pick-several.webp",
+        "width": 683,
+        "height": 1130,
+        "alt": "The options window's list with options A and C both ticked, a reply typed underneath and a Send A + C button"
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Threads carry on after a restart",
+      "text": "If your Mac restarts or Threadbear crashes while an agent is replying, the thread picks up where it stopped. A thread waiting for the internet says Waiting for connection on its row, on the Mac and iPhone, rather than Failed."
+    }
+  ],
+  "added": [
+    "Middle-click a link in a thread to open it, as a click does",
+    "Threadbear's code is public under the MIT licence, with a guide to making your own copy"
+  ],
+  "changed": [
+    "Thread rows name their project or folder again. A thread that a schedule, tool or another agent started shows a small mark first: hover it to see who started it and why",
+    "Editing a message you just sent asks first when the thread has work running in the background, since going back stops it",
+    "Copying from a thread keeps its links, bold, italic and code when you paste into Slack or a web page",
+    "On the iPhone, your answer to an options review shows each pick, None and your reply on lines of their own"
+  ],
+  "fixed": [
+    "Clicking the thread, the message box or a panel while Threadbear isn't the app in front now does what you clicked, not just bring the window forward",
+    "File paths with spaces in an agent's reply open as links",
+    "Automatic updates no longer stay stuck on an older version after a hiccup while building the new one"
+  ]
+}

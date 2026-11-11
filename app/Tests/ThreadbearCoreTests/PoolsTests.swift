@@ -212,10 +212,7 @@ final class PoolsTests: XCTestCase {
         XCTAssertEqual(Pools.waitingLine(WaitingForRoom(until: at(17, 1)), now: now, calendar: calendar), "Waiting for room · 5:01 pm")
         XCTAssertEqual(Pools.waitingLine(WaitingForRoom(until: at(day: 28, 5)), now: now, calendar: calendar), "Waiting for room · tomorrow 5:00 am")
         XCTAssertEqual(Pools.waitingLine(WaitingForRoom(until: at(9)), now: now, calendar: calendar), "Waiting for room · any moment now")
-        XCTAssertEqual(Pools.waitingSentence(poolTitle: "Claude", WaitingForRoom(until: at(day: 28, 5)), now: now, calendar: calendar),
-                       "Every login in Claude is out of room. It carries on by itself tomorrow at 5:00 am.")
-        XCTAssertEqual(Pools.waitingSentence(poolTitle: "Claude", WaitingForRoom(until: at(9)), now: now, calendar: calendar),
-                       "Every login in Claude is out of room. It carries on any moment now.")
+        XCTAssertEqual(Pools.waitingTime(at(day: 28, 5), now: now, calendar: calendar), "tomorrow 5:00 am")
     }
 
     // MARK: Settings

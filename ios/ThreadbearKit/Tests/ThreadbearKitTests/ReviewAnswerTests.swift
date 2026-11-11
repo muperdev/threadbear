@@ -10,6 +10,15 @@ import Testing
         #expect(answer?.lines == [.init(label: "End of turn: summary + what's next", text: "Picked A: summary is the agent's last message")])
     }
 
+    // The runner names the options he passed over for the agent; his bubble doesn't.
+    @Test func whatHePassedOverIsLeftOut() {
+        let text = "Review: Run commands (\(Self.id))\n\nPicked A. Small play button.\n\nNotes on A (Small play button): Nice\n\nPassed over: B. Run card. \(ReviewAnswer.passedOverTail)"
+        #expect(ReviewAnswer.parse(text)?.lines == [
+            .init(label: "Run commands", text: "Picked A: Small play button"),
+            .init(label: "Notes on A: Small play button", text: "Nice"),
+        ])
+    }
+
     @Test func notesKeepTheirParagraphsAndBrackets() {
         let text = "Review: Picker (\(Self.id))\n\nPicked B. One picker.\n\nNotes on A (Auto (smart)): Too clever.\n\nSecond thought.\n\nNotes on B (One picker): Ship it"
         #expect(ReviewAnswer.parse(text)?.lines == [

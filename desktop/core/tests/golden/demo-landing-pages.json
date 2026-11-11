@@ -1,0 +1,113 @@
+{
+  "closed" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Rebuild the home, pricing and docs landing pages with the new design. One sub-agent each, in the ba…",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "g:t:turn_1_a1",
+      "inGroup" : false,
+      "kind" : "group",
+      "seq" : 3,
+      "text" : "Worked for 9s",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 9,
+      "text" : "Three sub-agents are on it, one page each. I'll come back here as each one finishes.",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 10,
+      "text" : "9s, $0.03",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "bg:",
+      "inGroup" : false,
+      "kind" : "background",
+      "seq" : 10,
+      "text" : "3 sub-agents working in the background · Rebuild the home page, Rebuild the pricing page, Rebuild t…"
+    }
+  ],
+  "open" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Rebuild the home, pricing and docs landing pages with the new design. One sub-agent each, in the ba…",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : true,
+      "id" : "g:t:turn_1_a1",
+      "inGroup" : false,
+      "kind" : "group",
+      "seq" : 3,
+      "text" : "Worked for 9s",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:turn_1_a1",
+      "inGroup" : true,
+      "kind" : "tool",
+      "seq" : 3,
+      "text" : "Rebuild the home page",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:turn_1_a2",
+      "inGroup" : true,
+      "kind" : "tool",
+      "seq" : 5,
+      "text" : "Rebuild the pricing page",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:turn_1_a3",
+      "inGroup" : true,
+      "kind" : "tool",
+      "seq" : 7,
+      "text" : "Rebuild the docs page",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 9,
+      "text" : "Three sub-agents are on it, one page each. I'll come back here as each one finishes.",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 10,
+      "text" : "9s, $0.03",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "bg:",
+      "inGroup" : false,
+      "kind" : "background",
+      "seq" : 10,
+      "text" : "3 sub-agents working in the background · Rebuild the home page, Rebuild the pricing page, Rebuild t…"
+    }
+  ]
+}

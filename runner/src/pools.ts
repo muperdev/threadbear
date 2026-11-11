@@ -6,6 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Account, Pool, Provider, UsageWindow } from './protocol.ts';
 import { PROVIDERS } from './protocol.ts';
+import { providerName } from './providers.ts';
+import { ACP_AGENTS, ACP_PROVIDERS } from './adapters/acp/agents.ts';
 import { accountRoom, MIN_ROOM_PERCENT, resetTime } from './usage.ts';
 
 // How long a wait lasts when no login in the pool says when it's back, and
@@ -13,8 +15,6 @@ import { accountRoom, MIN_ROOM_PERCENT, resetTime } from './usage.ts';
 export const UNKNOWN_WAIT_MS = 30 * 60_000;
 // A wait ends a minute after the reset, so the provider has caught up.
 export const WAIT_SLACK_MS = 60_000;
-
-const PROVIDER_TITLES: Record<Provider, string> = { claude: 'Claude', codex: 'Codex', grok: 'Grok', devin: 'Devin' };
 
 // The built-in list, worked out from the logins found: one pool per
 // provider holding its logins that have no note, then one per noted login
@@ -28,7 +28,7 @@ export function defaultPools(accounts: Account[], notes: Record<string, string>,
   for (const provider of PROVIDERS) {
     const mine = accounts.filter((a) => a.provider === provider);
     const plain = mine.filter((a) => !noteOf(a));
-    if (plain.length) out.push(withFolders({ id: provider, title: PROVIDER_TITLES[provider], accountIds: plain.map((a) => a.id), builtIn: true }, plain, folders));
+    if (plain.length) out.push(withFolders({ id: provider, title: providerName(provider), accountIds: plain.map((a) => a.id), builtIn: true }, plain, folders));
     for (const a of mine.filter((x) => noteOf(x))) {
       const word = noteOf(a)!.split(/\s+/)[0].replace(/[^\p{L}\p{N}_-]/gu, '');
       let id = word.toLowerCase();
@@ -47,7 +47,10 @@ function withFolders(pool: Pool, members: Account[], folders: Record<string, str
 // The pools in force: runner.json's `pools` when it has any, else the
 // built-in ones. A runner.json entry of the wrong shape is skipped.
 export function readPools(cfg: { pools?: unknown; accountNotes?: Record<string, string> }, accounts: Account[], folders: Record<string, string[]> = {}): Pool[] {
-  const saved = Array.isArray(cfg.pools) ? cfg.pools.map(shapeOf).filter((p): p is Pool => !!p) : [];
+  // A saved pool of nothing but an ACP agent this runner doesn't offer (the
+  // experiment off) isn't there.
+  const missing = ACP_PROVIDERS.map((p) => ACP_AGENTS[p].accountId).filter((id) => !accounts.some((a) => a.id === id));
+  const saved = (Array.isArray(cfg.pools) ? cfg.pools.map(shapeOf).filter((p): p is Pool => !!p) : []).filter((p) => !p.accountIds.length || !p.accountIds.every((id) => missing.includes(id)));
   if (saved.length) return saved;
   return defaultPools(accounts, cfg.accountNotes ?? {}, folders);
 }

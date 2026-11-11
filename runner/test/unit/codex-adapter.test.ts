@@ -670,8 +670,12 @@ test('subagents: traffic is marked with the child id, approvals reach this sink 
   h.conn.notify('item/started', { threadId: 'th-1', turnId: 'u1', item: { type: 'subAgentActivity', id: 'sa-1', kind: 'started', agentThreadId: 'child-1', agentPath: '/root/image_color' } });
   h.conn.notify('turn/started', { threadId: 'child-1', turn: { id: 'cu1', rootTurnId: 'u1', status: 'inProgress' } });
   h.conn.notify('item/started', { threadId: 'child-1', turnId: 'cu1', item: { type: 'imageView', id: 'exec-v', path: '/w/swatch.png' } });
-  h.conn.notify('item/completed', { threadId: 'child-1', turnId: 'cu1', item: { type: 'imageView', id: 'exec-v', path: '/w/swatch.png' } });
+  // The completion goes once the start is through, and the test waits for
+  // it too: seeing the start's item doesn't mean the completion has reached
+  // the normalizer, and on a loaded run it hadn't (emilsbauga's fork, 8 Nov).
   await waitFor(() => h.rec.itemIds().includes('child-1/exec-v'));
+  h.conn.notify('item/completed', { threadId: 'child-1', turnId: 'cu1', item: { type: 'imageView', id: 'exec-v', path: '/w/swatch.png' } });
+  await waitFor(() => h.norm.calls.some((c) => c.method === 'item/completed' && c.from?.childThreadId === 'child-1'));
   const childCalls = h.norm.calls.filter((c) => c.from);
   assert.deepEqual(childCalls.map((c) => [c.method, c.from!.childThreadId]), [['turn/started', 'child-1'], ['item/started', 'child-1'], ['item/completed', 'child-1']]);
   assert.equal(h.rec.kinds().includes('cliTurn'), false, "a child's turn is never a cliTurn");

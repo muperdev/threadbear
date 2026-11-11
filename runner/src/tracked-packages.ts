@@ -17,10 +17,10 @@
 // packages stay as they are. When git can't say what it tracks (it fails,
 // or the folder isn't a git checkout but has a node_modules), patch trust
 // can't tell an installed package from a shipped one, so it fails closed.
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { isBuiltin } from 'node:module';
 import path from 'node:path';
+import { untrustedGitSync } from './safe-git.ts';
 import type { Reads } from './script-trust.ts';
 
 // What git tracks under node_modules in one repo: `files`, by path (links
@@ -48,19 +48,9 @@ const MAX_SUBMODULES = 50;
 type Listing = { files: Set<string>; links: Set<string>; indexes: string[]; lower: Set<string> };
 const cache = new Map<string, { key: string; out: Listing }>();
 
-// git, without anything a repo's own config could make it run: a folder
-// from a zip can carry a .git/config with core.fsmonitor set, which `git
-// ls-files` would start.
+// git, without anything a repo's own config could make it run (safe-git.ts).
 function git(dir: string, args: string[]): string {
-  const env = { ...process.env };
-  for (const k of Object.keys(env)) if (k.startsWith('GIT_')) delete env[k];
-  return execFileSync('git', ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-C', dir, ...args], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'ignore'],
-    timeout: 10_000,
-    maxBuffer: 64 * 1024 * 1024,
-    env,
-  });
+  return untrustedGitSync(dir, args);
 }
 
 // What the index files look like now: a cached listing holds while this is

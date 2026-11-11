@@ -69,12 +69,32 @@ public struct ReplyButton: Sendable, Hashable, Decodable, Identifiable {
         public init(at: String, error: String) { self.at = at; self.error = error }
     }
 
+    /// A command on an ask card, which only the runner makes.
+    public struct Run: Sendable, Hashable, Decodable {
+        public var command: String
+        public var cwd: String
+        public init(command: String, cwd: String) { self.command = command; self.cwd = cwd }
+    }
+
+    public struct Ran: Sendable, Hashable, Decodable {
+        public var ok: Bool
+        public var exitCode: Int?
+        public var durationMs: Int
+    }
+
+    public struct Running: Sendable, Hashable, Decodable {
+        public var at: String
+    }
+
     public var id: String
     public var title: String
     public var createdAt: String
     public var turnId: String?
     public var start: Start?
     public var send: Send?
+    public var run: Run?
+    public var running: Running?
+    public var ran: Ran?
     public var pressed: Pressed?
     public var failed: Failed?
 
@@ -98,11 +118,14 @@ public struct ReplyButton: Sendable, Hashable, Decodable, Identifiable {
         turnId = try? c.decodeIfPresent(String.self, forKey: .turnId)
         start = try? c.decodeIfPresent(Start.self, forKey: .start)
         send = try? c.decodeIfPresent(Send.self, forKey: .send)
+        run = try? c.decodeIfPresent(Run.self, forKey: .run)
+        running = try? c.decodeIfPresent(Running.self, forKey: .running)
+        ran = try? c.decodeIfPresent(Ran.self, forKey: .ran)
         pressed = try? c.decodeIfPresent(Pressed.self, forKey: .pressed)
         failed = try? c.decodeIfPresent(Failed.self, forKey: .failed)
     }
 
-    enum CodingKeys: String, CodingKey { case id, title, createdAt, turnId, start, send, pressed, failed }
+    enum CodingKeys: String, CodingKey { case id, title, createdAt, turnId, start, send, run, running, ran, pressed, failed }
 
     /// Whether this snapshot is newer than `old`. A button only moves
     /// forward (made, then failed any number of times, then pressed for
@@ -112,11 +135,13 @@ public struct ReplyButton: Sendable, Hashable, Decodable, Identifiable {
     public func supersedes(_ old: ReplyButton) -> Bool {
         if old.pressed != nil { return false }
         if pressed != nil { return true }
-        switch (failed, old.failed) {
+        // Running and failing can alternate (a run pressed again), so the
+        // later of the two moments wins.
+        switch (running?.at ?? failed?.at, old.running?.at ?? old.failed?.at) {
         case (nil, nil): return self != old
         case (nil, _?): return false
         case (_?, nil): return true
-        case let (new?, previous?): return new.at > previous.at || (new.at == previous.at && self != old)
+        case let (new?, previous?): return new > previous || (new == previous && self != old)
         }
     }
 }

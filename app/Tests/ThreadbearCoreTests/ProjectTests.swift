@@ -621,4 +621,17 @@ final class ProjectTests: XCTestCase {
         XCTAssertEqual(LibrarianText.why(LibrarianJob(threadId: "t", reason: .moved)), "Moved to another folder")
         XCTAssertEqual(LibrarianText.why(LibrarianJob(threadId: "t", reason: .moved, why: "Moved to ~/dev/poddle")), "Moved to ~/dev/poddle")
     }
+
+    func testLibrarianEntryKeepsWhyItFiledAThread() throws {
+        let json = #"{"id":"a","threadId":"t","projectIds":["p1","p2","p3"],"reasons":{"p1":"Plans the walk route","p3":"Fixes its site"},"why":"Dog walking"}"#
+        let entry = try JSONDecoder().decode(LibrarianEntry.self, from: Data(json.utf8))
+        XCTAssertEqual(entry.why, "Dog walking")
+        // In the row's order; a project that's gone keeps its reason, and
+        // one with no reason adds no line.
+        XCTAssertEqual(LibrarianText.filingReasons(entry) { $0 == "p1" ? "Walkies" : nil }, ["Walkies: Plans the walk route", "Fixes its site"])
+        // An older runner's entry has neither.
+        let old = try JSONDecoder().decode(LibrarianEntry.self, from: Data(#"{"id":"b","threadId":"t"}"#.utf8))
+        XCTAssertEqual(old.reasons, [:])
+        XCTAssertNil(old.why)
+    }
 }

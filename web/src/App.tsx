@@ -12,6 +12,8 @@ import { api } from '../../convex/_generated/api';
 import type { Id } from '../../convex/_generated/dataModel';
 import { go, threadPath, useRoute } from './route';
 import { useToken } from './token';
+import { RunCommand } from './run-command';
+import { lastWorkedOn, recapDue, recapParts } from './view-logic';
 import { MessageText, Pictures, picturesByRow, ToolRun, Worked, type PageMessage } from './messages';
 import { ReplyButton } from './reply-button';
 import { CommandState } from './command-state';
@@ -289,6 +291,7 @@ function ThreadView({ token, threadId }: { token: string; threadId: string }) {
 
       <div className="dock">
         {pending ? <CommandState token={token} commandId={pending} onDone={() => setPending(null)} /> : null}
+        <RecapBox thread={t} />
         <Dock token={token} thread={t} lastSeq={lastSeq} onSent={setPending} onArchive={() => void act({ archive: true })} />
       </div>
     </article>
@@ -322,10 +325,56 @@ function MoreMenu({ items }: { items: ({ label: string; icon: ReactNode; run: ()
 
 // What sits at the bottom, in one rounded box as on the Mac: an approval or
 // question the CLI is waiting on, else the end_turn card of asks, else the
-// done card's follow-ups, then the composer under it.
+// done card's follow-ups, then the composer under it (Dock, below).
+
+// What a thread that has sat for a while is for and where it stands, above
+// the message box (docs/protocol.md, "The recap box"). × is remembered in
+// this browser, for this quiet spell.
+function RecapBox({ thread: t }: { thread: Row }) {
+  const key = `recap-away:${t.threadId}`;
+  const [dismissed, setDismissed] = useState(() => localStorage.getItem(key));
+  useEffect(() => setDismissed(localStorage.getItem(key)), [key]);
+  if (!recapDue(t, dismissed, Date.now()) || !t.recap) return null;
+  const { purpose, points } = recapParts(t.recap);
+  return (
+    <section className="recap">
+      <button
+        type="button"
+        className="recap-close"
+        title="Put this away"
+        aria-label="Put this away"
+        onClick={() => {
+          localStorage.setItem(key, t.lastActivityAt);
+          setDismissed(t.lastActivityAt);
+        }}
+      >
+        <Icon.Close />
+      </button>
+      {purpose ? <p>{purpose}</p> : null}
+      <ul>{points.map((p, i) => <li key={i}>{p}</li>)}</ul>
+      <p className="recap-when">{lastWorkedOn(t.lastActivityAt, Date.now())}</p>
+    </section>
+  );
+}
+
 function Dock({ token, thread: t, lastSeq, onSent, onArchive }: { token: string; thread: Row; lastSeq?: number; onSent: (id: Id<'commands'>) => void; onArchive: () => void }) {
   const send = useMutation(api.phone.send);
+  const interrupt = useMutation(api.phone.interrupt);
   const [text, setText] = useState('');
+  // Stop pressed: a spinner in its place until the turn has stopped (or the
+  // press failed), so it can't be pressed twice meanwhile.
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => {
+    if (!busy(t)) setStopping(false);
+  }, [t.status]);
+  const stop = async () => {
+    setStopping(true);
+    try {
+      await interrupt({ token, threadId: t.threadId });
+    } catch {
+      setStopping(false);
+    }
+  };
   // Picks on the card of asks: ask index to choice index, for one card.
   const [picks, setPicks] = useState<{ card?: number; by: Record<number, number> }>({ by: {} });
   const [ticked, setTicked] = useState<{ seq?: number; set: Set<number> }>({ set: new Set() });
@@ -363,6 +412,7 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive }: { token: string;
               </div>
             ) : null}
           </div>
+          {a.run ? <RunCommand token={token} threadId={t.threadId} run={a.run} /> : null}
           {a.links?.length ? (
             <div className="ask-links">
               {a.links.map((l) => (
@@ -379,7 +429,10 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive }: { token: string;
                   <span className="radio" />
                   <span>
                     {c}
-                    {a.suggested === n ? <span className="pick">my pick</span> : null}
+                    {a.suggested === n ? <span className="pick"><span className="star" aria-hidden>★</span> Recommended</span> : null}
+                    {/* What the answer does, under it as on the Mac and the phone. The
+                        parity run's first look at the website found it missing (9 Nov). */}
+                    {a.options?.length && a.optionNotes?.[n]?.trim() ? <span className="desc">{a.optionNotes[n]}</span> : null}
                   </span>
                 </button>
               ))}
@@ -446,9 +499,23 @@ function Dock({ token, thread: t, lastSeq, onSent, onArchive }: { token: string;
         />
         <div className="tools-row">
           <span className="grow" />
-          <button className="send" disabled={!ready} aria-label="Send" title="Send">
-            <Icon.Up />
-          </button>
+          {busy(t) && !ready ? (
+            // Stop only while nothing's typed, as on the Mac: a message
+            // typed during a turn goes into it.
+            stopping ? (
+              <button type="button" className="send" disabled aria-label="Stopping" title="Stopping">
+                <span className="spinner" />
+              </button>
+            ) : (
+              <button type="button" className="send" onClick={() => void stop()} aria-label="Stop" title="Stop">
+                <Icon.Stop />
+              </button>
+            )
+          ) : (
+            <button className="send" disabled={!ready} aria-label="Send" title="Send">
+              <Icon.Up />
+            </button>
+          )}
         </div>
       </form>
     </div>

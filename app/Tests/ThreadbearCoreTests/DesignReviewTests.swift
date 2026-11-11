@@ -158,6 +158,13 @@ final class DesignReviewTests: XCTestCase {
         XCTAssertEqual(reply?.lines, [.init(label: "End of turn: summary + what's next", text: "Picked A: summary is the agent's last message")])
     }
 
+    // The runner names the options he passed over for the agent; his bubble doesn't.
+    func testReviewReplyLeavesOutWhatHePassedOver() {
+        let text = "Review: Run commands (\(Self.id))\n\nPicked A. Small play button.\n\nPassed over: B. Run card; C. Chip. \(ReviewAnswer.passedOverTail)"
+        let reply = ReviewAnswer.parse(text, reviewId: Self.id, response: ReviewDraft(pickedId: "A"))
+        XCTAssertEqual(reply?.lines, [.init(label: "Run commands", text: "Picked A: Small play button")])
+    }
+
     func testReviewReplyNotesKeepTheirWordsAndOrder() {
         let text = "Review: Picker (r1)\n\nPicked B. One picker.\n\nNotes on A (Auto (smart)): Too clever.\n\nWith a gap): there\n\nNotes on B (One picker): Ship it"
         let reply = ReviewAnswer.parse(text, reviewId: "r1", response: ReviewDraft(pickedId: "B", notes: ["B": "Ship it", "A": "Too clever.\n\nWith a gap): there"]))

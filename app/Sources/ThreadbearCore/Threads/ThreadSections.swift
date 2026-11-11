@@ -169,7 +169,7 @@ public struct ThreadSections: Sendable, Equatable {
     }
 
     private static func wantsYou(_ thread: ThreadSummary) -> Bool {
-        thread.reviewWaiting || thread.status == .waiting || thread.needsYou
+        InboxUrgency.counts(urgency(thread))
     }
 
     /// For each thread a schedule will message by itself, the one due
@@ -185,15 +185,11 @@ public struct ThreadSections: Sendable, Equatable {
         return soonest
     }
 
-    /// How much an inbox thread wants Mike, lowest first. 0: stuck on his
-    /// answer to a question or approval. 1: finished unread with a failure
-    /// or cut-off turn. 2: finished unread. 3: read, but its last turn
-    /// failed or was stopped, so it's still not done. 4: read and done.
+    /// How much an inbox thread wants Mike, lowest first (InboxUrgency,
+    /// the rule the phone reads too).
     public static func urgency(_ thread: ThreadSummary) -> Int {
-        let broken = thread.status == .error || thread.status == .stopped
-        if thread.reviewWaiting || thread.status == .waiting { return 0 }
-        if thread.needsYou { return broken ? 1 : 2 }
-        return broken ? 3 : 4
+        InboxUrgency.of(answerWaiting: thread.reviewWaiting || thread.status == .waiting, needsYou: thread.needsYou,
+                        broken: thread.status == .error || thread.status == .stopped)
     }
 
     /// The threads waiting on Mike or not read yet (the Dock badge): a star
@@ -307,6 +303,77 @@ public enum CostText {
         if cost >= 0.01 { return String(format: "$%.2f", cost) }
         if cost >= 0.001 { return String(format: "$%.3f", cost) }
         return "<$0.001"
+    }
+}
+
+/// A turn's tokens, for its footer: "1.7k out · 381k in". The footer showed
+/// what the turn would cost at API prices, which read like a bill on a
+/// subscription, and Codex turns had nothing (Mike, 9 Nov 2026). Each step
+/// of a turn sends the whole conversation again, mostly from the cache, so
+/// "in" counts cache reads and writes too, like the Usage panel, and the
+/// tip breaks them out with the dollars.
+public struct TurnTokens: Sendable, Equatable {
+    /// Read fresh, not from the cache.
+    public var input: Int
+    public var output: Int
+    public var cacheRead: Int
+    public var cacheWrite: Int
+
+    public init(input: Int = 0, output: Int = 0, cacheRead: Int = 0, cacheWrite: Int = 0) {
+        self.input = input
+        self.output = output
+        self.cacheRead = cacheRead
+        self.cacheWrite = cacheWrite
+    }
+
+    /// From a turn's `usage`: Claude's `{inputTokens, outputTokens,
+    /// cacheReadTokens, cacheWriteTokens}`, or Codex's, whose inputTokens
+    /// includes its cachedInputTokens. Nil with no tokens at all.
+    public init?(usage: JSONValue?) {
+        guard let usage, case .object = usage else { return nil }
+        func count(_ key: String) -> Int { max(0, Int(saturating: usage[key]?.doubleValue ?? 0)) }
+        if usage["cachedInputTokens"] != nil {
+            cacheRead = count("cachedInputTokens")
+            input = max(0, count("inputTokens") - cacheRead)
+        } else {
+            cacheRead = count("cacheReadTokens")
+            input = count("inputTokens")
+        }
+        output = count("outputTokens")
+        cacheWrite = count("cacheWriteTokens")
+        guard read > 0 || output > 0 else { return nil }
+    }
+
+    /// Everything the model read, the cache included.
+    public var read: Int { input.adding(saturating: cacheRead).adding(saturating: cacheWrite) }
+
+    /// Claude's shape, which `init(usage:)` reads back the same, for a
+    /// footer that adds up several turns.
+    public var usage: JSONValue {
+        .object(["inputTokens": .number(Double(input)), "outputTokens": .number(Double(output)),
+                 "cacheReadTokens": .number(Double(cacheRead)), "cacheWriteTokens": .number(Double(cacheWrite))])
+    }
+
+    public static func + (a: TurnTokens, b: TurnTokens) -> TurnTokens {
+        TurnTokens(input: a.input.adding(saturating: b.input), output: a.output.adding(saturating: b.output),
+                   cacheRead: a.cacheRead.adding(saturating: b.cacheRead), cacheWrite: a.cacheWrite.adding(saturating: b.cacheWrite))
+    }
+
+    /// "1.7k out · 381k in"
+    public var footer: String {
+        "\(UsageStatsMath.tokens(output)) out · \(UsageStatsMath.tokens(read)) in"
+    }
+
+    /// "1.7k tokens out, 381k in (337k cache reads, 44k cache writes, 16
+    /// uncached). $0.45 at API prices, not what a subscription charges."
+    public func tip(costUsd: Double?) -> String {
+        let parts = [(cacheRead, "cache reads"), (cacheWrite, "cache writes"), (input, "uncached")]
+            .filter { $0.0 > 0 }.map { "\(UsageStatsMath.tokens($0.0)) \($0.1)" }
+        var text = "\(UsageStatsMath.tokens(output)) tokens out, \(UsageStatsMath.tokens(read)) in"
+        if parts.count > 1 { text += " (" + parts.joined(separator: ", ") + ")" }
+        text += "."
+        if let cost = CostText.format(costUsd) { text += " \(cost) at API prices, not what a subscription charges." }
+        return text
     }
 }
 

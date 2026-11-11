@@ -240,6 +240,22 @@ export const ACCESS: Record<string, Access> = {
   closeRequest: 'own',
   appendBodies: 'own',
   addHeldPicture: 'own',
+  // moves.ts (API 64): only the main Mac starts or cancels a move; each
+  // step is the move's own runner on that side, which the function checks.
+  startMove: 'owner',
+  cancelMove: 'owner',
+  moves: 'own',
+  moveInfo: 'own',
+  moveReady: 'own',
+  moveFrozen: 'own',
+  moveChunkUrl: 'own',
+  movePacked: 'own',
+  moveChunks: 'own',
+  moveClaim: 'own',
+  moveDone: 'own',
+  moveFailed: 'own',
+  // The main Mac's own uploads for a move that ended first (moves.ts).
+  moveDropChunks: 'owner',
 };
 
 // A runner name as lists show it, for a runner key's heartbeat: folded to

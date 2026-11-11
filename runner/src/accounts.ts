@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { acpAccounts } from './adapters/acp/agents.ts';
+import { experimentOn } from './experiments.ts';
 import path from 'node:path';
 import { isEffortLevel, type Account, type EffortLevel, type ModelChoice } from './protocol.ts';
 import type { UsageStore } from './usage.ts';
@@ -96,7 +98,7 @@ export function isDevinLogin(dir: string): boolean {
 }
 
 export type DiscoveryConfig = Pick<Config, 'claudeMainDir' | 'claudeMainJson' | 'tokenStatsAccountsDir'> &
-  Partial<Pick<Config, 'codexMainDir' | 'grokMainDir' | 'devinMainDir' | 'accountNotes' | 'accountsDir'>> & {
+  Partial<Pick<Config, 'codexMainDir' | 'grokMainDir' | 'devinMainDir' | 'accountNotes' | 'accountsDir' | 'home' | 'cursorPath' | 'opencodePath'>> & {
     // Whether Grok logins are listed (the grok experiment), asked on every scan.
     grokOn?: () => boolean;
     // The same for Devin's (the devin experiment). Only devin-main for now.
@@ -147,6 +149,9 @@ export function discoverAccounts(cfg: DiscoveryConfig): Account[] {
   }
   if (cfg.devinOn?.() && cfg.devinMainDir && isDevinLogin(cfg.devinMainDir)) {
     out.push({ id: 'devin-main', provider: 'devin', title: providerTitle('devin', undefined, 'devin-main'), configDir: cfg.devinMainDir });
+  }
+  if (cfg.home && experimentOn(cfg.home, 'acpAgents')) {
+    out.push(...acpAccounts({ paths: { cursor: cfg.cursorPath, opencode: cfg.opencodePath } }));
   }
   for (const a of out) {
     const note = cfg.accountNotes?.[a.id];
@@ -267,7 +272,9 @@ export class AccountRegistry {
     const id = this.usage.identityFor(account);
     if (id.email) out.email = id.email;
     if (id.plan) out.plan = id.plan;
-    out.title = providerTitle(out.provider, out.email, out.id);
+    if (out.provider === 'claude' || out.provider === 'codex' || out.provider === 'grok' || out.provider === 'devin') {
+      out.title = providerTitle(out.provider, out.email, out.id);
+    }
     const usage = this.usage.usageFor(out);
     if (usage) out.usage = usage;
     return out;

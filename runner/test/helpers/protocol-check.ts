@@ -68,6 +68,7 @@ const PERSISTED: Record<string, (e: Obj) => string | null> = {
     (e.itemId === undefined || isStr(e.itemId)) &&
     isStr(e.name) &&
     isStr(e.title) &&
+    (e.reason === undefined || isStr(e.reason)) &&
     e.input &&
     Array.isArray(e.options) &&
     e.options.every((o: string) => ['allow', 'allowAlways', 'deny'].includes(o))
@@ -112,7 +113,7 @@ const PERSISTED: Record<string, (e: Obj) => string | null> = {
   'action.run': (e) =>
     isStr(e.actionId) && isStr(e.patch) && isStr(e.title) && isStr(e.command) && typeof e.ok === 'boolean' &&
     (e.exitCode === undefined || isNum(e.exitCode)) && isStr(e.text) && typeof e.truncated === 'boolean' && isNum(e.durationMs) &&
-    (e.trigger === undefined || e.trigger === 'turn.end' || e.trigger === 'worktree.setup')
+    (e.trigger === undefined || e.trigger === 'turn.end' || e.trigger === 'worktree.setup' || e.trigger === 'worktree.teardown')
       ? null
       : 'actionId, patch, title, command, ok, exitCode?, text, truncated, durationMs, trigger?',
   'thread.rewound': (e) =>
@@ -182,6 +183,7 @@ export function checkSummary(t: Obj): string[] {
   if (t.archivedBy !== undefined && (!['mike', 'agent', 'threadbear'].includes(t.archivedBy as string) || t.archivedAt === undefined)) problems.push('archivedBy');
   if (t.archiveVerdict !== undefined && (!['worked', 'didntWork', 'notNeeded'].includes(t.archiveVerdict as string) || t.archivedAt === undefined)) problems.push('archiveVerdict');
   if (t.poolId !== undefined && (!isStr(t.poolId) || !t.poolId)) problems.push('poolId');
+  if (t.carryOnAtReset !== undefined && t.carryOnAtReset !== false) problems.push('carryOnAtReset');
   if (t.waitingForRoom !== undefined) {
     const w = t.waitingForRoom;
     const ok = w && typeof w === 'object' && isIso(w.until) && (w.accountId === undefined || isStr(w.accountId)) && Object.keys(w).every((k) => ['until', 'accountId'].includes(k));
@@ -318,9 +320,9 @@ export function checkSummary(t: Obj): string[] {
   const allowed = new Set([
     'id', 'title', 'cwd', 'accountId', 'provider', 'model', 'permissionMode', 'status', 'live', 'needsYou', 'createdAt', 'updatedAt',
     'lastActivityAt', 'snoozedUntil', 'snoozedUntilRestart', 'snoozedUntilRelease', 'archivedAt', 'archivedBy', 'archiveVerdict', 'starredAt', 'preview', 'lastSeq', 'lastSeenSeq', 'nativeSessionId', 'contextTokens', 'costUsd',
-    'poolId', 'waitingForRoom', 'waitingForNetwork', 'wakeWhen', 'waitingOn',
+    'poolId', 'waitingForRoom', 'carryOnAtReset', 'waitingForNetwork', 'wakeWhen', 'waitingOn',
     'effort', 'fastMode', 'modelInUse', 'effortInUse', 'contextWindow', 'panels', 'actions', 'hooks', 'patches', 'background', 'subagents', 'projects', 'worktree',
-    'needs', 'asks', 'asksSeq', 'highlightsAt', 'panelRequest', 'share', 'startedBy', 'asked', 'looseEnds',
+    'needs', 'asks', 'asksSeq', 'highlightsAt', 'panelRequest', 'share', 'startedBy', 'asked', 'recap', 'looseEnds',
   ]);
   for (const k of Object.keys(t)) if (!allowed.has(k)) problems.push(`unexpected field ${k}`);
   return problems;

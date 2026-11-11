@@ -325,7 +325,7 @@ B fills them in. D's rate-limit work in `claude/normalize.ts` never touches them
 | `codexArgs` | (none) | Extra `app-server` args. The e2e uses them to switch features and MCP servers off |
 | `codexMainDir` | `THREADBEAR_CODEX_MAIN_DIR` | `~/.codex` |
 | `tokenStatsLimitsFile` | `THREADBEAR_TOKEN_STATS_LIMITS` | `~/Library/Application Support/Token Stats/limits.json` |
-| `cliUpdates` | `THREADBEAR_CLI_UPDATES=off` | `{ claude: "auto", codex: "auto", checkMinutes: 60, keepCodexVersions: 2 }`. Off in tests and dev runners |
+| `cliUpdates` | `THREADBEAR_CLI_UPDATES=off` | `{ claude: "auto", codex: "auto", checkMinutes: 60, keepCodexVersions: 2, extra: [] }`. `extra` is other CLIs' update commands, `[{ name, command: [...], env? }]`, run daily (`updates/extra.ts`). Off in tests and dev runners |
 | `defaults.models`, `defaults.efforts` | (none) | Unset. A dev runner sets `codex: "gpt-6-luna"` and effort `low` |
 | `accountNotes` | (none) | `{ "claude-2": "Convex work only" }`. A `runner.json` value replaces it. It lives in the code default so nobody has to edit Mike's real `runner.json` |
 

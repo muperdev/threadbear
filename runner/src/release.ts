@@ -163,6 +163,54 @@ export function markGoodLater(home: string, releaseId: string | undefined, log: 
   return () => clearTimeout(timer);
 }
 
+// A runner that won't start because runner.json is broken (config.ts,
+// RunnerJsonError) isn't a broken release. Left as an ordinary failed boot,
+// three of them make launch.mjs go back to the last good release, and one
+// from before 9 Nov reads a broken runner.json as {} and writes over it,
+// the loss the refusal is there to stop. So this boot is marked the way
+// launch.mjs marks a clean stop, which planBoot doesn't count. The file is
+// launch.mjs's to write, so only this process's own boot is touched, and
+// only once launch.mjs has written it (it does just after the spawn).
+export async function markConfigStop(home: string, pid = process.pid, waitMs = 3000, sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))): Promise<boolean> {
+  const mark = (): 'marked' | 'already' | 'none' => {
+    let out: 'marked' | 'already' | 'none' = 'none';
+    try {
+      updateState(home, (s) => {
+        const boot = Array.isArray(s.boots) ? s.boots.findLast((b) => b && b.pid === pid) : undefined;
+        if (!boot) return false;
+        if (boot.clean) {
+          out = 'already';
+          return false;
+        }
+        boot.clean = true;
+        out = 'marked';
+        return true;
+      });
+    } catch {
+      // state.json unreadable or unwritable: nothing to be done from here
+    }
+    return out;
+  };
+  let found = false;
+  for (let waited = 0; ; waited += 100) {
+    if (mark() !== 'none') {
+      found = true;
+      break;
+    }
+    if (waited >= waitMs) return false;
+    await sleep(100);
+  }
+  // launch.mjs may be writing state.json at the same moment (marking a
+  // draining runner's exit clean during a handover) from a copy it read
+  // before this mark, and would put the boot back as failed. Look again a
+  // little later and mark it again if so.
+  for (let i = 0; i < 3; i++) {
+    await sleep(waitMs ? 200 : 0);
+    mark();
+  }
+  return found;
+}
+
 // Whether launch.mjs started this runner as a child it supervises (a
 // LaunchAgent installed since handovers): THREADBEAR_SUPERVISED and an IPC
 // channel to it. Then a handover is possible.

@@ -50,9 +50,6 @@ struct SidebarView: View {
 private struct InboxList: View {
     @Environment(AppModel.self) private var app
 
-    /// How many archived threads the Archived section shows (`ArchiveRows`).
-    @State private var archiveLimit = ArchiveRows.first
-
     var body: some View {
         // The search at the top cuts every section down to its matches.
         let query = app.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -67,7 +64,7 @@ private struct InboxList: View {
         let hibernating = tucking.isEmpty ? sections.hibernating : sections.hibernating.filter { !tucking.contains($0.id) }
         // The Archived section shows the most recent few, or every match
         // while searching.
-        let archive = ArchiveRows.shown(archived, limit: archiveLimit, searching: searching, selection: app.selection)
+        let archive = ArchiveRows.shown(archived, limit: app.archiveLimit, searching: searching, selection: app.selection)
         // Each section's rows as drawn.
         let drawn: (InboxSection) -> [ThreadSummary] = { $0 == .archived ? archive.rows : $0 == .hibernating ? hibernating : sections[$0] }
         // A folded section's rows aren't drawn, so the arrow keys skip
@@ -98,7 +95,7 @@ private struct InboxList: View {
             let dock = ArchiveDock.place(collapsed: app.collapsedSections.contains(.archived), searching: searching)
             let archiveSection = { (select: @escaping (String) -> Void) in
                 ThreadSection(section: .archived, threads: archive.rows, total: archived.count, more: archive.more,
-                              searching: searching, showMore: { archiveLimit += ArchiveRows.step }, select: select)
+                              searching: searching, showMore: { app.archiveLimit += ArchiveRows.step }, select: select)
             }
             ThreadList(order: order, layout: layout, scrollID: { rowIDs[$0] ?? $0 },
                        reveal: searching ? nil : (open: dock == .endOfList, id: ArchiveDock.headingID)) { select in
@@ -679,6 +676,26 @@ enum RowAction {
     case star, snooze, archive, unsnooze, unarchive, delete
 }
 
+/// Its content's own width, up to `limit`. `.frame(maxWidth:)` would grow to
+/// the limit whenever it's offered more, taking room from the text beside a
+/// short name.
+private struct CappedWidth: Layout {
+    var limit: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        subviews.first?.sizeThatFits(ProposedViewSize(width: min(proposal.width ?? limit, limit), height: proposal.height)) ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+    }
+
+    /// Passes the text's baseline up, so it lines up with the project's.
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGFloat? {
+        subviews.first.map { bounds.minY + $0.dimensions(in: ProposedViewSize(bounds.size))[guide] }
+    }
+}
+
 struct ThreadRowView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.controlActiveState) private var activeState
@@ -710,7 +727,10 @@ struct ThreadRowView: View {
     /// Not while one of its sub-agents is showing: that row is highlighted.
     private var isSelected: Bool { app.selection == thread.id && app.subagentSelection == nil && app.openProjectId == nil && !app.showsHomePage }
     /// The screenshot run shows one row as if the pointer were over it.
-    private var pointerOver: Bool { hovering || app.hoverOverride == thread.id }
+    /// While a script has a row hovered, the real pointer doesn't count: on a
+    /// shared desktop it can be resting on another row, whose buttons would
+    /// then show as well and take the script's click.
+    private var pointerOver: Bool { app.hoverOverride.map { $0 == thread.id } ?? hovering }
     /// Archived from somewhere other than a swipe: slides off all the same.
     private var slidingOff: Bool { app.slidingOff.contains(thread.id) }
     /// Not while it's being swiped: the buttons would ride along with it.
@@ -802,6 +822,19 @@ struct ThreadRowView: View {
                                 .font(.system(size: TypeScale.sidebarMeta + 1))
                                 .lineLimit(1)
                                 .tip(ProjectMark.lineTip(thread, under: heading))
+                        }
+                        if let runner = app.runnerLabel(of: thread) {
+                            // Its own text, laid out first: a long project
+                            // name gets cut short before the runner. Capped,
+                            // as `sync.name` can be any length.
+                            CappedWidth(limit: zoomed(100)) {
+                                Text("• \(runner)")
+                                    .font(.system(size: TypeScale.sidebarMeta + 1))
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                            }
+                            .layoutPriority(1)
+                            .tip("On \(runner)")
                         }
                     }
                     .foregroundStyle(.secondary)
@@ -917,9 +950,29 @@ struct ThreadRowView: View {
 
     @ViewBuilder
     private func trailing(_ look: ThreadRowLook) -> some View {
-        // Every login in its pool is out of room; it carries on by itself.
-        // Says so over whatever the turn that ran dry left (often Failed).
-        if mode != .hibernating, let waiting = thread.waitingForRoom, !thread.isArchived {
+        // On its way to another runner (AppModel+Moves), over anything
+        // else: until it lands, nothing it says here will last. A failed
+        // move says so for a minute, with the runner's note in the tip.
+        if let moving = thread.moving {
+            if moving.ended {
+                Text(moving.state == "cancelled" ? "Move cancelled" : "Couldn't move")
+                    .font(.system(size: TypeScale.sidebarMeta, weight: .medium))
+                    .foregroundStyle(moving.state == "cancelled" ? Color.secondary : Color(nsColor: Theme.failed))
+                    .lineLimit(1)
+                    .tip(moving.line)
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: zoomed(5)) {
+                    SpinnerMark(color: .secondaryLabelColor)
+                        .frame(width: zoomed(12), height: zoomed(12))
+                        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + zoomed(4) }
+                    Text("Moving to \(moving.toName)").lineLimit(1).truncationMode(.tail)
+                }
+                .font(.system(size: TypeScale.sidebarMeta, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: zoomed(140), alignment: .trailing)
+                .tip(moving.line)
+            }
+        } else if mode != .hibernating, let waiting = thread.waitingForRoom, !thread.isArchived {
             Text(Pools.waitingLine(waiting, now: app.now))
                 .font(.system(size: TypeScale.sidebarMeta))
                 .foregroundStyle(SidebarMetrics.faint)
@@ -1277,6 +1330,37 @@ struct ThreadMenu: View {
         // aren't in them.
         if app.projectsSupported, !thread.isRemote {
             ThreadProjectsMenu(thread: thread)
+        }
+        if app.canMoveThreads {
+            ThreadMoveMenu(thread: thread)
+        }
+    }
+}
+
+/// "Move to ▸": Mike's other runners, offline ones greyed with "offline",
+/// each moving it there, by way of the Move sheet if there's something to
+/// say first (docs/move-plan.md). While a move is going,
+/// Cancel Move instead.
+struct ThreadMoveMenu: View {
+    @Environment(AppModel.self) private var app
+    let thread: ThreadSummary
+
+    var body: some View {
+        if let moving = thread.moving, !moving.ended {
+            Button("Cancel Move", systemImage: "xmark.circle") { app.cancelMove(thread.id) }
+                .disabled(app.isBusy(BusyKey.moveThread(thread.id)))
+        } else {
+            let targets = app.moveTargets(for: thread)
+            if !targets.isEmpty {
+                IconMenu("Move to", systemImage: "arrow.right.square") {
+                    ForEach(targets) { runner in
+                        Button(runner.online ? runner.name : "\(runner.name), offline", systemImage: runner.icon ?? "desktopcomputer") {
+                            app.openMove(thread.id, to: runner)
+                        }
+                        .disabled(!runner.online)
+                    }
+                }
+            }
         }
     }
 }

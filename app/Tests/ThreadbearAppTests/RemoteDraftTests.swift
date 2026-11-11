@@ -58,6 +58,31 @@ final class RemoteDraftTests: XCTestCase {
         return (app, local, away)
     }
 
+    /// runners.list failed with no network, more than once, and nothing
+    /// about the other runners changes when the network comes back. This
+    /// Mac's rows still get their runner's name, and the asking then stops.
+    func testThisMacsRunnerIsAskedForAgainUntilItsNameIsKnown() async throws {
+        let app = AppModel()
+        app.runnersRetryDelay = .milliseconds(10)
+        let local = RecordingTransport()
+        local.failing["runners.list"] = 2
+        local.answers["runners.list"] = { _ in ["runners": [["id": "r-m5", "name": "M5", "online": true, "self": true]]] }
+        let client = RPCClient(transport: local)
+        try await client.start()
+        app.useClientForTesting(client)
+        app.remoteRunners = [bruce]
+        let here = ThreadSummary(id: "t1", title: "Here", status: .idle)
+        XCTAssertNil(app.runnerLabel(of: here))
+
+        app.loadRunners()
+        try await until { app.runners.contains(where: \.isSelf) }
+        XCTAssertEqual(app.runnerLabel(of: here), "M5")
+
+        // Long enough for another ask to have gone out, if there was one.
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(local.params("runners.list").count, 3)
+    }
+
     private func until(_ condition: () -> Bool) async throws {
         for _ in 0..<400 where !condition() {
             try await Task.sleep(for: .milliseconds(5))
@@ -253,6 +278,8 @@ private final class RecordingTransport: RPCTransport, @unchecked Sendable {
     private var waiter: CheckedContinuation<Data, Error>?
     private var sent: [(method: String, params: [String: Any])] = []
     var answers: [String: ([String: Any]) -> [String: Any]] = [:]
+    /// How many more times a method answers with an error.
+    var failing: [String: Int] = [:]
 
     func open() async throws {}
 
@@ -263,6 +290,15 @@ private final class RecordingTransport: RPCTransport, @unchecked Sendable {
         lock.withLock { sent.append((method, params)) }
         // The auth handshake has no id; nothing to answer.
         guard let id = object["id"] else { return }
+        let fails = lock.withLock { () -> Bool in
+            guard let left = failing[method], left > 0 else { return false }
+            failing[method] = left - 1
+            return true
+        }
+        if fails {
+            push(["jsonrpc": "2.0", "id": id, "error": ["code": -32000, "message": "backend unreachable"]])
+            return
+        }
         let result = answers[method]?(params) ?? [:]
         push(["jsonrpc": "2.0", "id": id, "result": result])
     }

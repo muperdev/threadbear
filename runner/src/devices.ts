@@ -8,6 +8,7 @@
 import type { ConvexSync, Device, DeviceKind } from './sync.ts';
 import { DEVICE_KINDS } from './sync.ts';
 import { ErrorCode, RpcError } from './protocol.ts';
+import { localOnly } from './convex-admin.ts';
 
 export const DEFAULT_DAYS = 90;
 export const MAX_DAYS = 365;
@@ -62,6 +63,8 @@ export function devicesMethods(sync: ConvexSync): Record<string, (p: Record<stri
       }
       const url = sync.url();
       if (!url) throw new RpcError(ErrorCode.other, offMessage(sync));
+      // A pairing link to 127.0.0.1 would send the phone to itself.
+      if (kind === 'phone' && localOnly(url)) throw new RpcError(ErrorCode.other, LOCAL_ONLY_PHONE);
       const site = sync.site();
       if (kind === 'browser' && !site) throw new RpcError(ErrorCode.other, `This runner doesn't know where the website is for ${url}. A self-hosted backend needs sync.site in runner.json (docs/self-hosting.md).`);
       let issued: { id: string; token: string; expiresAt: string };
@@ -90,6 +93,8 @@ export function devicesMethods(sync: ConvexSync): Record<string, (p: Record<stri
     },
   };
 }
+
+export const LOCAL_ONLY_PHONE = "Your backend is on this Mac only (setup --self-hosted --local), so a phone can't reach it. To use the iPhone app, install Tailscale and run ./threadbear setup --self-hosted --tailnet (docs/self-hosting.md).";
 
 function defaultName(kind: DeviceKind): string {
   return kind === 'phone' ? 'iPhone' : 'Browser';

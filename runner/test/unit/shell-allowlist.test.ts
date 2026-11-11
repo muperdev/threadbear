@@ -825,7 +825,13 @@ test("R5: a repo's filter drivers don't run: its own are refused, and your own d
   git(repo, 'add', 'a.txt', '.gitattributes');
   git(repo, 'commit', '-qm', 'two');
   fs.rmSync(marker, { force: true });
-  fs.appendFileSync(path.join(repo, 'a.txt'), 'two\n');
+  // The same size and an old time, so git status has to read the content
+  // (and so run the filter) to see the change. A longer file told it the file
+  // had changed without reading it, whenever the index wasn't racy, and the
+  // last check below failed on a loaded run (emilsbauga's fork, 8 Nov).
+  const file = path.join(repo, 'a.txt');
+  fs.writeFileSync(file, 'two\n');
+  fs.utimesSync(file, 1, 1);
   const env: Record<string, string | undefined> = { ...process.env, GIT_CONFIG_GLOBAL: global };
   const e = { ...env, ...liveCommandEnv(env) } as NodeJS.ProcessEnv;
   for (const cmd of ['git merge-base --is-ancestor HEAD HEAD', 'git rev-list --count HEAD', "git branch -a --no-merged HEAD --format='%(refname:short)'"]) {

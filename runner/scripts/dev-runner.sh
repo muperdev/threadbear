@@ -32,7 +32,10 @@ set -euo pipefail
 # THREADBARE_* was the old name for these variables: each stands in for its new name.
 for v in $(compgen -e | grep '^THREADBARE_' || true); do n="THREADBEAR_${v#THREADBARE_}"; [ -n "${!n+x}" ] || export "$n=${!v}"; done
 RUNNER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NODE="${THREADBEAR_NODE:-$HOME/.nvm/versions/node/v24.22.1/bin/node}"
+# Node: THREADBEAR_NODE, else the node on PATH, else nvm's newest
+# Node 24 or newer, else Homebrew's (runner/scripts/find-node.sh).
+. "$RUNNER_DIR/scripts/find-node.sh"
+NODE="$(threadbear_find_node)" || exit 1
 DEFAULT_HOME="$HOME/Library/Application Support/Threadbear"
 DATA_HOME=""
 PORT=0
@@ -49,10 +52,6 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-if [ ! -x "$NODE" ]; then
-  echo "No Node binary at $NODE. Set THREADBEAR_NODE to a Node 24 binary." >&2
-  exit 1
-fi
 
 # The folder with symlinks resolved, or as given if it doesn't exist yet.
 real_dir() {
@@ -103,11 +102,20 @@ esac
 IN_WORK=""
 if [ ! -e "$DATA_HOME/runner.json" ]; then
   mkdir -p "$WORK"
-  "$NODE" -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify({
+  # With CLI updates off, the runner takes the codex beside its Node's real
+  # file (process.execPath, past links: Homebrew's bin/node is in its
+  # Cellar), which isn't there when Codex was installed elsewhere: then the
+  # one on PATH, as codexPath (Codex's review, 9 Nov 2026).
+  DEV_CODEX=""
+  [ -n "${THREADBEAR_CODEX_PATH:-}" ] || DEV_CODEX="$(command -v codex 2>/dev/null || true)"
+  "$NODE" -e 'const fs = require("fs"), path = require("path");
+  const beside = fs.existsSync(path.join(path.dirname(process.execPath), "codex"));
+  fs.writeFileSync(process.argv[1], JSON.stringify({
     defaults: { cwd: process.argv[2], accountId: process.argv[3], keepAccount: true, model: "claude-haiku-5-5", models: { codex: "gpt-6-luna" }, efforts: { codex: "low" } },
     cliUpdates: { claude: "off", codex: "off" },
+    ...(process.argv[4] && !beside ? { codexPath: process.argv[4] } : {}),
   }, null, 2) + "\n")' \
-    "$DATA_HOME/runner.json" "$WORK" "${TB_E2E_ACCOUNT:-claude-main}"
+    "$DATA_HOME/runner.json" "$WORK" "${TB_E2E_ACCOUNT:-claude-main}" "$DEV_CODEX"
   IN_WORK="   (in $(printf '%q' "$WORK"), on claude-haiku-5-5)"
 fi
 # THREADBEAR_PORT and THREADBEAR_URL go too: tb then reads the port this

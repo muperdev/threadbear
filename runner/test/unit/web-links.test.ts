@@ -66,6 +66,12 @@ test('words found nowhere in the turn find nothing', () => {
 });
 
 // CPU time, not wall time: the machine running the tests may be busy.
+// What the tests below may take (all but the last, which guards a steady
+// cost per link rather than a quadratic one). They take 20 ms or less on an
+// idle Mac, but a busy one ran one to 187 ms of CPU (a fork's update build,
+// 9 Nov), and the quadratic search they guard against froze a page for 15 s.
+const LIMIT = 1000;
+
 function cpuMs(work: () => void): number {
   const start = process.cpuUsage();
   work();
@@ -99,13 +105,13 @@ test('crafted rows of unclosed work links render quickly', () => {
     escapeDestinations(page[3]!.text);
     for (let i = 0; i < 650; i++) assert.equal(findStep('z', 4, page), undefined);
   });
-  assert.ok(same < 100, `650 links took ${same.toFixed(0)} ms`);
+  assert.ok(same < LIMIT, `650 links took ${same.toFixed(0)} ms`);
   // And 650 different ones, so remembering answers isn't what saves it.
   page = crafted();
   const different = cpuMs(() => {
     for (let i = 0; i < 650; i++) assert.equal(findStep(`z${i}`, 4, page), undefined);
   });
-  assert.ok(different < 100, `650 different links took ${different.toFixed(0)} ms`);
+  assert.ok(different < LIMIT, `650 different links took ${different.toFixed(0)} ms`);
 });
 
 test('one long line of unclosed work links is read in one pass', () => {
@@ -116,7 +122,7 @@ test('one long line of unclosed work links is read in one pass', () => {
     { seq: 3, role: 'assistant' as const, text: '[x](work:z)' },
   ];
   const ms = cpuMs(() => assert.equal(findStep('z', 3, page), undefined));
-  assert.ok(ms < 100, `took ${ms.toFixed(0)} ms`);
+  assert.ok(ms < LIMIT, `took ${ms.toFixed(0)} ms`);
 });
 
 test('a page full of long rows and links has a bounded cost', () => {
@@ -131,7 +137,7 @@ test('a page full of long rows and links has a bounded cost', () => {
     for (let m = 41; m <= 80; m++) for (let l = 0; l < 700; l++) if (findStep(`z q${m}-${l}`, m, page) !== undefined) found++;
   });
   assert.equal(found, 0);
-  assert.ok(ms < 100, `took ${ms.toFixed(0)} ms`);
+  assert.ok(ms < LIMIT, `took ${ms.toFixed(0)} ms`);
   // Links that do find their step still do, on a fresh page.
   assert.equal(findStep('Run the tests', 9, [...rows]), 5);
 });
@@ -155,7 +161,7 @@ test('a long link destination costs no more than a short one', () => {
       findStep(long, 3, page);
     }
   });
-  assert.ok(ms < 100, `took ${ms.toFixed(0)} ms`);
+  assert.ok(ms < LIMIT, `took ${ms.toFixed(0)} ms`);
   // Ordinary ones still read.
   assert.deepEqual(readLink(`work:${'a%20'.repeat(200)}`), { kind: 'step', quote: 'a '.repeat(200).trim() });
 });

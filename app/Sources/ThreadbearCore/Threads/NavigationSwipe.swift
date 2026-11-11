@@ -50,13 +50,13 @@ public struct NavigationSwipe: Sendable, Equatable {
     private var lastSpeed = 0.0
 
     /// How far the fingers go before letting go goes there.
-    /// 110 at first; Mike found it a bit too sensitive (8 Nov).
-    public static let threshold = 150.0
+    /// 110 at first, then 150; Mike found both too sensitive (8 and 9 Nov).
+    public static let threshold = 220.0
     /// Moving this fast the swipe's way at the end is a flick: it goes even
     /// short of the line, once it's `flickTravel` along. In points a second,
     /// as how far one event moves depends on how often the trackpad sends them.
-    static let flickSpeed = 840.0
-    static let flickTravel = 60.0
+    static let flickSpeed = 1200.0
+    static let flickTravel = 100.0
     /// How far across before a gesture that's being held is a swipe. Small,
     /// as nothing happens yet but the arrow starting to show.
     static let across = 5.0

@@ -521,3 +521,66 @@ a.video-card:hover .video-play { scale: 1.06; }
 .lost img { width: 120px; height: auto; margin-bottom: var(--s-300); }
 .lost .lede { margin-left: auto; margin-right: auto; }
 .lost .btn { margin-top: var(--s-400); }
+
+/* What's new (/changelog, made from site/changelog/ by scripts/changelog.mjs): Mike's pick of
+   10 Nov, after Wayne Sutton's bearfooding changelog. A running stitch down the left is the
+   thread, with a sewn button at each release; the release's biggest changes are cards with a
+   before/after or a clip, and the rest plain lines under Added, Changed and Fixed. */
+.changelog { max-width: 920px; margin: var(--s-700) auto var(--s-900); padding: 0 var(--s-300); }
+.cl-head { display: flex; justify-content: space-between; align-items: flex-end; gap: var(--s-300); }
+.cl-head img { width: 120px; height: auto; flex: none; }
+.cl-thread { position: relative; margin-top: var(--s-600); padding-left: var(--s-700); }
+.cl-thread::before { content: ""; position: absolute; left: 10px; top: var(--s-100); bottom: 0; border-left: 3px dashed var(--honey); opacity: .5; }
+.cl-release { position: relative; padding-bottom: var(--s-800); }
+.cl-button {
+  position: absolute; left: calc(var(--s-700) * -1 - 1px); top: var(--s-50); width: 24px; height: 24px; border-radius: var(--r-full);
+  background: var(--honey); box-shadow: inset 0 0 0 3px #b98a4c, 0 1px 2px rgba(31, 28, 24, .2);
+}
+/* The button's four holes. */
+.cl-button::before {
+  content: ""; position: absolute; top: 8px; left: 8px; width: 3px; height: 3px; border-radius: var(--r-full);
+  background: #5c3f18; box-shadow: 5px 0 #5c3f18, 0 5px #5c3f18, 5px 5px #5c3f18;
+}
+.cl-release h2 { font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -.01em; }
+.cl-release h2 a { color: var(--ink); text-decoration: none; }
+.cl-release h2 a:hover { color: var(--honey-d); }
+.cl-year { color: var(--ink-faint); font-weight: 500; }
+.cl-when { margin-top: var(--s-25); font-size: 14px; line-height: 20px; font-weight: 500; color: var(--ink-faint); }
+.cl-when a { color: var(--ink-soft); }
+.cl-kind { font-size: 12px; line-height: 16px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.cl-kind.added { color: #3f7a4f; }
+.cl-kind.changed { color: var(--honey-d); }
+.cl-kind.fixed { color: #456a8f; }
+.cl-feature { margin-top: var(--s-300); padding: var(--s-300); background: var(--card); border-radius: var(--r-2xl); box-shadow: var(--lift); }
+.cl-feature h3 { margin-top: var(--s-50); font-size: 20px; line-height: 28px; font-weight: 600; }
+.cl-feature p:not(.cl-kind) { margin-top: var(--s-50); font-size: 16px; line-height: 24px; color: var(--body); }
+.cl-credit { color: var(--ink-faint); font-size: 14px; }
+.cl-media { margin-top: var(--s-200); }
+/* A tall picture or clip would fill the whole card, so they stop at 520 points high, centred. */
+.cl-shot { width: auto; max-width: 100%; max-height: 520px; margin: 0 auto; }
+.cl-compare { width: 100%; }
+.cl-shot, .cl-compare { display: block; height: auto; border-radius: var(--r-lg); background: #1a1511; box-shadow: 0 1px 2px rgba(31, 28, 24, .08), 0 12px 32px rgba(60, 45, 20, .14); }
+/* Before and after: the before picture sits over the after one, cut off at --cut. */
+.cl-compare { position: relative; overflow: hidden; --cut: 50%; }
+.cl-compare img { display: block; width: 100%; height: auto; }
+.cl-before { position: absolute; inset: 0; clip-path: inset(0 calc(100% - var(--cut)) 0 0); }
+.cl-compare::after { content: ""; position: absolute; top: 0; bottom: 0; left: var(--cut); width: 3px; margin-left: -1px; background: #fff; box-shadow: 0 0 6px rgba(0, 0, 0, .4); pointer-events: none; }
+.cl-tag { position: absolute; top: var(--s-100); padding: var(--s-25) var(--s-75); border-radius: var(--r-md); background: rgba(31, 28, 24, .78); color: #fff; font-size: 12px; line-height: 16px; font-weight: 600; pointer-events: none; }
+.cl-tag-before { left: var(--s-100); }
+.cl-tag-after { right: var(--s-100); }
+/* The slider covers the whole picture, invisible, so dragging anywhere on it moves the cut. */
+.cl-slider { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: ew-resize; }
+.cl-compare:has(.cl-slider:focus-visible) { outline: 2px solid var(--honey); outline-offset: 2px; }
+.cl-lists { display: grid; gap: var(--s-300); margin-top: var(--s-400); }
+.cl-lists ul { list-style: none; margin-top: var(--s-75); }
+.cl-lists li { position: relative; padding: var(--s-50) 0 var(--s-50) var(--s-200); font-size: 16px; line-height: 24px; color: var(--body); }
+.cl-lists li::before { content: ""; position: absolute; left: 0; top: 15px; width: 6px; height: 6px; border-radius: var(--r-full); background: var(--line); }
+.cl-lists code, .cl-feature code { font-family: var(--mono); font-size: .875em; background: var(--well); border-radius: var(--r); padding: 0 var(--s-25); }
+@media (max-width: 860px) {
+  .changelog { margin: var(--s-500) auto var(--s-700); padding: 0 var(--s-200); }
+  .cl-head img { width: 72px; }
+  .cl-thread { padding-left: var(--s-500); }
+  .cl-button { left: calc(var(--s-500) * -1 - 1px); }
+  .cl-feature { padding: var(--s-200); }
+  .cl-year { display: none; }
+}

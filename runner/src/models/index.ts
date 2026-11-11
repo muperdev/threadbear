@@ -12,7 +12,8 @@
 import path from 'node:path';
 import type { Clock } from '../clock.ts';
 import type { Logger } from '../log.ts';
-import type { Account, Pool } from '../protocol.ts';
+import type { Account, Pool, Provider } from '../protocol.ts';
+import type { Asker } from './acp-oneshot.ts';
 import { expandHome } from '../config.ts';
 import { pickInPool } from '../pools.ts';
 import { askCli, cliDir } from './claude-pool.ts';
@@ -83,6 +84,8 @@ export type ModelsOptions = {
   registry?: { add(pid: number, command: string): void; remove(pid: number): void };
   // Stands in for the CLI in tests.
   askCli?: AskCli;
+  // Who answers on a login that isn't Claude's: the ACP agents.
+  askers?: Partial<Record<Provider, Asker>>;
   poolTimeoutMs?: number;
 };
 
@@ -144,7 +147,8 @@ export class Models {
     if (id === null || !this.opts.poolHost) return undefined;
     const found = this.opts.poolHost.pool(id);
     if (!found) return undefined;
-    const accounts = found.accounts.filter((a) => a.provider === 'claude' && found.pool.accountIds.includes(a.id));
+    const can = new Set<string>(['claude', ...Object.keys(this.opts.askers ?? {})]);
+    const accounts = found.accounts.filter((a) => can.has(a.provider) && found.pool.accountIds.includes(a.id));
     return accounts.length ? { pool: found.pool, accounts } : undefined;
   }
 
@@ -229,7 +233,9 @@ export class Models {
       const id = this.poolId();
       return skip('no-pool', id === null ? 'Small jobs are on no pool.' : `No pool called ${id} has a Claude login.`);
     }
-    if (!this.opts.claudePath) return skip('off', 'Pool calls are off in this runner.');
+    // Before taking a slot: a pool nothing can answer on says so at once.
+    const askable = this.providerToAsk();
+    if (!askable || !this.askFor(askable)) return skip('off', 'Pool calls are off in this runner.');
     await this.acquirePool();
     try {
       const tried: string[] = [];
@@ -239,13 +245,12 @@ export class Models {
         const found = this.poolLogins();
         if (!found) return skip('no-pool', 'The pool has no Claude login.');
         title = found.pool.title;
-        const id = pickInPool(found.pool, found.accounts, { provider: 'claude', current: this.lastLogin, exclude: tried });
+        const id = pickInPool(found.pool, found.accounts, { provider: askable, current: this.lastLogin, exclude: tried });
         const account = id ? found.accounts.find((x) => x.id === id) : undefined;
         if (!account) break;
         tried.push(account.id);
         const started = this.opts.clock.now();
-        const res: CliResponse = await (this.opts.askCli ?? askCli)({
-          claudePath: this.opts.claudePath,
+        const res: CliResponse = await this.askFor(askable)!({
           account,
           model,
           system: a.system,
@@ -253,7 +258,6 @@ export class Models {
           jsonSchema: a.jsonSchema?.schema,
           cwd: cliDir(this.opts.home),
           timeoutMs: this.opts.poolTimeoutMs ?? POOL_TIMEOUT_MS,
-          registry: this.opts.registry,
         });
         const value = res.ok ? a.read(res.text) : undefined;
         const unreadable = res.ok && value === undefined ? 'unreadable answer' : undefined;
@@ -283,6 +287,26 @@ export class Models {
     } finally {
       this.releasePool();
     }
+  }
+
+  // Which provider of the pool answers: Claude's whenever the pool has one,
+  // as small jobs are written for Haiku and Opus. So the built-in `claude`
+  // pool never turns into another agent; one of those answers only where
+  // someone picked a pool with no Claude login in it.
+  private providerToAsk(): Provider | undefined {
+    const accounts = this.poolLogins()?.accounts;
+    return accounts?.find((a) => a.provider === 'claude')?.provider ?? accounts?.[0]?.provider;
+  }
+
+  private askFor(provider: Provider): Asker | undefined {
+    if (provider !== 'claude') {
+      const ask = this.opts.askers?.[provider];
+      // ROUTES names Claude's models; the agent answers on its own default.
+      return ask && ((req) => ask({ ...req, model: undefined }));
+    }
+    const { claudePath, registry, askCli: fake } = this.opts;
+    if (!claudePath) return undefined;
+    return (req) => (fake ?? askCli)({ ...req, claudePath, model: req.model!, registry });
   }
 
   private record(r: { job: ModelJob; feature: string; model: string; started: number; ok: boolean } & Partial<Omit<UsageLine, 'ts' | 'ms'>>): void {

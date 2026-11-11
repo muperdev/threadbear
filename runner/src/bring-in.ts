@@ -141,7 +141,8 @@ function title(r: UpstreamRelease, fresh: { why: string }[]): string {
 }
 
 function importantLines(fresh: { why: string }[]): string {
-  return fresh.map((i) => `- ${i.why}`).join('\n');
+  // The same words on several commits (a fix and its follow-ups) once.
+  return [...new Set(fresh.map((i) => i.why))].map((w) => `- ${w}`).join('\n');
 }
 
 function changes(r: UpstreamRelease): string {
@@ -155,12 +156,12 @@ function firstMessage(r: UpstreamRelease, fresh: { why: string }[], setting: Bri
   const how = setting === 'important'
     ? 'This runner only starts these for releases Mike marks important'
     : `This runner starts one of these every ${setting} day${setting === 1 ? '' : 's'} when there's a release waiting`;
-  return `Mike's release ${r.tag} has ${changes(r)} this copy doesn't have yet. ${why}Bring it in: follow docs/bringing-in-updates.md, merge its commit ${r.commit} (the one its signature was checked for) in this thread's worktree and run the checks, then tell me in a few lines what it brings, anything of mine you had to rework, and ask before landing. If it clashes in a way you can't settle, ask me which I'd rather have.
+  return `Mike's release ${r.tag} has ${changes(r)} this copy doesn't have yet. ${why}Bring it in: follow docs/bringing-in-updates.md. Work out the merge of its commit ${r.commit} (the one its signature was checked for) with scripts/merge-preview.sh, without checking anything out, then tell me in a few lines what it brings and how you'd settle anything that clashes with my changes, and ask. Run nothing from it until I say go: don't check it out, install, build or run its checks or tests (no ./check.sh, no npm ci). Once I say go, merge it in this thread's worktree, run the checks and land. This thread runs on this install's default mode, so a step that mode asks about waits for my yes on a card. If it clashes in a way you can't settle, ask me which I'd rather have.
 
 ${how} (runner.json \`releases.bringIn\`, or Settings › General › Updates from Mike). If I say I don't want these, change that setting for me.`;
 }
 
 function followUp(r: UpstreamRelease, fresh: { why: string }[]): string {
   const why = fresh.length ? ` Mike marked part of it important:\n${importantLines(fresh)}\n` : '';
-  return `Mike has a newer release, ${r.tag} (${changes(r)} this copy doesn't have).${why} It includes everything in the one this thread started with. Bring in this one instead, the same way (docs/bringing-in-updates.md): merge its commit ${r.commit}, and ask before landing.`;
+  return `Mike has a newer release, ${r.tag} (${changes(r)} this copy doesn't have).${why} It includes everything in the one this thread started with. Bring in this one instead, the same way (docs/bringing-in-updates.md): work out the merge of its commit ${r.commit} without checking anything out, tell me what it brings, and run nothing from it until I say go.`;
 }

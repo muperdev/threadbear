@@ -52,6 +52,12 @@ final class NavigationTests: XCTestCase {
         XCTAssertFalse(app.canGoForward)
     }
 
+    func testTheHeaderButtonsTipsNameWhereTheyGo() {
+        XCTAssertEqual(HistoryText.tip(back: true, to: ("Profile page", nil), shortcut: "⌘["), "Back to Profile page (⌘[)")
+        XCTAssertEqual(HistoryText.tip(back: false, to: nil, shortcut: "⌘]"), "Nothing to go forward to (⌘])")
+        XCTAssertEqual(HistoryText.tip(back: true, to: nil, shortcut: nil), "Nothing to go back to")
+    }
+
     /// A thread started from the new-thread screen takes that screen's
     /// place, so Back goes to the thread before it, not the empty composer.
     func testStartedThreadReplacesTheNewThreadScreen() async {

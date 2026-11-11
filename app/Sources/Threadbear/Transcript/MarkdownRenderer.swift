@@ -193,7 +193,7 @@ enum MarkdownRenderer {
         let document = Document(parsing: source, options: [.disableSmartOpts])
         // Split where cmark ends lines: "\n", "\r" and "\r\n" (one
         // Character), not U+2028 and the other separators Swift counts.
-        if rich || DraftBlock.mayHold(block) {
+        if rich || DraftBlock.mayHold(block) || ShellBlock.mayHold(block) {
             builder.sourceLines = block.split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" || $0 == "\r" })
         }
         for child in document.children {
@@ -387,7 +387,7 @@ enum MarkdownRenderer {
                 } else if let draft = draftBlock(code) {
                     draftBlock(draft, context)
                 } else {
-                    codeBlock(code.code, context)
+                    codeBlock(code.code, context, shell: shellBlock(code))
                 }
 
             case let quote as BlockQuote:
@@ -506,6 +506,13 @@ enum MarkdownRenderer {
             return draft
         }
 
+        /// A closed ```bash fence (ShellBlock). One still streaming in has no
+        /// play icon: half a command mustn't be something you can press.
+        func shellBlock(_ code: CodeBlock) -> ShellBlock? {
+            guard let shell = ShellBlock.from(language: code.language, code: code.code), isClosed(code) else { return nil }
+            return shell
+        }
+
         /// Whether the fence has its closing line. cmark ends an unclosed
         /// fence's range on its last line of code, so the range's last line
         /// is checked: the same character the fence opened with, at least
@@ -617,7 +624,7 @@ enum MarkdownRenderer {
             finishParagraph(from: start, style: paragraphStyle(context))
         }
 
-        mutating func codeBlock(_ code: String, _ context: Context) {
+        mutating func codeBlock(_ code: String, _ context: Context, shell: ShellBlock? = nil) {
             var text = code
             while text.hasSuffix("\n") { text.removeLast() }
             if text.isEmpty { text = " " }
@@ -628,14 +635,16 @@ enum MarkdownRenderer {
             let body = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\u{2028}")
             let pad = MarkdownRenderer.codePad
             let (style, offset) = Theme.lines(Theme.codeLine, font: Theme.codeFont, spacing: Self.paragraphGap + pad, before: pad,
-                                              head: context.indent + pad, tail: -pad)
+                                              head: context.indent + pad, tail: -pad - (shell == nil ? 0 : ShellBlockIcons.reserve))
             style.lineBreakMode = .byCharWrapping
             let start = output.length
-            output.append(NSAttributedString(string: body, attributes: [
+            var attributes: [NSAttributedString.Key: Any] = [
                 .font: Theme.codeFont,
                 .foregroundColor: NSColor.labelColor,
                 .tbBlockBackground: Theme.codeBackground,
-            ]))
+            ]
+            if let shell { attributes[.tbShellBlock] = shell.command }
+            output.append(NSAttributedString(string: body, attributes: attributes))
             append("\n", Context())
             let range = NSRange(location: start, length: output.length - start)
             output.addAttribute(.paragraphStyle, value: style, range: range)
@@ -757,7 +766,9 @@ enum MarkdownRenderer {
         mutating func replyButton(_ id: String, words: String, _ context: Context) {
             var plain = context
             plain.link = nil
-            guard let known = ReplyButtons.shared.known(id) else {
+            // A run's button is only ever pressed from its card, which shows
+            // the command: a pill for one in a reply couldn't.
+            guard let known = ReplyButtons.shared.known(id), known.button.run == nil else {
                 append(words, plain)
                 return
             }

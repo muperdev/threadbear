@@ -2,8 +2,7 @@
 // it takes the pointer: app/README.md, "A real drag"):
 //   realdrag <fromX> <fromY> <toX> <toY> <holdSeconds> <shotPath>
 // Screen points, from the top left. With a path, and a window number in
-// RD_WINDOW, takes a picture of that window mid-drag before letting go. The
-// same point twice is a click.
+// RD_WINDOW, takes a picture of that window mid-drag before letting go.
 import AppKit
 import CoreGraphics
 
@@ -19,7 +18,16 @@ func post(_ type: CGEventType, _ p: CGPoint) {
 func wait(_ s: Double) { Thread.sleep(forTimeInterval: s) }
 
 post(.mouseMoved, from); wait(0.25)
-post(.leftMouseDown, from); wait(0.12)
+// The same point twice is a click, as quick as a hand's: anything longer
+// is a hold, which picks a panel up in the dock.
+if from == to {
+    post(.leftMouseDown, from); wait(0.06)
+    post(.leftMouseUp, from); wait(0.3)
+    exit(0)
+}
+// How long the button's down before it moves. RD_PRESS is for a press that has
+// to move before something's hold timer goes off.
+post(.leftMouseDown, from); wait(Double(ProcessInfo.processInfo.environment["RD_PRESS"] ?? "") ?? 0.12)
 let steps = 40
 for i in 1...steps {
     let t = Double(i) / Double(steps)

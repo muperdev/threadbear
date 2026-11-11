@@ -772,3 +772,40 @@ test('tb status says when the main key is still being rotated', () => {
   const text = formatStatus({ version: '1', pid: 1, startedAt: '2026-10-26T11:00:00.000Z', home: '/h', logFile: '/h/l', liveClis: 0, running: [], sync: { state: 'ok', url: 'https://x.convex.cloud', name: 'm5', ownerKeyRotating: true } } as never, [], now);
   assert.match(text, /RUNNER_KEY_NEXT/);
 });
+
+test('tb status says what a backend on this Mac only leaves out, and says nothing of it for cloud', () => {
+  const now = Date.parse('2026-10-26T12:00:00.000Z');
+  const status = (url: string) => formatStatus({ version: '1', pid: 1, startedAt: '2026-10-26T11:00:00.000Z', home: '/h', logFile: '/h/l', liveClis: 0, running: [], sync: { state: 'ok', url, name: 'm5', pushOff: true } } as never, [], now);
+  assert.match(status('http://127.0.0.1:13210'), /On this Mac only: .*no phone or other Mac can reach it, and the website and share links only open on this Mac/);
+  assert.ok(!status('https://mac.tail1.ts.net:3210').includes('On this Mac only'));
+});
+
+// Daybreak, 10 Nov (finding 76): a runner key heartbeats its own
+// followProblem, and `tb status` wrote it to the terminal as it came, so ESC
+// ]52 could set the owner's clipboard and cursor moves could rewrite what the
+// status said. Nothing another runner wrote reaches the terminal as a control.
+test('tb status: another runner\'s name and problem reach the terminal without escape sequences or extra lines', () => {
+  const now = Date.parse('2026-11-10T12:00:00.000Z');
+  const base = { version: '0.1.0+r1', pid: 1, startedAt: '2026-11-10T11:00:00.000Z', home: '/h', liveClis: 0, running: [] };
+  const osc52 = `\u001b]52;c;${Buffer.from('THREADBEAR_OSC52').toString('base64')}\u0007`;
+  const payloads = [
+    osc52,
+    `\u001b]52;c;${Buffer.from('st-ended').toString('base64')}\u001b\\`,
+    '\u009d52;c;QUJD\u009c',
+    '\u001b[2K\u001b[1A\u001b[31mred\u001b[0m',
+    '\u009b2K',
+    '\u001bP1$tq\u001b\\',
+    'a\u0000b\u0008c\u202eevil',
+  ];
+  for (const p of payloads) {
+    const text = formatStatus({ ...base, behindRunners: [{ name: `bru${p}ce`, problem: `git said ${p} and then\nFollowing main: up to date` }] } as never, [], now);
+    assert.doesNotMatch(text, /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e]/, JSON.stringify(p));
+    assert.doesNotMatch(text, /52;c;|THREADBEAR|\[2K/, JSON.stringify(p));
+    const line = text.trim().split('\n').at(-1)!;
+    assert.match(line, /^bru.*ce isn't following GitHub's main properly: git said .* and then Following main: up to date$/, 'one line, not a forged one');
+  }
+  // Its own followProblem, a reason and thread titles likewise.
+  const own = formatStatus({ ...base, update: { state: 'idle', followProblem: `no${osc52}pe` }, pendingRestart: { when: 'idle', requestedAt: '2026-11-10T11:59:00.000Z', waitingFor: ['t1'], reason: `r${osc52}` } } as never, [{ ...T, id: 't1', title: `T${osc52}`, status: 'running' }], now);
+  assert.doesNotMatch(own, /\u001b|\u0007|52;c;/);
+  assert.match(own, /Not following GitHub's main properly: nope/);
+});

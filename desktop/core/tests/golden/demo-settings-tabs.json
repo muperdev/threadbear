@@ -1,0 +1,97 @@
+{
+  "closed" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Rename the Settings tabs to General, Sync and Advanced.",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "g:t:turn_1_e",
+      "inGroup" : false,
+      "kind" : "group",
+      "seq" : 3,
+      "text" : "Worked for 18s",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 5,
+      "text" : "Done. The tabs now read **General**, **Sync** and **Advanced**.",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "cf:turn_1",
+      "inGroup" : false,
+      "kind" : "changes",
+      "seq" : 6,
+      "text" : "Edited 1 file",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 6,
+      "text" : "18s, $0.05",
+      "turn" : "turn_1"
+    }
+  ],
+  "open" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Rename the Settings tabs to General, Sync and Advanced.",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : true,
+      "id" : "g:t:turn_1_e",
+      "inGroup" : false,
+      "kind" : "group",
+      "seq" : 3,
+      "text" : "Worked for 18s",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:turn_1_e",
+      "inGroup" : true,
+      "kind" : "diff",
+      "seq" : 3,
+      "text" : "Edit ~/dev/photo-sync/Sources/Settings/SettingsView.swift",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 5,
+      "text" : "Done. The tabs now read **General**, **Sync** and **Advanced**.",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "cf:turn_1",
+      "inGroup" : false,
+      "kind" : "changes",
+      "seq" : 6,
+      "text" : "Edited 1 file",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 6,
+      "text" : "18s, $0.05",
+      "turn" : "turn_1"
+    }
+  ]
+}

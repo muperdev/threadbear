@@ -268,6 +268,9 @@ struct PanelRail: View {
         .padding(.bottom, zoomed(10))
         .frame(width: ActivityBar.width)
         .frame(maxHeight: .infinity)
+        // Opaque: in a narrow window the dock can be wider than its room
+        // and run under the rail, and its text showed through (Wayne, 9 Nov).
+        .background(Color(nsColor: .windowBackgroundColor))
         .overlay(alignment: .leading) {
             Rectangle().fill(.separator).frame(width: 0.5).padding(.vertical, zoomed(4))
         }
@@ -1104,6 +1107,20 @@ final class WebPanelPool: NSObject, ObservableObject, WKNavigationDelegate, WKUI
     }
 }
 
+#if DEBUG
+/// What a list or image panel last drew, for the scripted app (AppDump's
+/// `pane`): their rows and pictures live in the views' own state.
+enum PanelDebug {
+    nonisolated(unsafe) static var renders: [String: PanelRender] = [:]
+    nonisolated(unsafe) static var images: [String: NSImage] = [:]
+
+    static func note(_ id: String, _ render: PanelRender?, image: NSImage?) {
+        renders[id] = render
+        images[id] = image
+    }
+}
+#endif
+
 // MARK: - Image panels
 
 /// An `image` panel: the runner's latest picture (the Simulator's screen),
@@ -1142,6 +1159,9 @@ private struct ImagePanel: View {
                 let result = await app.renderPanel(threadId: threadId, panelId: panel.id, failure: "Couldn't get a picture from the runner.")
                 if Task.isCancelled { return }
                 render = result
+                #if DEBUG
+                PanelDebug.note(panel.id, result, image: result?.image.flatMap { NSImage(contentsOfFile: $0.path) })
+                #endif
                 // A new NSImage each time: the file's name doesn't change.
                 // Another Mac's picture is that Mac's file, fetched from it,
                 // never this Mac's file at that path (Codex review, 7 Nov).
@@ -1200,6 +1220,9 @@ private struct ListPanel: View {
                 let result = await app.renderPanel(threadId: thread.id, panelId: panel.id, failure: "Couldn't get this list from the runner.")
                 if Task.isCancelled { return }
                 render = result ?? PanelRender(note: "Not connected to the runner.")
+                #if DEBUG
+                PanelDebug.note(panel.id, render, image: nil)
+                #endif
                 try? await Task.sleep(for: .seconds(15))
             }
         }

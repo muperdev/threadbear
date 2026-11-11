@@ -47,7 +47,7 @@ extension AppModel {
 
     var openProject: Project? { openProjectId.flatMap(project) }
 
-    var projectCards: [ProjectCard] { ProjectCard.build(projectSections) }
+    var projectCards: [ProjectCard] { ProjectCard.build(projectSections, decisions: projectDecisionsOn) }
 
     /// Projects a thread could be put in: the live ones it isn't in.
     func projectsToAdd(_ thread: ThreadSummary) -> [Project] {

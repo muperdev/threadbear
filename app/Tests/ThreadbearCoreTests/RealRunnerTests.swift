@@ -25,9 +25,11 @@ final class RealRunnerTests: XCTestCase {
         guard FileManager.default.fileExists(atPath: runner.appendingPathComponent("node_modules/ws").path) else {
             throw XCTSkip("../runner has no node_modules; run npm ci there")
         }
-        let paths = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
-            + [NSHomeDirectory() + "/.nvm/versions/node/v24.22.1/bin", "/opt/homebrew/bin", "/usr/local/bin"]
-        guard let node = paths.map({ $0 + "/node" }).first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+        // check.sh's Node (THREADBEAR_NODE) first, then PATH and Homebrew's.
+        let env = ProcessInfo.processInfo.environment
+        let nodes = [env["THREADBEAR_NODE"]].compactMap { $0 }
+            + ((env["PATH"] ?? "").split(separator: ":").map(String.init) + ["/opt/homebrew/bin", "/usr/local/bin"]).map { $0 + "/node" }
+        guard let node = nodes.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
             throw XCTSkip("node isn't on PATH")
         }
         root = FileManager.default.temporaryDirectory.appendingPathComponent("tb-real-runner-\(UUID().uuidString)", isDirectory: true)

@@ -683,8 +683,9 @@ test('a failed turn keeps its errorKind on turn.completed', () => {
   const s = h.codex.last;
   s.init('019a-limit', 'gpt-6.1-sol');
   s.result('failed', undefined, "You've hit your usage limit.", { errorKind: 'usageLimit' });
-  const done = h.events(thread.id).at(-1);
-  assert.equal(done.type, 'turn.completed');
+  // A pinned thread's wait for its login adds a note after it.
+  const done = h.events(thread.id).findLast((e: any) => e.type === 'turn.completed');
+  assert.equal(h.events(thread.id).at(-1).type, 'system.note');
   assert.equal(done.outcome, 'failed');
   assert.equal(done.errorKind, 'usageLimit');
   // Claude's too, and only on a failure.

@@ -96,6 +96,23 @@ export type ScheduleBackend = {
   runners(): Promise<BackendRunner[]>;
 };
 
+// A run this runner sent (or skipped, or couldn't send) that the backend
+// hasn't heard of yet: ran()'s arguments, when it was first tried, and for a
+// due run the nextRunAt it was due at (`slot`).
+type RanParams = Parameters<ScheduleBackend['ran']>[0];
+type UnrecordedRun = RanParams & { since: number; slot?: string };
+// What only this process keeps about one: how often it's been tried, whether
+// that's been warned of, and whether the backend has said yes (it's
+// forgotten once a row shows it, as a yes can come with the row edited).
+type HeldRun = UnrecordedRun & { tries?: number; warned?: boolean; acked?: boolean };
+const runKey = (r: RanParams) => `${r.scheduleId}\n${r.lastRun.at}\n${r.lastRun.outcome}\n${r.lastRun.threadId ?? ''}`;
+// The same run: two can share a millisecond (a run now straight after one
+// that failed), so the time alone doesn't say.
+const sameRun = (a: Schedule['lastRun'], b: NonNullable<Schedule['lastRun']>) => !!a && a.at === b.at && a.outcome === b.outcome && a.threadId === b.threadId;
+// Still not recorded after this long, it's said as a warning (it reaches
+// Sentry); a blip that a retry gets past is only logged.
+const UNRECORDED_WARN_MS = 30 * 60_000;
+
 // A runner the backend hasn't heard from for this long shows as offline,
 // as on the phone.
 const ONLINE_MS = 3 * 60_000;
@@ -103,7 +120,7 @@ const ONLINE_MS = 3 * 60_000;
 // offered in runners.list: an old install, or a test's.
 const FORGET_MS = 30 * 86_400_000;
 
-export type ScheduleRunner = Pick<Runner, 'create' | 'send' | 'get' | 'hello' | 'onNotification' | 'publish' | 'patchTrust'>;
+export type ScheduleRunner = Pick<Runner, 'create' | 'send' | 'get' | 'hello' | 'onNotification' | 'publish' | 'patchTrust'> & { cfg?: Pick<Runner['cfg'], 'defaults'> };
 
 export type CreateScheduleParams = {
   // A card's approval of `check` (patch-trust.ts, approveCheck). Not from a client.
@@ -157,6 +174,8 @@ export type UpdateScheduleParams = {
 const TICK_MS = 30_000;
 // A one-off that has run stays in the list this long, then goes.
 const KEEP_FINISHED_MS = 7 * 86_400_000;
+// How soon a save that failed is tried again.
+export const SAVE_RETRY_MS = 5000;
 const BUSY = new Set(['starting', 'running', 'waiting']);
 
 export class Scheduler {
@@ -167,6 +186,8 @@ export class Scheduler {
   private zone: () => string;
   private items = new Map<string, ScheduleRecord>();
   private timer?: TimerHandle;
+  private saveRetry?: TimerHandle;
+  private saveFailed = false;
   private stopped = false;
   private unlisten?: () => void;
   // This runner, as the backend knows it (sync.runnerId and its name).
@@ -208,6 +229,19 @@ export class Scheduler {
   private memKept = new Map<string, KeptCheck>();
   // Schedules whose check this process has under way.
   private checkingNow = new Set<string>();
+  // Runs sent here that the backend hasn't recorded yet, by runKey, oldest
+  // first, and on disk (runsDir) for the next runner process. Until it
+  // has, its row still says the run is due, and once the claim lapses
+  // (2 minutes) that run would be sent again: THREADBEAR-15 (9 Nov), a
+  // daily schedule sent twice when the M5's network dropped as it told the
+  // backend and a self-update's new runner read the row 5 minutes later.
+  // Each is laid over its row (overlayUnrecorded) and tried again every tick
+  // until it lands.
+  private unrecorded = new Map<string, HeldRun>();
+  private recording = new Set<string>();
+  // One file a run, so two runner processes in a handover never write over
+  // each other's (a list in one file would need a lock).
+  private runsDir: string;
 
   constructor(deps: {
     runner: ScheduleRunner;
@@ -229,6 +263,7 @@ export class Scheduler {
     this.syncOn = deps.syncOn ?? false;
     this.elsewhere = deps.elsewhere ?? (() => false);
     this.file = path.join(deps.home, 'schedules.json');
+    this.runsDir = path.join(deps.home, 'schedule-runs');
     this.clock = deps.clock;
     this.log = deps.log;
     this.zone = deps.zone ?? localZone;
@@ -264,7 +299,8 @@ export class Scheduler {
       }
       if (gone) this.changed();
     });
-    this.log.info('schedules loaded', { count: this.items.size, mode: this.mode });
+    for (const r of this.readRuns()) this.unrecorded.set(runKey(r), r);
+    this.log.info('schedules loaded', { count: this.items.size, mode: this.mode, ...(this.unrecorded.size ? { unrecordedRuns: this.unrecorded.size } : {}) });
     this.tick();
   }
 
@@ -299,6 +335,7 @@ export class Scheduler {
   stop(): void {
     this.stopped = true;
     this.timer?.cancel();
+    this.saveRetry?.cancel();
     this.unlisten?.();
     this.unsubscribe?.();
     this.unsubscribe = undefined;
@@ -409,6 +446,7 @@ export class Scheduler {
       this.items.set(rec.id, rec);
       if (!this.names.has(rec.runnerId)) this.namesDue = true;
     }
+    this.overlayUnrecorded();
     if (this.namesDue) void this.refreshNames();
     this.changed();
     this.tick();
@@ -721,28 +759,165 @@ export class Scheduler {
     this.notMidCheck(rec);
     const res = this.send(rec, true, this.keptFor(rec));
     if (res.outcome !== 'sent') throw new RpcError(ErrorCode.other, res.note ?? "Couldn't run it.");
+    // A one-off run now has used its time: that slot isn't due again.
+    const slot = rec.at ? rec.nextRunAt : undefined;
     if (rec.at) this.finish(rec);
-    if (this.mode === 'backend') await this.recordRun(rec, true);
+    if (this.mode === 'backend') await this.recordRun(rec, true, undefined, slot);
     this.changed();
     return { schedule: this.view(rec), threadId: res.threadId!, turnId: res.turnId! };
   }
 
   // Tells the backend about a run this runner sent (or skipped, or
-  // couldn't send), with the schedule's next time. Best effort: a run that
-  // was sent stays sent.
-  private async recordRun(rec: ScheduleRecord, sent: boolean, request?: string): Promise<void> {
+  // couldn't send), with the schedule's next time. A run that was sent
+  // stays sent; one the backend can't be told of yet is written down first
+  // and tried again until it lands (`unrecorded` says why).
+  // `slot`: the nextRunAt a due run was claimed at.
+  private async recordRun(rec: ScheduleRecord, sent: boolean, request?: string, slot?: string): Promise<void> {
     if (!this.backend || !rec.lastRun) return;
-    await this.backend
-      .ran({
-        scheduleId: rec.id,
-        lastRun: rec.lastRun,
-        sent,
-        expectUpdatedAt: rec.updatedAt,
-        ...(rec.nextRunAt ? { nextRunAt: rec.nextRunAt } : {}),
-        ...(rec.finishedAt ? { finishedAt: rec.finishedAt } : {}),
-        ...(request ? { request } : {}),
-      })
-      .catch((e) => this.log.warn('could not record a schedule run in the backend', { scheduleId: rec.id, error: String(e) }));
+    const run: UnrecordedRun = {
+      scheduleId: rec.id,
+      lastRun: { ...rec.lastRun },
+      sent,
+      expectUpdatedAt: rec.updatedAt,
+      ...(rec.nextRunAt ? { nextRunAt: rec.nextRunAt } : {}),
+      ...(rec.finishedAt ? { finishedAt: rec.finishedAt } : {}),
+      ...(request ? { request } : {}),
+      since: this.clock.now(),
+      ...(slot ? { slot } : {}),
+    };
+    this.unrecorded.set(runKey(run), run);
+    // On disk before it's sent: if this process goes before the backend
+    // answers, the next one still knows the run happened.
+    this.saveRun(run);
+    await this.recordRuns(rec.id);
+  }
+
+  // Tells the backend about a schedule's unrecorded runs, oldest first,
+  // stopping at the first that fails (tried again next tick).
+  private async recordRuns(scheduleId: string): Promise<void> {
+    const backend = this.backend;
+    if (!backend) return;
+    for (const [key, run] of [...this.unrecorded]) {
+      if (run.scheduleId !== scheduleId || run.acked) continue;
+      // Already being told (a run now while a tick is at it): in order, so
+      // the rest wait for it too.
+      if (this.recording.has(key)) return;
+      this.recording.add(key);
+      try {
+        const { since: _s, slot: _sl, tries: _t, warned: _w, acked: _a, ...p } = run;
+        await backend.ran(p);
+        // A yes for what was sent: if an edit came in meanwhile and the run
+        // took its updatedAt (overlayUnrecorded), it's told again with that.
+        if (run.expectUpdatedAt === p.expectUpdatedAt) run.acked = true;
+        if (run.tries) this.log.info('recorded a schedule run in the backend after retrying', { scheduleId, tries: run.tries });
+      } catch (e) {
+        run.tries = (run.tries ?? 0) + 1;
+        const late = this.clock.now() - run.since > UNRECORDED_WARN_MS;
+        if (late && !run.warned) {
+          run.warned = true;
+          this.log.warn('a schedule run still is not recorded in the backend', { scheduleId, tries: run.tries, error: String(e) });
+        } else if (run.tries === 1) this.log.info('could not record a schedule run in the backend yet; trying again', { scheduleId, error: String(e) });
+        return;
+      } finally {
+        this.recording.delete(key);
+      }
+    }
+  }
+
+  // Each unrecorded run laid over its row as the backend will have it once
+  // told: its last run, its count and its next time, so the row a
+  // subscription (or the next runner) brings back doesn't make it due again.
+  // It's forgotten once the row shows it recorded and past its slot (or a
+  // later run), or the schedule has gone, or gone to another runner.
+  // A row edited elsewhere (another Mac's rename) while the run was out
+  // has a new updatedAt, so scheduleRan won't take the run's next time; if
+  // it still says the slot that ran, the run takes that updatedAt and is
+  // told again (Codex's review). scheduleRan counts a run it has once.
+  private overlayUnrecorded(): void {
+    for (const [key, run] of [...this.unrecorded]) {
+      const rec = this.items.get(run.scheduleId);
+      if (!rec || !this.mine(rec) || (rec.lastRun && rec.lastRun.at > run.lastRun.at)) {
+        this.forgetRun(key);
+        continue;
+      }
+      const recorded = sameRun(rec.lastRun, run.lastRun);
+      const stale = run.slot !== undefined && rec.nextRunAt === run.slot && !rec.paused;
+      if ((recorded || run.acked) && !stale) {
+        this.forgetRun(key);
+        continue;
+      }
+      if (stale && rec.updatedAt !== run.expectUpdatedAt) {
+        run.expectUpdatedAt = rec.updatedAt;
+        run.acked = false;
+        this.saveRun(run);
+      } else if (stale && run.acked) run.acked = false;
+      if (!recorded) {
+        rec.lastRun = { ...run.lastRun };
+        if (run.sent) rec.runs += 1;
+      }
+      if (run.request !== undefined && rec.runRequestedAt === run.request) delete rec.runRequestedAt;
+      // As scheduleRan does: a change since worked out its own next time.
+      if (rec.updatedAt === run.expectUpdatedAt) {
+        if (run.nextRunAt) rec.nextRunAt = run.nextRunAt;
+        else delete rec.nextRunAt;
+        if (run.finishedAt) rec.finishedAt = run.finishedAt;
+      }
+    }
+  }
+
+  // Whether this slot of a schedule has already run here, waiting to be
+  // recorded: it's never claimed again.
+  private slotRan(scheduleId: string, slot: string): boolean {
+    for (const r of this.unrecorded.values()) if (r.scheduleId === scheduleId && r.slot === slot) return true;
+    return false;
+  }
+
+  private hasUnrecorded(scheduleId: string): boolean {
+    for (const r of this.unrecorded.values()) if (r.scheduleId === scheduleId) return true;
+    return false;
+  }
+
+  private forgetRun(key: string): void {
+    if (!this.unrecorded.delete(key)) return;
+    try {
+      fs.rmSync(this.runFile(key), { force: true });
+    } catch (e) {
+      // Left behind, it's dropped by the next runner once it sees the row.
+      this.log.warn('could not remove a recorded schedule run', { error: String(e) });
+    }
+  }
+
+  private runFile(key: string): string {
+    return path.join(this.runsDir, `${crypto.createHash('sha256').update(key).digest('hex').slice(0, 32)}.json`);
+  }
+
+  private saveRun(run: HeldRun): void {
+    const { tries: _t, warned: _w, acked: _a, ...r } = run;
+    try {
+      fs.mkdirSync(this.runsDir, { recursive: true });
+      atomicWriteFileSync(this.runFile(runKey(r)), `${JSON.stringify(r)}\n`);
+    } catch (e) {
+      // Still held here, so this process won't send it again.
+      this.log.warn('could not save a schedule run waiting to be recorded', { scheduleId: r.scheduleId, error: String(e) });
+    }
+  }
+
+  // Oldest first, as they're told to the backend in that order.
+  private readRuns(): UnrecordedRun[] {
+    let names: string[];
+    try {
+      names = fs.readdirSync(this.runsDir).filter((n) => n.endsWith('.json'));
+    } catch {
+      return [];
+    }
+    const runs: UnrecordedRun[] = [];
+    for (const n of names) {
+      const r = readJsonSync<UnrecordedRun>(path.join(this.runsDir, n));
+      const ok =
+        !!r && typeof r.scheduleId === 'string' && typeof r.lastRun?.at === 'string' && typeof r.lastRun?.outcome === 'string' && typeof r.sent === 'boolean' && typeof r.expectUpdatedAt === 'string' && typeof r.since === 'number';
+      if (ok) runs.push(r);
+    }
+    return runs.sort((a, b) => a.lastRun.at.localeCompare(b.lastRun.at));
   }
 
   // ------------------------------------------------------------------ runs
@@ -827,8 +1002,10 @@ export class Scheduler {
           this.dropKept(rec.id);
           continue;
         }
+        if (this.hasUnrecorded(rec.id)) await this.recordRuns(rec.id);
         if (rec.runRequestedAt) await this.runRequested(backend, rec);
         if (rec.paused || !rec.nextRunAt || Date.parse(rec.nextRunAt) > now) continue;
+        if (this.slotRan(rec.id, rec.nextRunAt)) continue;
         const claimed = await backend.claim(rec.id, 'due', rec.nextRunAt).catch((e) => {
           this.log.warn('could not claim a schedule run', { scheduleId: rec.id, error: String(e) });
           return false;
@@ -849,6 +1026,7 @@ export class Scheduler {
           await backend.release(rec.id).catch(() => {});
           continue;
         }
+        const slot = rec.nextRunAt;
         const res = this.send(rec, false, checked);
         if (res.outcome === 'retry') {
           await backend.release(rec.id).catch(() => {});
@@ -856,7 +1034,7 @@ export class Scheduler {
         }
         if (rec.at) this.finish(rec);
         else this.plan(rec);
-        await this.recordRun(rec, res.outcome === 'sent');
+        await this.recordRun(rec, res.outcome === 'sent', undefined, slot);
       }
       this.changed();
     } finally {
@@ -900,9 +1078,10 @@ export class Scheduler {
       }
       throw e;
     }
+    const slot = res.outcome === 'sent' && rec.at ? rec.nextRunAt : undefined;
     if (res.outcome === 'sent' && rec.at) this.finish(rec);
     delete rec.runRequestedAt;
-    await this.recordRun(rec, res.outcome === 'sent', request);
+    await this.recordRun(rec, res.outcome === 'sent', request, slot);
   }
 
   // The schedule a claim was taken for, as the subscription has it now, or
@@ -1186,14 +1365,28 @@ export class Scheduler {
   // -------------------------------------------------------------- helpers
 
   private changed(): void {
+    this.save();
+    this.publish();
+  }
+
+  // A save that fails is tried again in a moment, as Runner.flush does for
+  // threads, rather than waiting for the next change: until it lands a
+  // restart brings back the old list, so a deleted schedule could fire again
+  // (THREADBEAR-1R: the cloud box's disk filled).
+  private save(): void {
+    this.saveRetry?.cancel();
+    this.saveRetry = undefined;
     const stored = [...this.items.values()];
     const version = this.mode === 'backend' ? 2 : 1;
     try {
       atomicWriteFileSync(this.file, `${JSON.stringify({ version, schedules: stored }, null, 2)}\n`);
+      this.saveFailed = false;
     } catch (e) {
-      this.log.error('could not save schedules', { error: String(e) });
+      // Said once until it saves, as it reaches Sentry.
+      if (!this.saveFailed) this.log.error('could not save schedules', { error: String(e) });
+      this.saveFailed = true;
+      if (!this.stopped) this.saveRetry = this.clock.setTimeout(() => this.save(), SAVE_RETRY_MS);
     }
-    this.publish();
   }
 
   private publish(): void {
@@ -1202,6 +1395,13 @@ export class Scheduler {
 
   private view(rec: ScheduleRecord): Schedule {
     const v: Schedule = { ...rec, whenText: this.whenText(rec) };
+    // What one with no mode of its own runs with, as new-threads.ts picks it
+    // when it runs: so raising it is checked against that, not a guess of
+    // full (Daybreak, 10 Nov: on an Ask-default runner, an Ask thread set
+    // one to Auto as if lowering it). Only this runner's default is known.
+    const defaults = this.runner.cfg?.defaults;
+    if (!rec.threadId && !rec.permissionMode && this.mine(rec) && defaults) v.defaultMode = defaults.permissionMode ?? 'full';
+    else delete v.defaultMode;
     if (rec.runnerId) {
       const own = rec.runnerId === this.self.id;
       const name = own ? this.self.name : this.names.get(rec.runnerId);

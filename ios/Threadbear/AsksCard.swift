@@ -12,6 +12,9 @@ struct AsksCard: View {
     /// Its answer is on its way: spinning, and nothing more to press.
     var busy: Bool
     var send: () -> Void
+    /// Run on an ask's command, and which of them are on their way.
+    var run: (PhoneAskRun) -> Void = { _ in }
+    var pressingRuns: Set<String> = []
     /// Goes up with each pick, for its tick. Not the picks themselves, which a
     /// new card clears.
     @State private var pickTaps = 0
@@ -53,17 +56,21 @@ struct AsksCard: View {
                     .textSelection(.enabled)
                     .foregroundStyle(ticked ? .secondary : .primary)
             }
-            if !ticked, !(ask.links ?? []).isEmpty || !ask.choices.isEmpty {
-                FlowLayout(spacing: 8) {
-                    ForEach(ask.links ?? [], id: \.url) { link in
-                        if let url = URL(string: link.url) {
-                            Link(destination: url) {
-                                Label(link.title, systemImage: "arrow.up.right.square")
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(.secondary)
-                        }
+            if !ticked, let run = ask.run { runView(run) }
+            if !ticked, ask.hasNotes {
+                // Each answer says what it does: rows, the note under its
+                // label, as the Mac draws them; links in a row above.
+                if !(ask.links ?? []).isEmpty {
+                    FlowLayout(spacing: 8) { links(ask) }.controlSize(.small)
+                }
+                VStack(spacing: 6) {
+                    ForEach(Array(ask.choices.enumerated()), id: \.offset) { choice, label in
+                        choiceButton(label, note: ask.note(choice), index: index, choice: choice, suggested: ask.suggestedIndex == choice)
                     }
+                }
+            } else if !ticked, !(ask.links ?? []).isEmpty || !ask.choices.isEmpty {
+                FlowLayout(spacing: 8) {
+                    links(ask)
                     ForEach(Array(ask.choices.enumerated()), id: \.offset) { choice, label in
                         choiceButton(label, index: index, choice: choice, suggested: ask.suggestedIndex == choice)
                     }
@@ -73,7 +80,53 @@ struct AsksCard: View {
         }
     }
 
-    private func choiceButton(_ label: String, index: Int, choice: Int, suggested: Bool) -> some View {
+    /// The whole command, as it's what the press agrees to; where it runs;
+    /// and Run, which spins and takes no more taps while it's going.
+    private func runView(_ run: PhoneAskRun) -> some View {
+        let going = run.running == true || pressingRuns.contains(run.buttonId)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(run.command)
+                .font(.system(.footnote, design: .monospaced))
+                .textSelection(.enabled)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            if let cwd = run.cwd {
+                Text("In \(cwd)").font(.caption).foregroundStyle(.secondary)
+            }
+            if let failed = run.failed {
+                Text(failed).font(.caption).foregroundStyle(.red)
+            }
+            Button {
+                guard !going else { return }
+                sendTaps += 1
+                self.run(run)
+            } label: {
+                Label(going ? "Running" : run.failed == nil ? "Run" : "Run again", systemImage: "play")
+                    .spinning(going, tint: .white)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .allowsHitTesting(!going)
+        }
+    }
+
+    @ViewBuilder private func links(_ ask: PhoneAsk) -> some View {
+        ForEach(ask.links ?? [], id: \.url) { link in
+            if let url = URL(string: link.url) {
+                Link(destination: url) {
+                    Label(link.title, systemImage: "arrow.up.right.square")
+                }
+                .buttonStyle(.bordered)
+                .tint(.secondary)
+            }
+        }
+    }
+
+    /// The muted gold of the Mac's "Recommended" star.
+    static let recommendedStar = Color(red: 0.86, green: 0.70, blue: 0.33)
+
+    private func choiceButton(_ label: String, note: String? = nil, index: Int, choice: Int, suggested: Bool) -> some View {
         let picked = picks[index] == choice
         return Button {
             guard !busy else { return }
@@ -87,10 +140,27 @@ struct AsksCard: View {
                 picks[index] = picked ? nil : choice
             }
         } label: {
-            HStack(spacing: 4) {
-                // The agent's own pick, as the Mac marks it.
-                if suggested && !picked { Image(systemName: "star.fill").imageScale(.small).foregroundStyle(.secondary) }
-                Text(label).spinning(picked && busy && asks.count == 1, tint: .white)
+            if let note {
+                // A row: the answer, then what it does, full width.
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Text(label).fontWeight(.medium).spinning(picked && busy && asks.count == 1, tint: .white)
+                        // The agent's pick: a small gold star and "Recommended", as on the Mac.
+                        if suggested && !picked {
+                            Image(systemName: "star.fill").font(.system(size: 9)).foregroundStyle(Self.recommendedStar)
+                            Text("Recommended").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Text(note).font(.footnote).foregroundStyle(picked ? .white.opacity(0.85) : .secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(spacing: 4) {
+                    // The agent's own pick, as the Mac marks it.
+                    if suggested && !picked { Image(systemName: "star.fill").imageScale(.small).foregroundStyle(Self.recommendedStar).accessibilityLabel("Recommended") }
+                    Text(label).spinning(picked && busy && asks.count == 1, tint: .white)
+                }
             }
         }
         .buttonStyle(picked ? AnyButtonStyle(.borderedProminent) : AnyButtonStyle(.bordered))

@@ -8,11 +8,12 @@ import type { Account, Pool, Provider } from '../protocol.ts';
 import { ErrorCode, RpcError } from '../protocol.ts';
 import { cutOut } from '../store.ts';
 import { resetTime } from '../usage.ts';
-import { DEFAULT_POOL_FOLDERS, readRunnerJson, writeRunnerJson } from '../config.ts';
-import { WAIT_SLACK_MS, blockedUntil, limitWhy, loginOk, nextLogin, pickInPool, poolAccounts, poolForFolder, poolProviders, readPools, roomWait, validatePools } from '../pools.ts';
+import { DEFAULT_POOL_FOLDERS, peekRunnerJson, readRunnerJson, writeRunnerJson } from '../config.ts';
+import { UNKNOWN_WAIT_MS, WAIT_SLACK_MS, backAt, blockedUntil, limitWhy, loginOk, nextLogin, pickInPool, poolAccounts, poolForFolder, poolProviders, readPools, roomWait, validatePools } from '../pools.ts';
 import { historyItems, selectHistory } from '../handoff-history.ts';
 import type { ThreadState } from '../runner.ts';
-import { CARRY_ON_BACK, CARRY_ON_MOVED, isClaudeModel, modelRow, modelTitle, providerName } from '../runner.ts';
+import { CARRY_ON_BACK, CARRY_ON_MOVED, isClaudeModel, modelRow, modelTitle } from '../runner.ts';
+import { providerName } from '../providers.ts';
 
 export const poolsPart = {
   // The pools in force: runner.json's, else the built-in ones from the
@@ -107,7 +108,7 @@ export const poolsPart = {
   // runner can use.
   defaultPoolId(this: Runner, pools: Pool[], usable: Account[], defaultAccount?: string): string | undefined {
     const live = pools.filter((p) => poolAccounts(p, usable).length);
-    const saved = readRunnerJson(this.cfg.home).defaults?.poolId ?? this.cfg.defaults.poolId;
+    const saved = peekRunnerJson(this.cfg.home).defaults?.poolId ?? this.cfg.defaults.poolId;
     if (saved && live.some((p) => p.id === saved)) return saved;
     const account = defaultAccount ?? this.defaultAccountId();
     return (live.find((p) => p.accountIds.includes(account)) ?? live[0])?.id;
@@ -121,7 +122,9 @@ export const poolsPart = {
     if (model.startsWith('grok-') || accounts.some((a) => a.provider === 'grok' && modelRow(a, model))) return 'grok';
     if (model.startsWith('swe-')) return 'devin';
     if (accounts.some((a) => a.provider === 'claude' && modelRow(a, model))) return 'claude';
-    return undefined;
+    // Last, as an ACP agent's list can name Claude's and Codex's models too:
+    // only an id nothing else claims means that agent.
+    return accounts.find((a) => modelRow(a, model))?.provider;
   },
 
   // The pool and login for a new thread with no accountId: the pool named,
@@ -151,7 +154,7 @@ export const poolsPart = {
     const provider = wanted && providers.includes(wanted) ? wanted : providers[0];
     // The last login used wins a tie, or when nothing says another has
     // more room, as pickAccount has it.
-    const json = readRunnerJson(this.cfg.home).defaults;
+    const json = peekRunnerJson(this.cfg.home).defaults;
     let accountId = pickInPool(pool, accounts, { provider, prefer: json?.accountId ?? this.cfg.defaults.accountId });
     if (!accountId) {
       const next = nextLogin(pool, accounts, { accountId: '', provider }, this.clock.now());
@@ -161,14 +164,23 @@ export const poolsPart = {
     return { poolId: pool.id, accountId };
   },
 
-  // A pool thread's turn ended failed with errorKind usageLimit: mark the
-  // login blocked, move to the next login with room and carry on by
-  // itself, once. A carry-on that runs dry too waits instead of moving
-  // again, as does a pool with nothing left.
+  // A turn ended failed with errorKind usageLimit. A pool thread marks the
+  // login blocked, moves to the next login with room and carries on by
+  // itself, once; a carry-on that runs dry too waits instead of moving
+  // again, as does a pool with nothing left. A pinned thread never moves:
+  // it waits for its own login to reset and carries on then. Either wait
+  // is skipped when Mike turned carrying on off (carryOnAtReset).
   onUsageLimit(this: Runner, st: ThreadState, turnId: string): void {
     const { rec } = st;
+    // So turning carrying on back on later knows this turn stopped at a limit.
+    rec.limitHitTurn = turnId;
+    this.markDirty(st);
     const pool = this.poolById(rec.poolId);
-    if (!pool) return;
+    if (!pool) {
+      if (this.bucket(rec) !== 'inbox' || rec.queue.length || rec.carryOnAtReset === false) return;
+      this.waitForOwnLogin(st, 'hit its usage limit.');
+      return;
+    }
     const now = this.clock.now();
     const was = this.usableAccounts().find((a) => a.id === rec.accountId);
     if (was) this.markRanDry(was);
@@ -177,13 +189,14 @@ export const poolsPart = {
     if (rec.queue.length) return;
     const accounts = this.usableAccounts();
     const title = was?.title ?? rec.accountId;
+    const waits = rec.carryOnAtReset !== false;
     if (rec.autoCarryOn === turnId) {
-      this.startWait(st, roomWait(pool, accounts, now), `${title} hit its usage limit too, so this thread waits rather than move again.`);
+      if (waits) this.startWait(st, roomWait(pool, accounts, now), `${title} hit its usage limit too, so this thread waits rather than move again.`);
       return;
     }
     const next = nextLogin(pool, accounts, rec, now);
     if ('waitUntil' in next) {
-      this.startWait(st, next, `Every login in ${pool.title} is out of room.`);
+      if (waits) this.startWait(st, next, `Every login in ${pool.title} is out of room.`);
       return;
     }
     this.moveLogin(st, accounts.find((a) => a.id === next.accountId)!, `${title} ${was ? limitWhy(was, now, true) : 'hit its usage limit'}`);
@@ -237,6 +250,46 @@ export const poolsPart = {
     this.markDirty(st);
   },
 
+  // A pinned thread at its limit waits for its own login: until the window
+  // at its limit resets plus a minute, or UNKNOWN_WAIT_MS when no reading
+  // says when. Not marked ran-dry: a pinned thread's limit is its own
+  // business, and the pool code goes by the login's reading.
+  waitForOwnLogin(this: Runner, st: ThreadState, why: string): void {
+    const { rec } = st;
+    const now = this.clock.now();
+    const account = this.usableAccounts().find((a) => a.id === rec.accountId);
+    // backAt when the reading says it's out; else (the turn found out
+    // first) the tightest window's reset, or UNKNOWN_WAIT_MS.
+    const at = account ? (backAt(account, now) ?? blockedUntil(account, now)) : now + UNKNOWN_WAIT_MS;
+    this.startWait(st, { waitUntil: new Date(at + WAIT_SLACK_MS).toISOString(), accountId: rec.accountId }, `${account?.title ?? rec.accountId} ${why}`);
+  },
+
+  // Mike's choice on the limit box: off ends any wait for room, with a
+  // note; on starts one if the last turn stopped at its limit and nothing
+  // has happened since.
+  setCarryOnAtReset(this: Runner, st: ThreadState, on: boolean): void {
+    const { rec, rt } = st;
+    if (!on) {
+      if (rec.carryOnAtReset === false) return;
+      rec.carryOnAtReset = false;
+      if (rec.waitingForRoom) {
+        delete rec.waitingForRoom;
+        this.emit(st, { type: 'system.note', text: "Won't carry on by itself. Send a message when you want it to." });
+        this.armRoomTimer();
+      }
+      this.markDirty(st);
+      return;
+    }
+    if (rec.carryOnAtReset !== false) return;
+    delete rec.carryOnAtReset;
+    this.markDirty(st);
+    const stuck = rec.status === 'error' && rec.limitHitTurn !== undefined;
+    if (!stuck || rec.waitingForRoom || rt.turn || rec.queue.length || this.bucket(rec) !== 'inbox') return;
+    const pool = this.poolById(rec.poolId);
+    if (pool) this.startWait(st, roomWait(pool, this.usableAccounts(), this.clock.now()), 'Carrying on by itself once there is room.');
+    else this.waitForOwnLogin(st, 'is at its limit.');
+  },
+
   // Nothing in the pool has room: the thread waits, with a note, and the
   // room timer carries it on at `until`.
   startWait(this: Runner, st: ThreadState, w: { waitUntil: string; accountId?: string }, lead: string): void {
@@ -257,12 +310,20 @@ export const poolsPart = {
     const { rec, rt } = st;
     delete rec.waitingForRoom;
     this.markDirty(st);
-    if (rt.deleted || rt.turn || rec.queue.length || this.bucket(rec) !== 'inbox') return;
+    if (rt.deleted || rt.turn || rec.queue.length || this.bucket(rec) !== 'inbox' || rec.carryOnAtReset === false) return;
     const pool = this.poolById(rec.poolId);
-    if (!pool) return;
     const now = this.clock.now();
     const accounts = this.usableAccounts();
     const current = accounts.find((a) => a.id === rec.accountId);
+    // A pinned thread waits on its own login and nothing else.
+    if (!pool) {
+      if (current && !loginOk(current)) {
+        this.waitForOwnLogin(st, 'is still at its limit.');
+        return;
+      }
+      this.carryOn(st, CARRY_ON_BACK);
+      return;
+    }
     let moved = false;
     if (!current || !pool.accountIds.includes(current.id) || !loginOk(current)) {
       const next = nextLogin(pool, accounts, rec, now);

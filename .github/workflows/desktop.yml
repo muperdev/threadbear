@@ -1,0 +1,96 @@
+# The GPUI desktop app (desktop/: the runner connection and the app) on
+# Linux, Mac and Windows: every Rust test (including signing in to the mock
+# runner), the behaviour specs in features/ against a real window, and a build
+# for each to download from the run's artifacts.
+# Nothing is signed: the Mac app needs right-click Open the first time, and
+# Windows SmartScreen asks once.
+name: Desktop app
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - desktop/**
+      - runner/src/protocol.ts
+      - runner/src/rpc-auth.ts
+      - web/src/sections.ts
+      - web/src/format.ts
+      - app/Tools/mock-runner/**
+      - features/**
+      - .github/workflows/desktop.yml
+  pull_request:
+    paths:
+      - desktop/**
+      - runner/src/protocol.ts
+      - runner/src/rpc-auth.ts
+      - web/src/sections.ts
+      - web/src/format.ts
+      - app/Tools/mock-runner/**
+      - features/**
+      - .github/workflows/desktop.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux, os: ubuntu-24.04 }
+          - { name: Mac, os: macos-26 }
+          - { name: Windows, os: windows-latest }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        # xvfb, mesa and dbus are for the behaviour specs: a window with no screen.
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev libvulkan-dev xvfb mesa-vulkan-drivers dbus-x11
+      - name: Install the mock runner and the specs
+        run: |
+          npm ci --prefix app/Tools/mock-runner
+          npm ci --prefix features
+      - name: The specs line up with their steps
+        working-directory: features
+        run: node verify-pairing.mjs
+      - name: Rust tests (with the mock runner)
+        run: cargo test --manifest-path desktop/Cargo.toml
+      - name: Behaviour specs
+        run: |
+          cargo build --manifest-path desktop/Cargo.toml -p threadbear-gpui --features automation
+          cd features
+          TB_APP=gpui TB_RETRY=1 node_modules/.bin/cucumber-js
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spec-reports-${{ matrix.name }}
+          path: features/reports/
+          if-no-files-found: ignore
+      - name: Build the GPUI app
+        run: cargo build --release --manifest-path desktop/Cargo.toml -p threadbear-gpui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: threadbear-desktop-${{ matrix.name }}
+          path: |
+            desktop/target/release/threadbear-gpui
+            desktop/target/release/threadbear-gpui.exe
+          if-no-files-found: error

@@ -1,0 +1,16 @@
+{
+  "name": "threadbear-features",
+  "private": true,
+  "type": "module",
+  "description": "Behaviour specs for Threadbear's desktop apps: one set of .feature files, run against the Swift app and the GPUI app.",
+  "scripts": {
+    "check": "node verify-pairing.mjs && cucumber-js --dry-run --format summary",
+    "test": "cucumber-js"
+  },
+  "devDependencies": {
+    "@cucumber/cucumber": "^13.3.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

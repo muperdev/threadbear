@@ -7,7 +7,7 @@ import { checkSummary } from '../helpers/protocol-check.ts';
 import { Projects, drainProjectMethods, projectMethods, BRIEF_MAX, NOTES_LONG, type ProjectHost } from '../../src/projects.ts';
 import { projectRouter, type PrimaryLink } from '../../src/handover.ts';
 import type { PocketCardInput, PocketCardSummary } from '../../src/sync.ts';
-import { Librarian, type LibrarianPocket, librarianMethods, saysNoFit, mainCheckout, SETTLE_MS, CATCH_UP_MS, CATCH_UP_MIN_CHARS, FIRST_MESSAGE_MS, SWEEP_MS } from '../../src/librarian.ts';
+import { Librarian, type LibrarianPocket, librarianMethods, saysNoFit, disclaims, mainCheckout, PICK_CHECKS_PER_LOOK, SETTLE_MS, CATCH_UP_MS, CATCH_UP_MIN_CHARS, FIRST_MESSAGE_MS, SWEEP_MS } from '../../src/librarian.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger, type Logger } from '../../src/log.ts';
@@ -16,7 +16,9 @@ import { commandFolders } from '../../src/tools.ts';
 import type { GenerateParams, ModelResult } from '../../src/models/index.ts';
 
 // A harness whose runner has projects, with a fake home holding repos.
-function setup(opts: { pocket?: () => LibrarianPocket | undefined; models?: (p: GenerateParams) => Promise<ModelResult<string>> | ModelResult<string>; log?: Logger; privateFolder?: (cwd: string) => boolean } = {}) {
+// `check` answers the second opinion on a pick (a `strong` call), kept apart
+// from `asked`; left out, it agrees.
+function setup(opts: { pocket?: () => LibrarianPocket | undefined; models?: (p: GenerateParams) => Promise<ModelResult<string>> | ModelResult<string>; check?: (p: GenerateParams) => ModelResult<string>; log?: Logger; privateFolder?: (cwd: string) => boolean } = {}) {
   const root = tmpDir();
   const repo = (rel: string, files: Record<string, string> = {}) => {
     const dir = path.join(root, rel);
@@ -32,9 +34,14 @@ function setup(opts: { pocket?: () => LibrarianPocket | undefined; models?: (p: 
   const home = tmpDir();
   const projects = new Projects({ home, clock: new FakeClock(), log: nullLogger, userHome: root });
   const asked: GenerateParams[] = [];
+  const checks: GenerateParams[] = [];
   const models = opts.models
     ? {
         generate: async (p: GenerateParams) => {
+          if (p.strong) {
+            checks.push(p);
+            return opts.check ? opts.check(p) : ({ ok: true, value: '{"belongs":true}', model: 'opus' } as ModelResult<string>);
+          }
           asked.push(p);
           return opts.models!(p);
         },
@@ -56,7 +63,7 @@ function setup(opts: { pocket?: () => LibrarianPocket | undefined; models?: (p: 
     s.result('completed');
     await tick();
   };
-  return { h, root, misc, repo, projects, librarian, asked, create, finish };
+  return { h, root, misc, repo, projects, librarian, asked, checks, create, finish };
 }
 
 test("the librarian keeps why a thread is in each project, and takes it out of a wrong guess only when it says so", async () => {
@@ -179,6 +186,186 @@ test('the librarian leaves a thread unfiled when its pick has no reason, or one 
   h.clock.advance(CATCH_UP_MS + SETTLE_MS);
   await tick(8);
   assert.equal(librarian.status().recent[0].text, 'Put it in Walkies');
+});
+
+// Thread fa7d6abf, 9 Nov 2026: a Vue client for Convex went into an Expo app
+// whose state mentions a Convex video.
+const SLAVA = { why: 'Thread is about a Convex community module and docs decision' };
+const slavaAnswer = (id: string) => ({ projects: [id], reasons: { [id]: "Slava's Vue/Nuxt Convex module touches the docs and client packages" }, ...SLAVA });
+const again = async (s: ReturnType<typeof setup>, id: string) => {
+  s.h.runner.send(id, 'more on the module '.repeat(40));
+  await tick();
+  await s.finish(id);
+  s.h.clock.advance(CATCH_UP_MS + SETTLE_MS);
+  await tick(8);
+};
+
+test('a thread that only shares a subject with a project stays out of it, and later looks do not re-roll the answer', async () => {
+  let answer: unknown = {};
+  const s = setup({ models: () => reply(answer), check: () => reply({ belongs: false, why: 'Shares only Convex' }) });
+  const build = s.projects.create({ title: 'Lets Build It', folders: [s.repo('dev/lets-build-it')], state: 'Scripting a technical video for the Convex channel', by: 'mike' });
+  const { thread } = s.create('What do you make of this community Vue and Nuxt client for Convex?');
+  answer = slavaAnswer(build.id);
+  await s.finish(thread.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.equal(s.h.runner.get(thread.id).projects?.length ?? 0, 0);
+  assert.equal(s.checks.length, 1);
+  assert.equal(s.checks[0].strong, true);
+  assert.equal(s.checks[0].feature, 'projects');
+  assert.match(s.checks[0].prompt, /Project "Lets Build It"/);
+  assert.match(s.checks[0].prompt, /community Vue and Nuxt/);
+  assert.doesNotMatch(s.checks[0].prompt, /catch-all|touches the docs/);
+  assert.equal(s.librarian.status().recent[0].outcome, 'nothing');
+  await again(s, thread.id);
+  assert.equal(s.checks.length, 1, 'refused once, not asked again');
+  assert.equal(s.h.runner.get(thread.id).projects?.length ?? 0, 0);
+  // Mike asking for a look gets a fresh answer.
+  s.librarian.run(thread.id);
+  await tick(8);
+  assert.equal(s.checks.length, 2);
+});
+
+test('an answer that argues against its own pick is dropped without a second opinion', async () => {
+  const s = setup({ models: () => reply({ projects: [build.id], reasons: { [build.id]: "Slava's module touches the docs" }, why: 'About a Convex community module, not Lets Build It' }) });
+  const build = s.projects.create({ title: 'Lets Build It', folders: [s.repo('dev/lets-build-it')], by: 'mike' });
+  const { thread } = s.create('What do you make of this module?');
+  await s.finish(thread.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.equal(s.h.runner.get(thread.id).projects?.length ?? 0, 0);
+  assert.equal(s.checks.length, 0);
+});
+
+test('disclaims needs the project named after the not', () => {
+  assert.equal(disclaims('About a Convex module, not Lets Build It', 'Lets Build It'), true);
+  assert.equal(disclaims('No clear match, so kept out of Questions', 'Questions'), true);
+  assert.equal(disclaims('Not BrowserBear work', 'BrowserBear (Chrome browser control)'), true);
+  assert.equal(disclaims('Tandem feature work, not yet merged', 'Tandem'), false);
+  assert.equal(disclaims('Fixes a Threadbear bug, not the original error', 'Threadbear'), false);
+  assert.equal(disclaims('Thread is not about the Walkies app', 'Walkies'), true);
+  assert.equal(disclaims('Updates out of date Threadbear documentation', 'Threadbear'), false);
+  assert.equal(disclaims('Answers user questions, not questionnaires', 'Questions'), false);
+});
+
+test("a pick the check confirms is filed from a catch-all folder, and the look keeps why, past a restart", async () => {
+  let answer: unknown = {};
+  const s = setup({ models: () => reply(answer) });
+  const sentry = s.projects.create({ title: 'Sentry watch', folders: [s.repo('dev/sentry-watch')], by: 'mike' });
+  const { thread } = s.create('Triage this production error');
+  answer = { projects: [sentry.id], reasons: { [sentry.id]: 'Triages an error the watcher routed here' }, why: 'Sentry triage' };
+  await s.finish(thread.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.deepEqual(s.h.runner.get(thread.id).projects?.map((m) => m.id), [sentry.id]);
+  assert.equal(s.checks.length, 1);
+  const entry = s.librarian.status().recent[0];
+  assert.equal(entry.outcome, 'joined');
+  assert.deepEqual(entry.reasons, { [sentry.id]: 'Triages an error the watcher routed here' });
+  assert.equal(entry.why, 'Sentry triage');
+  s.librarian.stop();
+  const saved = JSON.parse(fs.readFileSync(path.join(s.h.home, 'librarian.json'), 'utf8'));
+  assert.deepEqual(saved.recent[0].reasons, entry.reasons);
+});
+
+test('folder evidence files a thread with no second opinion', async () => {
+  let answer: unknown = {};
+  const s = setup({ models: () => reply(answer), check: () => reply({ belongs: false }) });
+  const dir = s.repo('dev/walkies');
+  const walkies = s.projects.create({ title: 'Walkies', folders: [dir], by: 'mike' });
+  answer = { projects: [walkies.id], reasons: { [walkies.id]: 'Works on the app' } };
+  // Runs in the project's repo.
+  const inRepo = s.create('Fix the map', dir).thread;
+  await s.finish(inRepo.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.deepEqual(s.h.runner.get(inRepo.id).projects?.map((m) => m.id), [walkies.id]);
+  // Runs in a catch-all folder but edited the repo.
+  const fromMisc = s.create('Fix the map from here').thread;
+  await s.finish(fromMisc.id, [path.join(dir, 'src/map.ts')]);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.deepEqual(s.h.runner.get(fromMisc.id).projects?.map((m) => m.id), [walkies.id]);
+  assert.equal(s.checks.length, 0);
+});
+
+test('a check that gets no answer keeps the thread out for now, and a later look asks again', async () => {
+  let answer: unknown = {};
+  let verdict: ModelResult<string> = { ok: false, reason: 'no-room', message: 'full' };
+  const s = setup({ models: () => reply(answer), check: () => verdict });
+  const build = s.projects.create({ title: 'Lets Build It', by: 'mike' });
+  const { thread } = s.create('Plan the next build video');
+  answer = { projects: [build.id], reasons: { [build.id]: 'Plans its next video' } };
+  await s.finish(thread.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.equal(s.h.runner.get(thread.id).projects?.length ?? 0, 0);
+  verdict = { ok: true, value: '{"belongs":true}', model: 'opus' };
+  await again(s, thread.id);
+  assert.equal(s.checks.length, 2);
+  assert.deepEqual(s.h.runner.get(thread.id).projects?.map((m) => m.id), [build.id]);
+});
+
+test('a refused pick does not turn into a new project of the same name', async () => {
+  let answer: unknown = {};
+  const s = setup({ models: () => reply(answer), check: () => reply({ belongs: false }) });
+  const build = s.projects.create({ title: 'Lets Build It', by: 'mike' });
+  const { thread } = s.create('What do you make of this module?');
+  answer = { projects: [build.id], reasons: { [build.id]: 'Touches the docs' }, new: { title: 'Lets Build It', folders: [], goals: 'x', state: 'y', why: 'z' } };
+  await s.finish(thread.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.equal(s.projects.list().length, 1);
+  assert.equal(s.h.runner.get(thread.id).projects?.length ?? 0, 0);
+});
+
+test('an asked look that confirms the last refused pick clears the refusal', async () => {
+  let answer: unknown = {};
+  let belongs = false;
+  const s = setup({ models: () => reply(answer), check: () => reply({ belongs }) });
+  const build = s.projects.create({ title: 'Lets Build It', by: 'mike' });
+  const { thread } = s.create('Plan the next build video');
+  answer = { projects: [build.id], reasons: { [build.id]: 'Plans its next video' } };
+  await s.finish(thread.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  const saved = () => JSON.parse(fs.readFileSync(path.join(s.h.home, 'librarian.json'), 'utf8')).looks[thread.id];
+  await tick();
+  assert.deepEqual(saved().refused, [build.id]);
+  belongs = true;
+  s.librarian.run(thread.id);
+  await tick(8);
+  assert.deepEqual(s.h.runner.get(thread.id).projects?.map((m) => m.id), [build.id]);
+  s.librarian.run(thread.id);
+  await tick(8);
+  assert.equal(saved().refused, undefined);
+});
+
+test('a thread deleted during one check is dropped quietly, with no check of the next pick', async () => {
+  const s = setup({ models: () => reply({ projects: [a.id, b.id], reasons: { [a.id]: 'Does its work', [b.id]: 'Does its work' } }), check: () => {
+    s.h.runner.delete(thread.id);
+    return reply({ belongs: true });
+  } });
+  const a = s.projects.create({ title: 'One', by: 'mike' });
+  const b = s.projects.create({ title: 'Two', by: 'mike' });
+  const { thread } = s.create('A thread that goes away');
+  await s.finish(thread.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.equal(s.checks.length, 1);
+  assert.equal(s.librarian.status().recent.filter((e) => e.outcome === 'failed').length, 0);
+});
+
+test('a look asks about a few picks at most', async () => {
+  const made: string[] = [];
+  const s = setup({ models: () => reply({ projects: made, reasons: Object.fromEntries(made.map((id) => [id, 'Does its work'])) }) });
+  for (let i = 0; i < PICK_CHECKS_PER_LOOK + 2; i++) made.push(s.projects.create({ title: `Project ${i}`, by: 'mike' }).id);
+  const { thread } = s.create('A status email that lists every app');
+  await s.finish(thread.id);
+  s.h.clock.advance(SETTLE_MS);
+  await tick(8);
+  assert.equal(s.checks.length, PICK_CHECKS_PER_LOOK);
+  assert.equal(s.h.runner.get(thread.id).projects?.length, PICK_CHECKS_PER_LOOK);
 });
 
 test('saysNoFit spots reasons that say a thread does not belong', () => {
@@ -649,7 +836,7 @@ test('a git worktree counts as its main checkout, never as a folder of its own',
 });
 
 test('the librarian keeps its line on where the thread is up to as the thread\'s brief', async () => {
-  const s = setup({ models: () => reply({ projects: [], new: null, state: {}, thread: 'Waiting on Mike to pick a layout.', why: 'A one-off' }) });
+  const s = setup({ models: () => reply({ projects: [], new: null, state: {}, thread: 'Waiting on Mike to pick a layout.', purpose: 'A mockup for the landing page.', why: 'A one-off' }) });
   const { h, create, finish, librarian } = s;
   const { thread } = create('Make a mockup');
   await finish(thread.id, []);
@@ -657,6 +844,7 @@ test('the librarian keeps its line on where the thread is up to as the thread\'s
   await tick(6);
   assert.equal(librarian.status().recent[0]?.text, 'Nothing to change: a one-off', 'the brief is not a project change');
   assert.equal(h.runner.highlights(thread.id).brief?.text, 'Waiting on Mike to pick a layout.');
+  assert.equal((h.runner.highlights(thread.id).brief as { purpose?: string }).purpose, 'A mockup for the landing page.', 'what the recap box says it is for');
   assert.ok(h.runner.get(thread.id).highlightsAt);
 });
 

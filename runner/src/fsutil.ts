@@ -11,8 +11,15 @@ export function atomicWriteFileSync(file: string, data: string | Buffer, mode?: 
   const fd = fs.openSync(tmp, 'w', mode ?? 0o644);
   try {
     try {
-      if (typeof data === 'string') fs.writeSync(fd, data);
-      else fs.writeSync(fd, data);
+      // A write can take only part of it and say so in the count, as a nearly
+      // full disk does (THREADBEAR-1R). Keep going, so the next one gets the
+      // ENOSPC, or the rename below would put a cut-off file over a good one.
+      const bytes = typeof data === 'string' ? Buffer.from(data) : data;
+      for (let done = 0; done < bytes.length; ) {
+        const wrote = fs.writeSync(fd, bytes, done, bytes.length - done);
+        if (wrote <= 0) throw new Error(`could not write ${file}: no progress at byte ${done}`);
+        done += wrote;
+      }
       fs.fsyncSync(fd);
     } finally {
       fs.closeSync(fd);

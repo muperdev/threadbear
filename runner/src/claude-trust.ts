@@ -17,12 +17,12 @@
 // Trust itself is kept with the patches' (patch-trust.ts), per folder,
 // under the same folder key, so a worktree counts as its main checkout.
 import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { followOptions } from './patch-trust.ts';
 import type { PermissionMode } from './protocol.ts';
+import { untrustedGitSync } from './safe-git.ts';
 import { looksRunnable, reachOf, reachOfCommand, Reads } from './script-trust.ts';
 import { allowCommand } from './shell-allowlist.ts';
 
@@ -369,7 +369,9 @@ class TooBig extends Error {}
 function nestedSkills(dir: string, depth = 0): { files: string[]; problem?: string } {
   const git = (...args: string[]): string | undefined => {
     try {
-      return execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000, maxBuffer: 64 * 1024 * 1024 });
+      // Not plain git: the folder's own .git/config could name an fsmonitor
+      // program, and this runs before the folder is trusted.
+      return untrustedGitSync(dir, args);
     } catch {
       return undefined;
     }
@@ -498,7 +500,7 @@ function frontmatterParts(text: string, grants: boolean): Record<string, unknown
 // The text between a file's opening `---` and the next, or the rest of
 // the file when there's no closing one. Leading blank lines and a BOM are
 // let through: reading more as frontmatter than Claude does only asks more.
-function frontmatter(text: string): string | undefined {
+export function frontmatter(text: string): string | undefined {
   const body = text.replace(/^\uFEFF/, '').trimStart();
   if (!/^---[ \t]*\r?\n/.test(body)) return undefined;
   const rest = body.replace(/^---[ \t]*\r?\n/, '');

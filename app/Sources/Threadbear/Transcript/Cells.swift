@@ -50,6 +50,9 @@ protocol RowCellDelegate: AnyObject {
     func editMessage(rowId: String)
     /// The × by a message queued behind the running turn: take it back.
     func removeQueued(rowId: String)
+    /// Whether this thread's provider can go back to an earlier message:
+    /// the pencil only shows when it can.
+    var canGoBack: Bool { get }
     /// A work:, thread: or review: link in row `rowId`'s text (WorkLinks): open the
     /// step in that turn's working, or the other thread.
     func openThreadLink(_ url: URL, fromRow rowId: String)
@@ -83,6 +86,7 @@ extension RowCellDelegate {
     func claimWakeUp(rowId: String) -> Bool { false }
     func editMessage(rowId: String) {}
     func removeQueued(rowId: String) {}
+    var canGoBack: Bool { true }
     func openThreadLink(_ url: URL, fromRow rowId: String) {}
     func approvePlan(itemId: String) {}
     func sendBackPlan() {}
@@ -289,6 +293,10 @@ final class TextRowCell: RowCellView {
     /// Left of a message still on its way to the runner: a spinner while
     /// it's sent, a clock once it's queued behind the running turn.
     let pendingMark = PendingMark()
+    /// Under a message held for a restarting runner: it goes on its own
+    /// once the runner's back. Made the first time one's shown.
+    private var waitingNote: NSTextField?
+    static let waitingNoteText = "Runner restarting. Sends when it's back."
     /// Left of a message Mike sent from the iPhone app: a small phone, its
     /// tip saying so on hover or click, in place of a line of text.
     let phoneMark = NSButton()
@@ -322,6 +330,9 @@ final class TextRowCell: RowCellView {
     /// open card at the top of the composer (ComposerCard), whose box
     /// is the composer's.
     var bare = false
+    /// Over a turn footer's words: its tokens broken down, and what they'd
+    /// cost at API prices, which the footer itself no longer shows.
+    private let footerTip = TipAnchorView()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -357,6 +368,8 @@ final class TextRowCell: RowCellView {
         phoneMark.setTip("Sent from the iPhone app")
         phoneMark.setAccessibilityLabel("Sent from the iPhone app")
         addSubview(phoneMark)
+        footerTip.isHidden = true
+        addSubview(footerTip)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -446,6 +459,7 @@ final class TextRowCell: RowCellView {
         textView.isHidden = render.text == nil
         editable = false
         removable = false
+        footerTip.isHidden = true
         var pending: UserMessage.Pending?
 
         switch row.content {
@@ -492,7 +506,23 @@ final class TextRowCell: RowCellView {
                 markEdge = phoneMark.frame.minX
             }
             pending = message.pending
-            if let state = message.pending {
+            if message.pending == .waitingForRunner {
+                // The note says it all, so no mark beside it too.
+                let note = waitingNote ?? {
+                    let label = makeLabel()
+                    label.font = Theme.smallFont
+                    // As the transcript's other small notes ("Scheduled").
+                    label.textColor = Theme.faintText
+                    label.alignment = .right
+                    label.stringValue = Self.waitingNoteText
+                    addSubview(label)
+                    waitingNote = label
+                    return label
+                }()
+                note.isHidden = false
+                let bottom = render.text != nil ? box.frame.maxY : images.frame.maxY
+                note.frame = NSRect(x: x, y: bottom + RowMetrics.waitingNoteGap, width: width - zoomed(4), height: RowMetrics.waitingNoteHeight)
+            } else if let state = message.pending {
                 // Where the pencil goes on a message that's landed.
                 let side = zoomed(22)
                 let left = markEdge
@@ -502,7 +532,7 @@ final class TextRowCell: RowCellView {
                 // A queued one's pencil and × go left of its clock.
                 if state == .queued { markEdge = pendingMark.frame.minX + zoomed(6) }
             }
-            if message.editable {
+            if message.editable, delegate?.canGoBack != false {
                 // Left of the bubble (or of the pictures, with no text),
                 // level with its last line, as Codex and ChatGPT put theirs.
                 editable = true
@@ -554,8 +584,14 @@ final class TextRowCell: RowCellView {
             box.frame = NSRect(x: x, y: top, width: width, height: render.textSize.height + RowMetrics.boxPad * 2)
             textView.place(box.frame.insetBy(dx: RowMetrics.boxPad, dy: RowMetrics.boxPad))
 
-        case .footer:
+        case .footer(let completion):
             textView.place(NSRect(x: x, y: zoomed(5), width: width, height: RowMetrics.footerHeight - zoomed(10)))
+            // Only over the words, not the empty width of the row.
+            if let tokens = TurnTokens(usage: completion.usage), let text = render.text {
+                footerTip.isHidden = false
+                footerTip.text = tokens.tip(costUsd: completion.costUsd)
+                footerTip.frame = NSRect(x: x, y: zoomed(5), width: min(width, ceil(text.size().width) + zoomed(4)), height: RowMetrics.footerHeight - zoomed(10))
+            }
 
         default:
             textView.place(NSRect(x: x, y: top, width: width, height: render.textSize.height))
@@ -566,7 +602,8 @@ final class TextRowCell: RowCellView {
         // A message the runner hasn't shown yet is drawn faded.
         let alpha: CGFloat = pending == nil ? 1 : 0.5
         for view in [box, textView, images] as [NSView] where view.alphaValue != alpha { view.alphaValue = alpha }
-        if pending == nil, !pendingMark.isHidden { pendingMark.hide() }
+        if pending == nil || pending == .waitingForRunner, !pendingMark.isHidden { pendingMark.hide() }
+        if pending != .waitingForRunner, waitingNote?.isHidden == false { waitingNote?.isHidden = true }
 
         // Messages get the selection bar (Explain, Quote, Copy).
         switch row.content {
@@ -1905,7 +1942,7 @@ final class PlanCardCell: RowCellView {
 private final class QuestionGroupView: NSView {
     let label = TranscriptTextView()
     var buttons: [NSButton] = []
-    var notes: [NSTextField] = []
+    var notes: [TranscriptTextView] = []
 
     override var isFlipped: Bool { true }
 
@@ -2082,6 +2119,8 @@ final class QuestionRowCell: RowCellView, NSTextFieldDelegate {
             }
             var inner = height + zoomed(8)
             var noteIndex = 0
+            let noteHeights = render.noteHeights.indices.contains(index)
+                ? render.noteHeights[index] : RowRenderer.optionNoteHeights(question, width: width, measurer: TextMeasurer.current)
             for (optionIndex, option) in question.options.enumerated() {
                 if group.buttons.count <= optionIndex {
                     let button = NSButton(radioButtonWithTitle: "", target: self, action: #selector(optionClicked(_:)))
@@ -2099,17 +2138,17 @@ final class QuestionRowCell: RowCellView, NSTextFieldDelegate {
                 inner += RowMetrics.optionHeight
                 if let description = option.description, !description.isEmpty {
                     if group.notes.count <= noteIndex {
-                        let note = makeLabel()
-                        note.textColor = .secondaryLabelColor
+                        let note = TranscriptTextView()
                         group.addSubview(note)
                         group.notes.append(note)
                     }
                     let note = group.notes[noteIndex]
                     note.isHidden = false
-                    note.font = Theme.labelFont
-                    if note.stringValue != description { note.stringValue = description }
-                    note.frame = NSRect(x: zoomed(20), y: inner - zoomed(2), width: width - zoomed(20), height: RowMetrics.optionDescription)
-                    inner += RowMetrics.optionDescription
+                    let noteWidth = width - RowRenderer.optionNoteIndent
+                    let noteHeight = noteIndex < noteHeights.count ? noteHeights[noteIndex] : RowMetrics.optionDescription
+                    note.frame = NSRect(x: RowRenderer.optionNoteIndent, y: inner - zoomed(2), width: noteWidth, height: noteHeight)
+                    note.show(RowRenderer.optionNoteText(description), width: noteWidth)
+                    inner += noteHeight
                     noteIndex += 1
                 }
             }

@@ -12,7 +12,7 @@ import { NO_WAKE_TIME } from '../runner.ts';
 import { parseWhen } from '../when.ts';
 import type { WaitFor } from '../needs.ts';
 import path from 'node:path';
-import { providerName } from '../runner.ts';
+import { providerName } from '../providers.ts';
 import { LAB_REVIEW_REPLY_CHARS } from './lab-review.ts';
 import { cutSafely, safeEnd } from '../safe-cut.ts';
 

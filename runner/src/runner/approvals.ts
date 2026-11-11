@@ -14,6 +14,7 @@ import { matchAnswers } from '../runner.ts';
 import { SECRET_TIMEOUT_DEFAULT_MIN, SECRET_TIMEOUT_MAX_MIN, type SecretFiles } from '../secrets.ts';
 import { START_CARD, type RequestAnswer } from '../cross-runner.ts';
 import { REMOTE_ALLOW_REFUSED, remoteCardShowsAll } from '../tools.ts';
+import { reviewCard, reviewsCards, type CardForReview, type CardVerdict } from './card-review.ts';
 
 export type SecretRequest = { label: string; reason: string; placeholder?: string; timeoutMinutes?: number; toolUseId?: string; signal?: AbortSignal };
 export type SecretAnswer = ({ status: 'saved' } & SecretFiles) | { status: 'declined' | 'expired'; message?: string };
@@ -153,6 +154,60 @@ export const approvalsPart = {
 
   requestApproval(this: Runner, st: ThreadState, gen: number, req: ToolApprovalRequest): Promise<ToolApprovalAnswer> {
     if (!this.turnForRequest(st, gen, Boolean(req.toolUseId))) return Promise.resolve({ decision: 'expired', message: 'The thread is shutting down.' });
+    // A plan is Mike's to approve, whatever the mode.
+    // Codex's file change card names the files but not the change (that
+    // comes as edit.diff), so the reviewer couldn't see what it allows.
+    if (req.name !== 'ExitPlanMode' && st.rec.provider === 'claude' && reviewsCards(this, st)) {
+      const title = approvalTitle(req.name, req.input, (q) => this.findThread(q)) ?? req.title;
+      return this.reviewThenCard(st, gen, { name: req.name, title, input: req.wholeInput ?? req.input }, req.signal, () => this.approvalCard(st, req), Boolean(req.toolUseId));
+    }
+    return this.approvalCard(st, req);
+  },
+
+  // An Auto thread's card goes past the reviewer first (runner/card-review.ts):
+  // allowed there, the call goes ahead with a note saying so; otherwise
+  // `show` puts the card up for Mike, after a note with the reviewer's reason.
+  async reviewThenCard(this: Runner, st: ThreadState, gen: number, card: CardForReview, signal: AbortSignal | undefined, show: () => Promise<ToolApprovalAnswer>, main = true): Promise<ToolApprovalAnswer> {
+    const { rt } = st;
+    // Settled at once by Stop, the turn ending or Mike writing (expireApprovals,
+    // send), as a card would be, without waiting for the model.
+    // `settled` is kept as well as raced: a verdict ready in the same tick
+    // (a card never reviewed) can win the race after a cancel.
+    let settled: ToolApprovalAnswer | undefined;
+    let resolveCancel!: (a: ToolApprovalAnswer) => void;
+    const cancelled = new Promise<ToolApprovalAnswer>((r) => (resolveCancel = r));
+    const cancel = (a: ToolApprovalAnswer) => {
+      settled ??= a;
+      resolveCancel(a);
+    };
+    const id = crypto.randomUUID();
+    const entry: { main: boolean; cancel: typeof cancel; stale?: boolean } = { main, cancel };
+    (rt.reviews ??= new Map()).set(id, entry);
+    const onAbort = () => cancel({ decision: 'expired', message: 'Cancelled.' });
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    let verdict: CardVerdict;
+    try {
+      const r = await Promise.race([reviewCard(this, st, card).then((v) => ({ v })), cancelled.then((a) => ({ a }))]);
+      if ('a' in r) return r.a;
+      if (settled) return settled;
+      verdict = r.v;
+    } finally {
+      rt.reviews?.delete(id);
+      signal?.removeEventListener('abort', onAbort);
+    }
+    if (rt.generation !== gen || rt.closing || rt.deleted || this.stopping) return { decision: 'expired', message: 'The thread is shutting down.' };
+    // Still on Auto: switched to Ask or Plan meanwhile, it's Mike's card.
+    if (verdict.allow && !entry.stale && reviewsCards(this, st)) {
+      this.emit(st, { type: 'system.note', text: `Allowed by the reviewer: ${card.title}. ${verdict.why}` }, rt.turn?.turnId);
+      return { decision: 'allow' };
+    }
+    if (!verdict.allow && verdict.why) this.emit(st, { type: 'system.note', text: `The reviewer left this one for you: ${verdict.why}` }, rt.turn?.turnId);
+    return show();
+  },
+
+  // The card itself, for Mike.
+  approvalCard(this: Runner, st: ThreadState, req: ToolApprovalRequest): Promise<ToolApprovalAnswer> {
     const approvalId = crypto.randomUUID();
     const body: EventBody = {
       type: 'approval.requested',
@@ -163,6 +218,7 @@ export const approvalsPart = {
       options: req.canAlwaysAllow ? ['allow', 'allowAlways', 'deny'] : ['allow', 'deny'],
     };
     if (req.toolUseId) body.itemId = req.toolUseId;
+    if (req.reason) body.reason = req.reason;
     const plan = req.name === 'ExitPlanMode' && req.toolUseId && req.toolUseId === st.rec.openPlan ? req.toolUseId : undefined;
     return new Promise((resolve) => {
       // A card offered without "Always allow" never answers with it, even
@@ -182,8 +238,15 @@ export const approvalsPart = {
   requestAgentApproval(this: Runner, threadId: string, req: AgentApprovalRequest): Promise<ToolApprovalAnswer> {
     const st = this.mustGet(threadId);
     if (!this.turnForRequest(st, st.rt.generation)) return Promise.resolve({ decision: 'expired', message: 'The thread is not running a turn.' });
+    if (reviewsCards(this, st)) return this.reviewThenCard(st, st.rt.generation, req, req.signal, () => this.agentApprovalCard(st, req));
+    return this.agentApprovalCard(st, req);
+  },
+
+  agentApprovalCard(this: Runner, st: ThreadState, req: AgentApprovalRequest): Promise<ToolApprovalAnswer> {
     const approvalId = crypto.randomUUID();
-    const body: EventBody = { type: 'approval.requested', approvalId, name: req.name, title: req.title, input: req.input, options: ['allow', 'deny'] };
+    // The title is why it asks; the Mac card's heading is only "Use <tool>?",
+    // so it goes in the reason line too (David, 9 Nov 2026).
+    const body: EventBody = { type: 'approval.requested', approvalId, name: req.name, title: req.title, input: req.input, options: ['allow', 'deny'], reason: req.title };
     return new Promise((resolve) => {
       const answer = (a: ToolApprovalAnswer) => resolve(a.decision === 'allowAlways' ? { ...a, decision: 'allow' } : a);
       this.addApproval(st, { approvalId, kind: 'tool', main: true, macOnly: true, resolve: answer }, body, req.signal ?? new AbortController().signal);
@@ -282,6 +345,8 @@ export const approvalsPart = {
     rt.idleTimer = undefined;
     this.markDirty(st);
     signal.addEventListener('abort', () => this.expireApproval(st, pending.approvalId, 'Cancelled.'), { once: true });
+    // Cancelled before the card went up: no abort is coming to close it.
+    if (signal.aborted) this.expireApproval(st, pending.approvalId, 'Cancelled.');
   },
 
   resolveApproval(this: Runner, st: ThreadState, approvalId: string, decision: ApprovalDecision, message?: string): void {
@@ -324,6 +389,10 @@ export const approvalsPart = {
     for (const [id, pending] of [...st.rt.approvals]) {
       if (opts.mainOnly && !pending.main) continue;
       this.expireApproval(st, id, message, opts.stopped);
+    }
+    for (const r of [...(st.rt.reviews?.values() ?? [])]) {
+      if (opts.mainOnly && !r.main) continue;
+      r.cancel({ decision: 'expired', message, ...(opts.stopped ? { stopped: true } : {}) });
     }
   },
 

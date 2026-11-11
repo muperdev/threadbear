@@ -8,7 +8,8 @@
 // down; thread titles come from the runner when it's up.
 import fs from 'node:fs';
 import path from 'node:path';
-import { readToken, runnerUrl, type Config } from './config.ts';
+import { type Config } from './config.ts';
+import { newTbClient } from './tb-connect.ts';
 import { RunnerClient } from './client.ts';
 import type { ThreadSummary } from './protocol.ts';
 
@@ -207,7 +208,7 @@ async function threadTitles(cfg: Config): Promise<Map<string, string>> {
   let client: RunnerClient | undefined;
   let timer: NodeJS.Timeout | undefined;
   try {
-    client = new RunnerClient(runnerUrl(cfg), readToken(cfg.home));
+    client = newTbClient(cfg);
     const c = client;
     const timeout = new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error('timeout')), 1500)));
     const r = await Promise.race([

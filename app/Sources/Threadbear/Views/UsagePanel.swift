@@ -265,7 +265,7 @@ private struct TokensChart: View {
             if spending.count > 1 {
                 // Wrapped a whole name at a time: in the narrow dock an
                 // HStack broke "mike+3" over two lines.
-                LegendFlow(spacing: zoomed(12), lineSpacing: zoomed(4)) {
+                FlowRows(spacing: zoomed(12), lineSpacing: zoomed(4)) {
                     ForEach(spending, id: \.self) { id in
                         HStack(spacing: zoomed(5)) {
                             LoginDot(colour: colours.colour(id, dark: scheme == .dark))
@@ -287,49 +287,6 @@ private struct TokensChart: View {
         if Calendar.current.isDate(date, inSameDayAs: now) { return "Today" }
         let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
         return names[(Calendar.current.component(.weekday, from: date) - 1) % 7]
-    }
-}
-
-/// Lays its children out left to right, wrapping to a new line when the
-/// next one doesn't fit, for the chart's legend.
-private struct LegendFlow: Layout {
-    var spacing: CGFloat
-    var lineSpacing: CGFloat
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = rows(width: proposal.width ?? .infinity, subviews: subviews)
-        let width = rows.map { $0.width }.max() ?? 0
-        let height = rows.map(\.height).reduce(0, +) + lineSpacing * CGFloat(max(0, rows.count - 1))
-        return CGSize(width: width, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var y = bounds.minY
-        for row in rows(width: bounds.width, subviews: subviews) {
-            var x = bounds.minX
-            for index in row.indices {
-                let size = subviews[index].sizeThatFits(.unspecified)
-                subviews[index].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2), proposal: .unspecified)
-                x += size.width + spacing
-            }
-            y += row.height + lineSpacing
-        }
-    }
-
-    private func rows(width: CGFloat, subviews: Subviews) -> [(indices: [Int], width: CGFloat, height: CGFloat)] {
-        var rows: [(indices: [Int], width: CGFloat, height: CGFloat)] = []
-        for (index, subview) in subviews.enumerated() {
-            let size = subview.sizeThatFits(.unspecified)
-            if var last = rows.last, last.width + spacing + size.width <= width {
-                last.indices.append(index)
-                last.width += spacing + size.width
-                last.height = max(last.height, size.height)
-                rows[rows.count - 1] = last
-            } else {
-                rows.append(([index], size.width, size.height))
-            }
-        }
-        return rows
     }
 }
 

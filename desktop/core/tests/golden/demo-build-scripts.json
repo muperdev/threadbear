@@ -1,0 +1,140 @@
+{
+  "closed" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Tidy up the build scripts and check the release build still works.",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "g:t:ls",
+      "inGroup" : false,
+      "kind" : "group",
+      "seq" : 3,
+      "text" : "Worked for 48s",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:m1",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 15,
+      "text" : "The release script now reads the signing identity from `SIGNING_IDENTITY` and stops with a clear er…",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "cf:turn_1",
+      "inGroup" : false,
+      "kind" : "changes",
+      "seq" : 16,
+      "text" : "Edited 1 file",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 16,
+      "text" : "48s, $0.09",
+      "turn" : "turn_1"
+    }
+  ],
+  "open" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Tidy up the build scripts and check the release build still works.",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : true,
+      "id" : "g:t:ls",
+      "inGroup" : false,
+      "kind" : "group",
+      "seq" : 3,
+      "text" : "Worked for 48s",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:ls",
+      "inGroup" : true,
+      "kind" : "tool",
+      "seq" : 3,
+      "text" : "List the build scripts",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:pr",
+      "inGroup" : true,
+      "kind" : "tool",
+      "seq" : 5,
+      "text" : "Get pull request #48",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:rel",
+      "inGroup" : true,
+      "kind" : "tool",
+      "seq" : 7,
+      "text" : "Run the release build (failed)",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:w",
+      "inGroup" : true,
+      "kind" : "diff",
+      "seq" : 9,
+      "text" : "Write /Users/mike/dev/photo-sync/scripts/release.sh",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "ap:ap_w",
+      "inGroup" : true,
+      "kind" : "approval",
+      "seq" : 10,
+      "text" : "Write /Users/mike/dev/photo-sync/scripts/release.sh (allow)",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "q:q_old",
+      "inGroup" : true,
+      "kind" : "question",
+      "seq" : 13,
+      "text" : "build-old.sh isn't used anywhere. Delete it?",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:m1",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 15,
+      "text" : "The release script now reads the signing identity from `SIGNING_IDENTITY` and stops with a clear er…",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "cf:turn_1",
+      "inGroup" : false,
+      "kind" : "changes",
+      "seq" : 16,
+      "text" : "Edited 1 file",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 16,
+      "text" : "48s, $0.09",
+      "turn" : "turn_1"
+    }
+  ]
+}

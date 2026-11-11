@@ -67,9 +67,11 @@ final class MockRunnerTests: XCTestCase {
     }
 
     private static func findNode() -> String? {
-        let paths = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
-            + [NSHomeDirectory() + "/.nvm/versions/node/v24.22.1/bin", "/opt/homebrew/bin", "/usr/local/bin"]
-        return paths.map { $0 + "/node" }.first { FileManager.default.isExecutableFile(atPath: $0) }
+        // check.sh's Node (THREADBEAR_NODE) first, then PATH and Homebrew's.
+        let env = ProcessInfo.processInfo.environment
+        let nodes = [env["THREADBEAR_NODE"]].compactMap { $0 }
+            + ((env["PATH"] ?? "").split(separator: ":").map(String.init) + ["/opt/homebrew/bin", "/usr/local/bin"]).map { $0 + "/node" }
+        return nodes.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     private func connect() async throws -> RPCClient {
@@ -518,12 +520,17 @@ final class MockRunnerTests: XCTestCase {
         XCTAssertEqual(remote.threads.first { $0.threadId == "bruce_backup" }?.unread, true)
         XCTAssertEqual(remote.threads.first { $0.threadId == "bruce_render" }?.status, .running)
 
-        // Not this runner's to list or open.
+        // Not this runner's to list...
         let own = try await client.listThreads(include: [.inbox, .snoozed, .archived])
         XCTAssertFalse(own.contains { $0.id.hasPrefix("bruce_") })
+        // ...but it answers for them through the backend, the app's default
+        // way in (docs/protocol.md, "Other runners' threads through the backend").
+        let relayed = try await client.events(threadId: "bruce_backup")
+        XCTAssertFalse(relayed.events.isEmpty)
+        // A thread nobody has is still not found.
         do {
-            _ = try await client.events(threadId: "bruce_backup")
-            XCTFail("this runner doesn't have bruce's threads")
+            _ = try await client.events(threadId: "no_such_thread")
+            XCTFail("nobody has this thread")
         } catch RPCError.server(let code, _) {
             XCTAssertEqual(code, RPCError.threadNotFound)
         }

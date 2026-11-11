@@ -1,0 +1,126 @@
+{
+  "closed" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "The CI build went from 6 to 14 minutes this week. Can you find out why?",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:log",
+      "inGroup" : false,
+      "kind" : "tool",
+      "seq" : 3,
+      "text" : "Download the last two CI logs",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:m1",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 5,
+      "text" : "Looking at the two logs now.",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "g:r:r1",
+      "inGroup" : false,
+      "kind" : "group",
+      "seq" : 6,
+      "text" : "Read 2 files, ran a command",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "w:turn_1",
+      "inGroup" : false,
+      "kind" : "working",
+      "seq" : 11,
+      "text" : "Working",
+      "turn" : "turn_1"
+    }
+  ],
+  "open" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "The CI build went from 6 to 14 minutes this week. Can you find out why?",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:log",
+      "inGroup" : false,
+      "kind" : "tool",
+      "seq" : 3,
+      "text" : "Download the last two CI logs",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:m1",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 5,
+      "text" : "Looking at the two logs now.",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : true,
+      "id" : "g:r:r1",
+      "inGroup" : false,
+      "kind" : "group",
+      "seq" : 6,
+      "text" : "Read 2 files, ran a command",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "r:r1",
+      "inGroup" : true,
+      "kind" : "reasoning",
+      "seq" : 6,
+      "text" : "The slower run spends most of its extra time before the build starts, so the cache restore is the f…",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:read1",
+      "inGroup" : true,
+      "kind" : "tool",
+      "seq" : 7,
+      "text" : "Read run-812.log",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:read2",
+      "inGroup" : true,
+      "kind" : "tool",
+      "seq" : 9,
+      "text" : "Read run-845.log",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:cmp",
+      "inGroup" : true,
+      "kind" : "tool",
+      "seq" : 11,
+      "text" : "Compare the cache keys",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "w:turn_1",
+      "inGroup" : false,
+      "kind" : "working",
+      "seq" : 11,
+      "text" : "Working",
+      "turn" : "turn_1"
+    }
+  ]
+}

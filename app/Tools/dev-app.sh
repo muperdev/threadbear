@@ -7,7 +7,7 @@
 # its data folder.
 #
 #   Tools/dev-app.sh start [--mock [--fixtures DIR]...] [--home DIR]
-#                          [--appearance light|dark] [--size WxH] [--bear-date 2026-12-24T23:00] [--id NAME]
+#                          [--appearance light|dark] [--size WxH] [--bear-date 2026-12-24T23:00] [--id NAME] [--no-build]
 #   Tools/dev-app.sh do '<json>'... [--timeout S]
 #   Tools/dev-app.sh shot <file.png> [--sheet] [--settings]   (the sheet over it, the Settings window, or with both the sheet over Settings)
 #   Tools/dev-app.sh menu <file.png> '{"x":854,"y":19}'   (a real menu, opened and captured; realMenu in app/README.md)
@@ -90,9 +90,11 @@ die() {
 }
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 
+# THREADBEAR_NODE, else the node on PATH, else nvm's newest, else Homebrew's
+# (find-node.sh, which says what's missing on stderr).
 node_bin() {
-  local pinned="${THREADBEAR_NODE:-$HOME/.nvm/versions/node/v24.22.1/bin/node}"
-  if [ -x "$pinned" ]; then printf '%s' "$pinned"; else command -v node || die "no node binary (set THREADBEAR_NODE)"; fi
+  . "$APP_ROOT/../runner/scripts/find-node.sh"
+  threadbear_find_node
 }
 
 # The folder with symlinks resolved, or as given if it doesn't exist.
@@ -345,7 +347,8 @@ show_build_errors() {
 build_binary() {
   mkdir -p "$BUILD_LOGS"
   local log="$BUILD_LOGS/$1.log"
-  if ! swift build --disable-keychain --package-path "$APP_ROOT" --product Threadbear >"$log" 2>&1; then
+  # One Threadbear build at a time on this machine (scripts/one-build.sh).
+  if ! "$APP_ROOT/../scripts/one-build.sh" swift build --disable-keychain --package-path "$APP_ROOT" --product Threadbear >"$log" 2>&1; then
     show_build_errors "$log"
     return 1
   fi
@@ -404,11 +407,13 @@ launch_app() {
   I_PID="$pid"
   for i in $(seq 1 400); do grep -qx ready "$I_LOG" 2>/dev/null && break; sleep 0.05; done
   grep -qx ready "$I_LOG" 2>/dev/null || { cat "$I_LOG" >&2 2>/dev/null || true; die "the app didn't take commands (see $I_DIR/app.stderr)"; }
-  send '{"cmd":"waitFor","ready":true,"timeout":20}' >/dev/null || { tail -n 20 "$I_DIR/app.log" >&2; die "the app didn't connect to the runner"; }
+  # TB_DEV_APP_NO_READY: a spec of what the app shows before its first list
+  # (the loading rows) needs to look at it before the list lands.
+  [ -n "${TB_DEV_APP_NO_READY:-}" ] || send '{"cmd":"waitFor","ready":true,"timeout":20}' >/dev/null || { tail -n 20 "$I_DIR/app.log" >&2; die "the app didn't connect to the runner"; }
 }
 
 cmd_start() {
-  local mode="" home="" appearance="" size="" bear_date="" fixtures=()
+  local mode="" home="" appearance="" size="" bear_date="" no_build="" fixtures=()
   while [ $# -gt 0 ]; do
     case "$1" in
       --mock) mode=mock ;;
@@ -418,6 +423,9 @@ cmd_start() {
       --size) size="${2:?--size needs WxH}"; shift ;;
       --bear-date) bear_date="${2:?--bear-date needs a date, like 2026-12-24T23:00}"; shift ;;
       --id) ID="${2:?--id needs a name}"; shift ;;
+      # The behaviour specs (features/) build once and start the app for
+      # every scenario, so they don't each spend seconds finding nothing to do.
+      --no-build) no_build=1 ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown option for start: $1" ;;
     esac
@@ -477,7 +485,7 @@ cmd_start() {
   load_instance "$ID"
 
   echo "Building the debug app..."
-  build_binary "$ID" || false
+  [ -n "$no_build" ] || build_binary "$ID" || false
   install_bundle
 
   local runner
@@ -656,9 +664,13 @@ cmd_dump() {
 }
 
 cmd_rebuild() {
+  # --no-build quits and reopens the same binary, keeping its data and
+  # settings: a spec's "opened again" (features/ steps).
+  local no_build=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --id) ID="${2:?--id needs an id}"; shift ;;
+      --no-build) no_build=1 ;;
       *) die "unknown option for rebuild: $1" ;;
     esac
     shift
@@ -669,9 +681,11 @@ cmd_rebuild() {
   local status selection
   status="$(send '{"cmd":"status"}')" || exit 1
   selection="$(printf '%s' "$status" | sed -n 's/.*"selection":"\([^"]*\)".*/\1/p')"
-  echo "Building the debug app..."
-  # The running app stays up if the build fails.
-  build_binary "$I_ID" || exit 1
+  if [ "$no_build" = 0 ]; then
+    echo "Building the debug app..."
+    # The running app stays up if the build fails.
+    build_binary "$I_ID" || exit 1
+  fi
   # So reap leaves it while the old app's gone and the new one isn't up.
   set_field starter "$$"
   set_field starter_since "$(started_at $$)"

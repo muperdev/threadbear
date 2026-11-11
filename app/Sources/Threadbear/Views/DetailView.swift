@@ -55,7 +55,6 @@ struct DetailView: View {
             VStack(spacing: 0) {
             ConnectionBanner()
             ErrorBanner()
-            if let thread { LimitBanner(thread: thread) }
             if let thread { SignInBanner(thread: thread) }
             if let thread, thread.hasPendingReviews, subagentRef == nil {
                 PendingReviewsButton(thread: thread)
@@ -781,6 +780,38 @@ private struct NewThreadNote: View {
     }
 }
 
+#if DEBUG
+/// What the new-thread page shows, as `dump` reads it: the same words as
+/// NewThreadNote and its room cards, or nil with something else in the pane.
+@MainActor
+func newThreadPageDump(_ app: AppModel) -> AppDump.NewThreadInfo? {
+    guard app.selection == nil, app.openProject == nil, !app.showsHomePage else { return nil }
+    let logins = app.draftLogins
+    let runner = app.newThreadRunner
+    let cwd = app.newThreadCwd ?? logins.defaults.cwd
+    let account = app.newThreadAccountId
+    let pool = app.newThreadPoolId.flatMap(logins.pool)
+    let on = pool.map { "the \($0.title) pool" }
+        ?? (app.newThreadUsesPools ? AccountName.login(account, accounts: logins.accounts) : AccountName.short(account, accounts: logins.accounts))
+    let note: String
+    if let runner, app.newThreadLogins == nil {
+        note = "Starts on \(runner.name)"
+    } else if let runner {
+        note = "Starts in \(FolderName.short(cwd)) on \(runner.name), with \(on)"
+    } else {
+        note = "Starts in \(FolderName.short(cwd)) on \(on)"
+    }
+    let accounts = UsageGroups.byProvider(logins.accounts).flatMap(\.accounts)
+        .filter { item in pool.map { $0.accountIds.contains(item.id) } ?? true }
+    let rooms: [AppDump.RoomInfo] = accounts.count > 1 && accounts.contains(where: { $0.usage != nil }) ? accounts.map { item in
+        AppDump.RoomInfo(label: AccountName.label(item.id, accounts: logins.accounts), line: AccountUsageText.roomLine(item.usage) ?? "Nothing known yet",
+                         selected: pool == nil && item.id == account, note: item.note)
+    } : []
+    let project = app.newThreadProjectId.flatMap { id in app.projects.first { $0.id == id } }.map { "In \($0.title)" }
+    return AppDump.NewThreadInfo(heading: "What should we work on?", note: note, project: project, rooms: rooms)
+}
+#endif
+
 /// One account on the new-thread page: its name (the domain when two
 /// share the part before the @), a bar of the
 /// tighter window, and "5h 89% · week 78% left".
@@ -907,49 +938,9 @@ struct ConnectionBanner: View {
     }
 }
 
-/// The open thread's account is at its limit (or its last turn failed on
-/// it): says so, with a button to move the thread to the account with the
-/// most room. Here rather than in the transcript's error row, whose drawing
-/// is cached and knows nothing of accounts, so the name and the room it
-/// offers stay current as usage changes.
-struct LimitBanner: View {
-    @Environment(AppModel.self) private var app
-    let thread: ThreadSummary
-
-    var body: some View {
-        if let advice = app.limitAdvice(for: thread) {
-            // A pool thread waiting for room carries on by itself: a quiet
-            // clock rather than the red limit gauge, and the button pins it
-            // to a login outside the pool, so it says so.
-            let waiting = thread.waitingForRoom != nil && app.usesPools
-            HStack(spacing: zoomed(8)) {
-                if waiting {
-                    Image(systemName: "clock").foregroundStyle(.secondary)
-                } else {
-                    Image(systemName: "gauge.with.dots.needle.100percent").foregroundStyle(.red)
-                }
-                Text(advice.text).lineLimit(1).tip(advice.text)
-                Spacer(minLength: zoomed(6))
-                if let target = advice.target {
-                    let title = AccountUsageText.switchTitle(target, accounts: app.accounts)
-                    Button(waiting ? title.replacingOccurrences(of: "Switch to", with: "Pin to") : title) {
-                        app.switchAccount(thread.id, to: target.id)
-                    }
-                    .busy(app.isBusy(BusyKey.moving(thread.id)))
-                    .tip("Carry on this thread on that account, from where it is")
-                }
-            }
-            .font(.system(size: TypeScale.label))
-            .padding(.horizontal, zoomed(14))
-            .padding(.vertical, zoomed(7))
-            .overlay(alignment: .bottom) { Rectangle().fill(Color(nsColor: Theme.hairline)).frame(height: 0.5) }
-        }
-    }
-}
-
 /// The open thread's last turn failed because its login was refused:
 /// says so, with Sign in… (Terminal, on the CLI's own sign-in) and Send
-/// again for once that's done. Like LimitBanner, here rather than in the
+/// again for once that's done. Like LimitBox, here rather than in the
 /// cached error row, which knows nothing of accounts.
 struct SignInBanner: View {
     @Environment(AppModel.self) private var app
@@ -957,7 +948,7 @@ struct SignInBanner: View {
 
     var body: some View {
         if let account = app.signInAccount(for: thread) {
-            let name = ModelPicker.providerTitle(account.provider)
+            let name = Providers.info(account.provider).name
             HStack(spacing: zoomed(8)) {
                 Image(systemName: "person.crop.circle.badge.exclamationmark").foregroundStyle(.orange)
                 Text("\(name) needs you to sign in again.").lineLimit(1)
@@ -974,11 +965,11 @@ struct SignInBanner: View {
             .overlay(alignment: .bottom) { Rectangle().fill(Color(nsColor: Theme.hairline)).frame(height: 0.5) }
         } else if let runner = app.remoteSignInRunner(for: thread) {
             // Another Mac's login: signed in on that Mac, not from here.
-            let name = ModelPicker.providerTitle(thread.provider)
+            let name = Providers.info(thread.provider).name
             HStack(spacing: zoomed(8)) {
                 Image(systemName: "person.crop.circle.badge.exclamationmark").foregroundStyle(.orange)
                 Text("\(name) on \(runner) needs you to sign in again.").lineLimit(1)
-                    .tip("Sign in on \(runner) itself: \(name == "Codex" ? "codex login" : name == "Grok" ? "grok login" : name == "Devin" ? "devin auth login" : "claude auth login") in its Terminal")
+                    .tip("Sign in on \(runner) itself: \(Providers.info(thread.provider).loginCommand) in its Terminal")
                 Spacer(minLength: zoomed(6))
                 Button("Send again") { app.sendAgain(thread.id) }
                     .tip("Send your last message again, once you've signed in")

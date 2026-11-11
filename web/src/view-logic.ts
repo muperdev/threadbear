@@ -75,3 +75,32 @@ type UsageWindow = { title: string; remainingPercent: number; resetsAt?: string 
 export function tightest(windows: UsageWindow[] | undefined): UsageWindow | undefined {
   return windows?.length ? [...windows].sort((a, b) => a.remainingPercent - b.remainingPercent)[0] : undefined;
 }
+
+// The recap box: the same rule as the Mac's Recap.swift, the phone's
+// Recap.swift and the runner's recapShowing (docs/protocol.md, "The recap
+// box"). 12 hours is AWAY_MS in runner.ts.
+const RECAP_QUIET_MS = 12 * 3600_000;
+
+export function recapDue(t: { recap?: string; status: string; archivedAt?: string; lastActivityAt: string }, dismissedAt: string | null, now: number): boolean {
+  if (!t.recap || t.status !== 'idle' || t.archivedAt) return false;
+  return now - Date.parse(t.lastActivityAt) >= RECAP_QUIET_MS && dismissedAt !== t.lastActivityAt;
+}
+
+// The sentence on what it's for, if the note has one, and the bullets.
+export function recapParts(recap: string): { purpose?: string; points: string[] } {
+  let purpose: string | undefined;
+  const points: string[] = [];
+  for (const raw of recap.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (line.startsWith('- ')) points.push(line.slice(2));
+    else if (purpose === undefined && points.length === 0) purpose = line;
+    else points.push(line);
+  }
+  return { ...(purpose !== undefined ? { purpose } : {}), points };
+}
+
+export function lastWorkedOn(at: string, now: number): string {
+  const hours = Math.round((now - Date.parse(at)) / 3600_000);
+  return `Last worked on ${hours < 48 ? `${hours} hours ago` : `${Math.round(hours / 24)} days ago`}`;
+}

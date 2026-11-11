@@ -167,7 +167,7 @@ test('before a turn: a failed copy falls back to the handoff note; a login with 
   assert.match(notes(h, thread.id)[0], /three@example\.com hit its 5-hour limit, back at /);
 });
 
-test('a pinned thread never moves, whatever its login', async () => {
+test('a pinned thread never moves: at its limit it waits for its own login and carries on there', async () => {
   const h = poolHarness();
   h.setUsage('claude-main', room(90));
   const { thread } = h.runner.create({ text: 'x', accountId: 'claude-3' });
@@ -176,15 +176,79 @@ test('a pinned thread never moves, whatever its login', async () => {
   h.setUsage('claude-3', room(0, 60, true));
   limit(h.adapter.last);
   await tick();
-  assert.equal(h.adapter.sessions.length, 1, 'no carry-on');
-  assert.equal(userMessages(h, thread.id).length, 1);
-  assert.equal(h.runner.get(thread.id).waitingForRoom, undefined);
-  h.runner.send(thread.id, 'again');
+  assert.equal(h.adapter.sessions.length, 1, 'no carry-on yet');
+  const t = h.runner.get(thread.id);
+  assert.deepEqual(checkSummary(t), []);
+  assert.deepEqual(t.waitingForRoom, { until: new Date(START + 61 * MIN).toISOString(), accountId: 'claude-3' });
+  assert.match(notes(h, thread.id).at(-1)!, /^three@example\.com hit its usage limit\. Carrying on at .* when three@example\.com is back\.$/);
+  assert.deepEqual(h.records, [], 'not marked by the pool code');
+  // Its login resets: it carries on there, never on claude-main.
+  h.setUsage('claude-3', room(100, 360));
+  h.clock.advance(62 * MIN);
   await tick();
+  assert.equal(h.runner.get(thread.id).waitingForRoom, undefined);
   assert.equal(h.adapter.last.opts.account.id, 'claude-3');
+  assert.equal(h.adapter.last.sent.at(-1)?.text, CARRY_ON_BACK);
   assert.equal(h.runner.get(thread.id).accountId, 'claude-3');
   assert.deepEqual(notes(h, thread.id).filter((t) => t.startsWith('Moved')), []);
-  assert.deepEqual(h.records, [], 'not marked by the pool code');
+});
+
+test('a pinned wait whose login is still out waits again; a message from Mike ends it', async () => {
+  const h = poolHarness();
+  const { thread } = h.runner.create({ text: 'x', accountId: 'claude-3' });
+  h.adapter.last.init();
+  h.setUsage('claude-3', room(0, 30, true));
+  limit(h.adapter.last);
+  await tick();
+  h.clock.advance(32 * MIN);
+  await tick();
+  assert.match(notes(h, thread.id).at(-1)!, /^three@example\.com is still at its limit\. Carrying on at /);
+  assert.ok(h.runner.get(thread.id).waitingForRoom);
+  assert.equal(h.adapter.sessions.length, 1);
+  h.runner.send(thread.id, 'try now');
+  await tick();
+  assert.equal(h.runner.get(thread.id).waitingForRoom, undefined);
+  assert.equal(h.adapter.last.sent.at(-1)?.text, 'try now');
+});
+
+test('carryOnAtReset: off ends the wait and stops the next one; on again waits while still stuck', async () => {
+  const h = poolHarness();
+  const { thread } = h.runner.create({ text: 'x', accountId: 'claude-3' });
+  h.adapter.last.init();
+  h.setUsage('claude-3', room(0, 60, true));
+  limit(h.adapter.last);
+  await tick();
+  assert.ok(h.runner.get(thread.id).waitingForRoom);
+  // Off: the wait ends, with a note, and the summary says so.
+  const off = h.runner.update({ threadId: thread.id, carryOnAtReset: false }).thread;
+  assert.deepEqual(checkSummary(off), []);
+  assert.equal(off.carryOnAtReset, false);
+  assert.equal(off.waitingForRoom, undefined);
+  assert.match(notes(h, thread.id).at(-1)!, /^Won't carry on by itself\./);
+  h.clock.advance(62 * MIN);
+  await tick();
+  assert.equal(h.adapter.sessions.length, 1, 'nothing at the reset');
+  // On again while the last turn still stands at the limit: it waits.
+  h.setUsage('claude-3', room(0, 120, true));
+  const on = h.runner.update({ threadId: thread.id, carryOnAtReset: true }).thread;
+  assert.equal(on.carryOnAtReset, undefined);
+  assert.deepEqual(on.waitingForRoom, { until: new Date(START + 121 * MIN).toISOString(), accountId: 'claude-3' });
+  // Off, then a turn that hits the limit doesn't wait at all.
+  h.runner.update({ threadId: thread.id, carryOnAtReset: false });
+  h.runner.send(thread.id, 'again');
+  await tick();
+  h.adapter.last.init();
+  limit(h.adapter.last);
+  await tick();
+  assert.equal(h.runner.get(thread.id).waitingForRoom, undefined);
+  // A pool thread with nothing left doesn't wait either.
+  const p = h.runner.create({ text: 'y', poolId: 'claude' }).thread;
+  h.runner.update({ threadId: p.id, carryOnAtReset: false });
+  h.setUsage('claude-main', room(0, 60, true));
+  h.adapter.last.init();
+  limit(h.adapter.last);
+  await tick();
+  assert.equal(h.runner.get(p.id).waitingForRoom, undefined);
 });
 
 // ------------------------------------------------------- during a turn

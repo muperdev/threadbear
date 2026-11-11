@@ -139,15 +139,19 @@ public enum ShortcutCommand: String, CaseIterable, Sendable {
     case newThread, archive, hibernate, stop, copyTranscript
     case back, forward, nextInboxThread, showInbox, showScheduled, showProjects, showLibrarian, showHibernating, showArchived
     case zoomIn, zoomOut, actualSize, toggleThreads, togglePanels, toggleTerminal, resetPanelLayout
+    // ⌘/ folds the Threads panel away and back, keeping its place and width.
+    case collapseThreads
     case settings
+    // The app menu's Quit Threadbear, which asks first (QuitPrompt).
+    case quit
 
     public var group: ShortcutGroup {
         switch self {
         case .newThread, .archive, .hibernate, .stop, .copyTranscript: .threads
         case .back, .forward, .nextInboxThread, .showInbox, .showScheduled, .showProjects, .showLibrarian, .showHibernating, .showArchived: .go
-        case .zoomIn, .zoomOut, .actualSize, .toggleThreads, .togglePanels, .toggleTerminal, .resetPanelLayout: .view
+        case .zoomIn, .zoomOut, .actualSize, .toggleThreads, .togglePanels, .toggleTerminal, .resetPanelLayout, .collapseThreads: .view
         // The app menu's Settings…, which opens the Settings window.
-        case .settings: .go
+        case .settings, .quit: .go
         }
     }
 
@@ -175,6 +179,8 @@ public enum ShortcutCommand: String, CaseIterable, Sendable {
         case .togglePanels: "Show Panels"
         case .toggleTerminal: "Show Terminal"
         case .resetPanelLayout: "Reset Panel Layout"
+        case .collapseThreads: "Collapse Threads"
+        case .quit: "Quit Threadbear"
         }
     }
 
@@ -187,6 +193,7 @@ public enum ShortcutCommand: String, CaseIterable, Sendable {
         case .hibernate: ["Pick a time…"]
         case .toggleThreads: ["Show Threads", "Hide Threads"]
         case .togglePanels: ["Show Panels", "Hide Panels"]
+        case .collapseThreads: ["Collapse Threads", "Expand Threads"]
         case .toggleTerminal: ["Show Terminal", "Hide Terminal"]
         default: [title]
         }
@@ -214,6 +221,8 @@ public enum ShortcutCommand: String, CaseIterable, Sendable {
         case .togglePanels: ShortcutKey("p", option: true)
         // VS Code's and T3 Code's key for their terminal.
         case .toggleTerminal: ShortcutKey("j")
+        case .collapseThreads: ShortcutKey("/")
+        case .quit: ShortcutKey("q")
         case .hibernate, .showHibernating, .showArchived, .resetPanelLayout: nil
         }
     }

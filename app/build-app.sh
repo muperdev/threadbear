@@ -34,7 +34,8 @@ echo "Building Threadbear ($BUILD_CONFIGURATION)..."
 # Every dependency is a public download: never ask the keychain for GitHub
 # credentials (a background or scripted setup can't answer that prompt, and
 # SwiftPM then fails with "status -128").
-swift build --disable-keychain --package-path "$SCRIPT_DIR" ${SCRATCH_ARGS[@]+"${SCRATCH_ARGS[@]}"} -c "$BUILD_CONFIGURATION" --product Threadbear
+# One Threadbear build at a time on this machine (scripts/one-build.sh).
+"$SCRIPT_DIR/../scripts/one-build.sh" swift build --disable-keychain --package-path "$SCRIPT_DIR" ${SCRATCH_ARGS[@]+"${SCRATCH_ARGS[@]}"} -c "$BUILD_CONFIGURATION" --product Threadbear
 BIN_DIR="$(swift build --package-path "$SCRIPT_DIR" ${SCRATCH_ARGS[@]+"${SCRATCH_ARGS[@]}"} -c "$BUILD_CONFIGURATION" --show-bin-path)"
 BINARY="$BIN_DIR/Threadbear"
 if [[ ! -x "$BINARY" ]]; then
@@ -97,8 +98,7 @@ fi
 # every build.
 SIGN_IDENTITY="${THREADBEAR_SIGN_IDENTITY:-$({
   security find-identity -v -p codesigning 2>/dev/null \
-    | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' \
-    | head -n 1
+    | awk '/"Apple Development:/ { print $2; exit }'
 } || true)}"
 SIGNING_REQUIREMENTS=()
 if [[ -z "$SIGN_IDENTITY" ]]; then

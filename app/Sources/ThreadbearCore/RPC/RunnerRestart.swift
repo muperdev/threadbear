@@ -30,11 +30,28 @@ public struct RunnerStatus: Sendable, Equatable, Decodable {
 
     /// The website (docs/website.md): the runner's `sync.site`, else the
     /// same deployment's .convex.site host, so a thread's link is
-    /// `<site>/t/<threadId>`.
+    /// `<site>/t/<threadId>`. https, or plain http to this Mac for a
+    /// backend on this Mac only.
     public var websiteURL: URL? {
-        if let siteURL, let url = URL(string: siteURL), url.scheme == "https" { return url }
+        if let siteURL, let url = URL(string: siteURL), url.scheme == "https" || (url.scheme == "http" && Self.isLoopback(url)) { return url }
         guard let syncURL, syncURL.contains(".convex.cloud") else { return nil }
         return URL(string: syncURL.replacingOccurrences(of: ".convex.cloud", with: ".convex.site"))
+    }
+
+    /// The backend is on this Mac only (`setup --self-hosted --local`,
+    /// docs/self-hosting.md): `sync.url` is on 127.0.0.1. No phone can pair
+    /// with it, and the website and share links only open on this Mac.
+    public var localOnly: Bool {
+        guard let syncURL, let url = URL(string: syncURL) else { return false }
+        return Self.isLoopback(url)
+    }
+
+    /// The same hosts the runner counts as this Mac (runner/src/secure-url.ts).
+    static func isLoopback(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        if host == "localhost" || host == "::1" || host == "[::1]" { return true }
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 4 && parts[0] == "127" && parts.allSatisfy { UInt8($0) != nil }
     }
 
     public init(from decoder: Decoder) throws {

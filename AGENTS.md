@@ -14,6 +14,8 @@ anything. The Convex mirror, the iPhone app (`ios/`) and the website (`web/`)
 are in `docs/convex-backend.md` and `docs/website.md`. The public landing
 page (threadbear.mikecann.app) is `site/`, a separate
 static site with its own `package.json`; its comments say how to build it.
+Its What's new page (`/changelog`) gets an entry per release, with pictures:
+`docs/changelog.md`.
 
 This file is written for Mike's own copy. The machines it names (the M5,
 `bruce`, `cloud`, `tinker-desk`) and paths under `~/dev/me` are his: in
@@ -29,6 +31,12 @@ and ask the user what they use instead, rather than trying to reach them.
   the cloud box for a `--quick` run, `checkHosts` in runner.json), not on his Mac: three threads' suites
   at once took it to a load of 75, and a test window came up over his
   browser (6 Nov). A hook blocks `npm test` and `check.sh --local` here.
+- Builds on Mike's Mac go one at a time: `scripts/one-build.sh <command>`
+  holds a lock for the machine while it runs (three threads' app and iPhone
+  builds at once, 9 Nov). The build scripts (build-app.sh, dev-app.sh,
+  sim-shots.sh, install-phone.sh) take it themselves, and his hook puts a
+  bare `swift build`/`swift test`/`xcodebuild` through it; a build that says
+  it's waiting for another is that, so give it a longer timeout.
 - Changing a threadbear tool's arguments: keep taking the old ones. A resumed
   Claude session keeps a tool's definition from when it first loaded it, and
   ToolSearch shows that one too, so it goes on calling the old form
@@ -43,6 +51,26 @@ and ask the user what they use instead, rather than trying to reach them.
   shorter or go behind something agents look up.
 - The protocol is the contract. Change `docs/protocol.md` first, then both
   sides, and keep both sides tolerant of unknown fields and event types.
+- A thread is reached four ways: this runner's own threads, another
+  runner's through Convex (`runner/src/relay.ts`), and the iPhone and the
+  website through Convex (`convex/phone.ts`). Pictures, a card's notes and
+  send_message each worked on the first and went missing on the others
+  (8 Nov). A new thread request needs a row in `runner/src/parity.ts`
+  saying where it works (`parity.test.ts` fails without one, and checks
+  each yes against the code; `npm run parity-docs` remakes
+  `docs/parity.md`). A change to what a thread shows (a card's field, a
+  message's content, the done card) gets a scenario in
+  `runner/test/unit/scenarios.test.ts`: it plays the thread on this
+  runner, writes it through the real backend functions, and checks
+  another Mac and the phone see the same, or a difference listed there
+  with why. The backend tests' fake Convex checks the real schema and
+  validators, so a field Convex would refuse fails there too.
+  Nightly, `scripts/parity/nightly.sh` plays the same scenarios into a
+  throwaway backend on Tinker Desk and has the real website, iPhone app
+  and Mac app read them, with a picture of each side by side in
+  `~/Library/Caches/Threadbear/parity/<time>/index.html` (its first run
+  found the website and the iPhone drawing cards without their notes).
+  A scenario's `shows` are the words each surface must show.
 - Only ever spawn the official `claude` (and later `codex`) binaries under
   Mike's own logins. Never read or copy OAuth tokens or Keychain credentials.
 - Tests that hit a real model use the cheapest model, tiny prompts, a temp
@@ -62,7 +90,9 @@ and ask the user what they use instead, rather than trying to reach them.
   data fix) gets an `Important: <why, in a few plain words>` trailer. Their
   runners start a thread to bring in the release that has it straight away
   rather than on their 5-day timer (`runner/src/bring-in.ts`), and the why is
-  what they read. Use it rarely, or it stops meaning anything.
+  what they read. Use it rarely, or it stops meaning anything. Put it in the
+  message's last paragraph with Co-Authored-By, no blank line between: git
+  reads trailers only there, and `tb land` refuses it anywhere else.
 - `docs/guide.md` is the user guide, and every thread's agent is pointed at
   it (`guideLine` in `runner/src/threadbear-mcp.ts`). Keep it true when a
   change alters what someone using the app sees or does.
@@ -191,6 +221,17 @@ else may be using that desktop: first check nothing's recording it
 (`pgrep -fl ffmpeg`) and that your window really is in front (`front`, then a
 look at the screen). Wake its screen with `caffeinate -u`, or the events go nowhere.
 
+## The GPUI port
+
+The desktop app is being rewritten as one GPUI app for Mac, Windows and Linux
+(`docs/gpui-port.md`, `desktop/`). Until it replaces `app/`, a change to what the
+Mac app does should get a spec in `features/` (Gherkin, driven against both apps;
+`features/README.md`), so the two apps' differences stay visible in
+`docs/gpui-port/PARITY.md`. A change to how the transcript folds has to keep both
+languages' golden tests happy (`desktop/core/tests/golden`). Rust builds and spec
+runs go elsewhere: `desktop/scripts/remote.sh cloud -- <command>`, or
+`tinker-desk --desk` for a window on a real Mac.
+
 ## Other people's PRs
 
 The repo's public, so people send fixes. Before starting on a GitHub issue, run
@@ -218,7 +259,10 @@ default, on for him (Mike asked 6 Nov).
   to take it out (for forks). Check `experimentOn(home, '<id>')` where
   it starts. Put `"experiments": { "<id>": true }` in Mike's
   `runner.json` (`~/Library/Application Support/Threadbear/runner.json`)
-  so it's on for him.
+  so it's on for him. Settings > General > Experiments lists it by
+  itself, with its name and "What it does" behind the ⓘ, so there's
+  nothing to add in the app for its switch (`settings.update`'s
+  `experiments`). Write its name and that text for the people flipping it.
 - Run `npm run experiment-docs` in `runner/` and commit
   `docs/experiments.md` with it: the guide and the forking table point
   there, and `experiment-docs.test.ts` fails while it's out of date. Edit
@@ -254,7 +298,8 @@ if `tb` isn't found (an older runner, or outside a thread), use
 `runner/bin/tb`. `tb --help` lists the rest.
 
 - `./check.sh` runs every check (`--quick`: the runner's typecheck and
-  unit tests, about a minute; `--app`: the app's build and tests, for a
+  unit tests, about a minute, and the Mac app's release build when `app/`
+  or `dock/` changed; `--app`: the app's build and tests, for a
   change outside `runner/`). With a check host set it copies the checkout
   there, runs it, brings back failed steps' logs and deletes the copy
   (`scripts/check-remote.sh`); one run at a time, so it may say it's

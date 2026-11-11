@@ -83,7 +83,7 @@ test('a tail past what is held asks for the gap; one that overlaps just merges',
 });
 
 type Call = { kind: string; fn: string; args: Record<string, unknown> };
-type HarnessOpts = { online?: boolean; row?: () => RelayThreadRow & { share?: unknown }; apiVersion?: number; queueFails?: boolean; uploadMs?: number };
+type HarnessOpts = { online?: boolean; row?: () => RelayThreadRow & { share?: unknown }; apiVersion?: number; queueFails?: boolean; uploadMs?: number; rows?: RelayRow[] };
 function harness(opts: HarnessOpts = {}) {
   const calls: Call[] = [];
   const subs = new Map<string, { args: Record<string, unknown>; onUpdate: (v: unknown) => void; closed: boolean }[]>();
@@ -101,7 +101,7 @@ function harness(opts: HarnessOpts = {}) {
   const relay = new Relay({
     source: () => ({
       key: 'owner',
-      apiVersion: opts.apiVersion ?? 63,
+      apiVersion: opts.apiVersion ?? 68,
       upload: async (url, bytes, mediaType) => {
         if (opts.uploadMs) clock.advance(opts.uploadMs);
         uploads.push([url, Buffer.from(bytes).toString(), mediaType]);
@@ -110,7 +110,7 @@ function harness(opts: HarnessOpts = {}) {
       post: async (kind, fn, args) => {
         calls.push({ kind, fn, args });
         if (fn === 'relay:remoteThread') return opts.row?.() ?? idle;
-        if (fn === 'relay:remoteMessages') return { messages: rows, hasMore: false };
+        if (fn === 'relay:remoteMessages') return { messages: opts.rows ?? rows, hasMore: false };
         if (fn === 'relay:queueCommand') {
           if (opts.queueFails) throw new Error('Convex is away');
           return `cmd${++commandN}`;
@@ -639,4 +639,56 @@ test('hibernating in words: done before the row has its time still answers it as
   assert.equal((h.relay as any).summary(T).snoozedUntilRestart, true);
   h.remote.threads[0]!.snoozedUntil = at(7200);
   assert.equal((h.relay as any).summary(T).snoozedUntil, at(7200));
+});
+
+// docs/parity.md showed reply buttons and slash commands working from the
+// phone and not from the Mac on a Hetzner or bruce thread. The relay answers
+// buttons.list from the rows' buttons (backend API 68), and presses and lists
+// with the commands the phone sends.
+test("a thread there's reply buttons come from its rows, and pressing one presses it there", async () => {
+  const withButtons: RelayRow[] = [
+    ...rows,
+    { seq: 16, role: 'assistant', text: '[Fix it](button:abcd1234) [Tell them](button:efgh5678)', turn: 'bbbb2222', at: at(22), buttons: [
+      { id: 'abcd1234', title: 'Fix it', kind: 'start', target: 'threadbear' },
+      { id: 'efgh5678', title: 'Tell them', kind: 'send', target: 'Deploy', failed: 'that thread has gone' },
+    ] },
+  ];
+  const h = harness({ rows: withButtons });
+  const listed = (await h.relay.call(T, 'buttons.list', { threadId: T })) as { buttons: Record<string, unknown>[] };
+  assert.deepEqual(listed.buttons.map((b) => [b.id, b.title, Boolean(b.start), Boolean(b.send), (b.failed as { error?: string } | undefined)?.error]), [
+    ['abcd1234', 'Fix it', true, false, undefined],
+    ['efgh5678', 'Tell them', false, true, 'that thread has gone'],
+  ]);
+  // Never the brief: the rows don't have it.
+  assert.equal((listed.buttons[0]!.start as { text: string }).text, '');
+  const press = h.relay.call(T, 'buttons.press', { threadId: T, buttonId: 'abcd1234' });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(h.calls.find((c) => c.fn === 'relay:queueCommand')!.args, { key: 'owner', runnerId: 'bruce', threadId: T, kind: 'press', args: { buttonId: 'abcd1234' } });
+  h.subs.get('relay:commandState')!.at(-1)!.onUpdate({ state: 'taken' });
+  h.subs.get('relay:commandState')!.at(-1)!.onUpdate({ state: 'done', threadId: 'started1' });
+  const pressed = (await press) as { button: { id: string; pressed?: { threadId: string } } };
+  assert.equal(pressed.button.id, 'abcd1234');
+  assert.equal(pressed.button.pressed?.threadId, 'started1');
+  // A press that failed there says why.
+  const failing = h.relay.call(T, 'buttons.press', { threadId: T, buttonId: 'efgh5678' });
+  await new Promise((r) => setTimeout(r, 5));
+  h.subs.get('relay:commandState')!.at(-1)!.onUpdate({ state: 'failed', note: 'Thread not found' });
+  await assert.rejects(failing, /Thread not found/);
+});
+
+test("a thread there's slash commands are that runner's list", async () => {
+  const h = harness();
+  const list = h.relay.call(T, 'threads.commands', { threadId: T });
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(h.calls.find((c) => c.fn === 'relay:queueCommand')!.args.kind, 'slashCommands');
+  h.subs.get('relay:commandState')!.at(-1)!.onUpdate({ state: 'done', result: [{ name: 'review', description: 'Review the diff' }] });
+  assert.deepEqual(await list, { commands: [{ name: 'review', description: 'Review the diff' }] });
+});
+
+test('an older backend says buttons and slash commands need it updated, and queues nothing', async () => {
+  const h = harness({ apiVersion: 67 });
+  await assert.rejects(h.relay.call(T, 'buttons.press', { threadId: T, buttonId: 'abcd1234' }), /backend is updated/);
+  await assert.rejects(h.relay.call(T, 'threads.commands', { threadId: T }), /backend is updated/);
+  assert.deepEqual(await h.relay.call(T, 'buttons.list', { threadId: T }), { buttons: [] });
+  assert.equal(h.calls.filter((c) => c.fn === 'relay:queueCommand').length, 0);
 });

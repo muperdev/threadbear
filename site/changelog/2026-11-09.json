@@ -1,0 +1,69 @@
+{
+  "release": "2026-11-09",
+  "highlights": [
+    {
+      "kind": "changed",
+      "title": "Trackpad swipes show where you'll land",
+      "text": "Swiping back or forward with two fingers brings up a card in the middle of the window naming the thread or page you'll go to, and it fills from the side your fingers start on, turning blue once letting go will take you there. Which way is Back now follows your natural scrolling setting, as in Safari.",
+      "media": {
+        "type": "compare",
+        "before": "swipe-before.webp",
+        "after": "swipe-after.webp",
+        "width": 1840,
+        "height": 700,
+        "alt": "A two-finger swipe back, part way through"
+      }
+    },
+    {
+      "kind": "changed",
+      "title": "Answer several permission asks on one card",
+      "text": "When a Claude agent wants to make several changes that need your OK at once (say four edits and a command), they come on one card with a tick and a cross on each. Allow lets the ticked ones through and refuses the rest, and Deny all refuses them all.",
+      "media": {
+        "type": "image",
+        "src": "several-asks.webp",
+        "width": 1100,
+        "height": 1180,
+        "alt": "One card asking to edit two files, write a third and run a test command, each with a tick and a cross, and Allow 4 and Deny all at the bottom"
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Paste a screenshot straight into the message box",
+      "text": "Take a screenshot to the clipboard with ⌃⇧⌘4, click in the message box and press ⌘V, and it goes in as a picture. The answer box on a Needs you card takes one too.",
+      "media": {
+        "type": "image",
+        "src": "paste-screenshot.webp",
+        "width": 1010,
+        "height": 440,
+        "alt": "The message box with a pasted screenshot shown above the text and a Picture 1 chip where it went in"
+      }
+    }
+  ],
+  "added": [
+    "Start a thread from a project's page with New Thread at the top: it opens in the project's folder, and the agent knows the project's goals and notes from its first message",
+    "Open a diagram or small page from a reply full size in its own window, with the arrows on its box",
+    "Delete an archived thread for good: hover it under Archived and click the trash, or right-click it and choose Delete…",
+    "Paste a picture into a thread that runs on another Mac or a cloud server",
+    "On iPhone, type / in a thread's reply box to pick from its slash commands",
+    "On iPhone, the photos you sent show above your message, where it used to say \"[2 pictures]\"",
+    "On iPhone, swipe right on a thread to go back, and left to go forward again to the thread you just left"
+  ],
+  "changed": [
+    "The browser panel lists the pages an agent has open, each with a picture of the page, what the agent is doing there and Show window to bring the real window forward",
+    "The Runners panel lists your runners in the same order as Settings and the phone, and you can drag them into a new order there",
+    "Back from a thread you just started goes to wherever you were before you pressed New thread, skipping the empty new-thread screen",
+    "A swipe with nowhere to go says so, and a swipe has to go a little further before it counts",
+    "A patch's button can change its own label (say, \"Merge #707\"), and a Run button turns into Stop as soon as its command finishes",
+    "On iPhone, the microphone's bars move with your voice"
+  ],
+  "fixed": [
+    "On iPhone, scroll back through all of a long thread: past the newest 2,000 messages it used to say Loading… for good, and loading earlier messages now keeps your place, even mid-flick",
+    "On iPhone, the Starred, Inbox and Running headings stay at the top again while you scroll, and pictures near the top bar or reply box no longer go blank",
+    "A schedule keeps the message box's permission mode, Auto included, where a schedule made on Auto used to stop and ask before every edit",
+    "A page an agent pins to show you opens in the side pane every time, or as soon as you go back to that thread",
+    "Hibernate until… with words works on threads running on another Mac",
+    "A decision card from a thread on another runner shows what each answer does, as your own runner's cards do",
+    "The app menu has one Settings… item instead of two",
+    "Closed several security holes, including a stopped share link that could still show newer messages and ways text from another runner or repo could get past an approval check"
+  ]
+}

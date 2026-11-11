@@ -11,8 +11,13 @@ public struct ProjectCardStatus: Sendable, Equatable {
     public var unread = 0
     /// Open threads (not archived or hibernating).
     public var open = 0
+    /// Open asks on its threads' cards, counted only with the
+    /// projectDecisions experiment on (ProjectDecisions). A thread counted
+    /// here isn't counted as new as well.
+    public var decisions = 0
 
-    public init(working: Int = 0, needsYou: Int = 0, failed: Int = 0, unread: Int = 0, open: Int = 0) {
+    public init(working: Int = 0, needsYou: Int = 0, failed: Int = 0, unread: Int = 0, open: Int = 0, decisions: Int = 0) {
+        self.decisions = decisions
         self.working = working
         self.needsYou = needsYou
         self.failed = failed
@@ -20,9 +25,11 @@ public struct ProjectCardStatus: Sendable, Equatable {
         self.open = open
     }
 
-    public init(threads: [ThreadSummary]) {
+    public init(threads: [ThreadSummary], decisions counting: Bool = false) {
         open = threads.count
         for thread in threads {
+            let asks = counting ? ProjectDecisions.openCount(thread) : 0
+            decisions += asks
             let look = ThreadRowLook(thread)
             switch look.status {
             // Sub-agents or jobs still going count as working too: the
@@ -33,19 +40,20 @@ public struct ProjectCardStatus: Sendable, Equatable {
             case .time, .stopped: break
             }
             // Its dot is an unread dot now, but it's already counted as needing him.
-            if look.unread && look.status != .needsYou { unread += 1 }
+            if look.unread && look.status != .needsYou && asks == 0 { unread += 1 }
         }
     }
 
     /// Nothing running, waiting or new.
-    public var isQuiet: Bool { working == 0 && needsYou == 0 && failed == 0 && unread == 0 }
+    public var isQuiet: Bool { working == 0 && needsYou == 0 && failed == 0 && unread == 0 && decisions == 0 }
 
     /// One piece of the card's status line.
     public enum Part: Sendable, Equatable {
-        case needsYou(Int), working(Int), failed(Int), unread(Int)
+        case needsYou(Int), working(Int), failed(Int), unread(Int), decisions(Int)
 
         public var text: String {
             switch self {
+            case .decisions(let n): ProjectDecisions.label(n)
             case .needsYou(let n): "\(n) needs you"
             case .working(let n): "\(n) working"
             case .failed(let n): "\(n) failed"
@@ -59,6 +67,7 @@ public struct ProjectCardStatus: Sendable, Equatable {
     /// active instead.
     public var parts: [Part] {
         var parts: [Part] = []
+        if decisions > 0 { parts.append(.decisions(decisions)) }
         if needsYou > 0 { parts.append(.needsYou(needsYou)) }
         if working > 0 { parts.append(.working(working)) }
         if failed > 0 { parts.append(.failed(failed)) }
@@ -80,16 +89,18 @@ public struct ProjectCard: Sendable, Equatable, Identifiable {
 
     /// Across every project, each thread once: one in two projects is
     /// on both cards but is still one thread working.
-    public static func overall(_ sections: ProjectSections) -> ProjectCardStatus {
+    public static func overall(_ sections: ProjectSections, decisions: Bool = false) -> ProjectCardStatus {
         var seen = Set<String>()
-        return ProjectCardStatus(threads: sections.sections.flatMap(\.threads).filter { seen.insert($0.id).inserted })
+        return ProjectCardStatus(threads: sections.sections.flatMap(\.threads).filter { seen.insert($0.id).inserted }, decisions: decisions)
     }
 
-    public static func build(_ sections: ProjectSections, recent count: Int = 3) -> [ProjectCard] {
+    /// `decisions`: count each project's open asks (the projectDecisions
+    /// experiment).
+    public static func build(_ sections: ProjectSections, recent count: Int = 3, decisions: Bool = false) -> [ProjectCard] {
         sections.sections.map { section in
             ProjectCard(
                 project: section.project,
-                status: ProjectCardStatus(threads: section.threads),
+                status: ProjectCardStatus(threads: section.threads, decisions: decisions),
                 lastActivityAt: section.lastActivityAt,
                 recent: section.threads.prefix(count).map { $0.title.isEmpty ? "Untitled" : $0.title }
             )
