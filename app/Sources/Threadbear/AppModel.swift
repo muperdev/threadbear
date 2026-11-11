@@ -497,6 +497,14 @@ final class AppModel {
     var projects: [Project] = [] {
         didSet { projectsVersion &+= 1 }
     }
+    /// The team this Mac is on (shared projects, AppModel+Team.swift).
+    /// Replaced whole by `team.updated`; `on` is false while the multiplayer
+    /// experiment is off or the runner has no team support.
+    var team = TeamState()
+    /// The last invite made here, shown in Settings › Team once copied.
+    var teamInvite: String?
+    /// A line for the project page's Team section (a repo with no clone here).
+    var teamNote: String?
     @ObservationIgnored let projectFilePicker = ProjectFilePicker()
     /// The runner knows about projects: an older one answers
     /// `projects.list` with -32601, and then the activity bar has no

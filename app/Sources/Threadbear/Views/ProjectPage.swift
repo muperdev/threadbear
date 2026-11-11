@@ -36,6 +36,7 @@ struct ProjectPage: View {
                 }
                 TextSection(project: project, field: .goals)
                 TextSection(project: project, field: .state)
+                TeamSection(project: project)
                 TasksSection(project: project)
                 TextSection(project: project, field: .notes)
                 FoldersSection(project: project)

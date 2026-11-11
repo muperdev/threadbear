@@ -26,6 +26,15 @@ enum BusyKey {
     static func updateCli(_ provider: String) -> String { "updateCli/\(provider)" }
     static func cliPolicy(_ provider: String) -> String { "cliPolicy/\(provider)" }
     static let newProject = "newProject"
+    /// Shared projects (AppModel+Team.swift).
+    static func teamShare(_ projectId: String) -> String { "teamShare/\(projectId)" }
+    static func teamAnswer(_ id: String) -> String { "teamAnswer/\(id)" }
+    static func teamAdd(_ sharedId: String) -> String { "teamAdd/\(sharedId)" }
+    static func teamDelivery(_ projectId: String) -> String { "teamDelivery/\(projectId)" }
+    static func teamRemove(_ memberId: String) -> String { "teamRemove/\(memberId)" }
+    static let teamJoin = "teamJoin"
+    static let teamInvite = "teamInvite"
+    static let teamLeave = "teamLeave"
     static let pauseLibrarian = "pauseLibrarian"
     static let checkClis = "checkClis"
     static let refreshRunners = "refreshRunners"

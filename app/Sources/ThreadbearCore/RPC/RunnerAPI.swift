@@ -1033,6 +1033,77 @@ public struct ProjectResult: Sendable, Decodable {
     public var project: Project
 }
 
+public struct TeamResult: Sendable, Decodable {
+    public var team: TeamState
+}
+
+public struct TeamInvite: Sendable, Decodable {
+    /// tbteam:<hub>#<code>, for one person to join with.
+    public var invite: String
+    public var expiresAt: String
+}
+
+public struct TeamAdded: Sendable, Decodable {
+    public var projectId: String
+    /// Shared repos with no clone found on this Mac.
+    public var missing: [String]
+}
+
+public enum TeamAnswer: String, Sendable {
+    case pass, dismiss, take, decline
+}
+
+/// Shared projects (docs/multiplayer-design.md): the team this Mac is on.
+public extension RPCClient {
+    func getTeam() async throws -> TeamState {
+        try await call("team.get", .object([:]), as: TeamResult.self).team
+    }
+
+    func createTeam(name: String, memberName: String?) async throws -> TeamState {
+        var params: [String: JSONValue] = ["name": .string(name)]
+        if let memberName, !memberName.isEmpty { params["memberName"] = .string(memberName) }
+        return try await call("team.create", .object(params), as: TeamResult.self).team
+    }
+
+    func inviteToTeam() async throws -> TeamInvite {
+        try await call("team.invite", .object([:]), as: TeamInvite.self)
+    }
+
+    func joinTeam(invite: String, name: String?) async throws -> TeamState {
+        var params: [String: JSONValue] = ["invite": .string(invite)]
+        if let name, !name.isEmpty { params["name"] = .string(name) }
+        return try await call("team.join", .object(params), as: TeamResult.self).team
+    }
+
+    func leaveTeam() async throws -> TeamState {
+        try await call("team.leave", .object([:]), as: TeamResult.self).team
+    }
+
+    func removeFromTeam(memberId: String) async throws -> TeamState {
+        try await call("team.remove", .object(["member": .string(memberId)]), as: TeamResult.self).team
+    }
+
+    func shareProject(_ projectId: String) async throws -> TeamState {
+        try await call("team.share", .object(["projectId": .string(projectId)]), as: TeamResult.self).team
+    }
+
+    func unshareProject(_ projectId: String) async throws -> TeamState {
+        try await call("team.unshare", .object(["projectId": .string(projectId)]), as: TeamResult.self).team
+    }
+
+    func addSharedProject(_ sharedId: String) async throws -> TeamAdded {
+        try await call("team.add", .object(["sharedId": .string(sharedId)]), as: TeamAdded.self)
+    }
+
+    func setTeamDelivery(_ projectId: String, deliver: Bool) async throws -> TeamState {
+        try await call("team.setDelivery", .object(["projectId": .string(projectId), "delivery": .string(deliver ? "deliver" : "ask")]), as: TeamResult.self).team
+    }
+
+    func answerTeam(_ id: String, _ answer: TeamAnswer) async throws -> TeamState {
+        try await call("team.answer", .object(["id": .string(id), "action": .string(answer.rawValue)]), as: TeamResult.self).team
+    }
+}
+
 public struct ProjectGetResult: Sendable, Decodable {
     public var project: Project
     /// Its threads, newest activity first, put away ones included.

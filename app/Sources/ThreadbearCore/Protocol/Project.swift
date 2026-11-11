@@ -103,12 +103,14 @@ public struct Project: Sendable, Hashable, Decodable, Identifiable {
     /// board as the runner last read it (docs/protocol.md, "Project tasks").
     public var notion: String?
     public var tasks: ProjectTasks?
+    /// Linked to a project shared with a team (docs/multiplayer-design.md).
+    public var team: ProjectTeam?
 
     public init(
         id: String, title: String, folders: [String] = [], goals: String = "", state: String = "", notes: String = "",
         links: [ProjectLink] = [], createdBy: ProjectAuthor = .librarian, createdByThread: String? = nil, createdAt: Date = Date(), updatedAt: Date = Date(),
         stateUpdatedAt: Date? = nil, archived: Bool = false, icon: ProjectIcon? = nil, threadCount: Int = 0, lastActivityAt: Date? = nil,
-        notion: String? = nil, tasks: ProjectTasks? = nil
+        notion: String? = nil, tasks: ProjectTasks? = nil, team: ProjectTeam? = nil
     ) {
         self.id = id
         self.title = title
@@ -128,6 +130,7 @@ public struct Project: Sendable, Hashable, Decodable, Identifiable {
         self.lastActivityAt = lastActivityAt
         self.notion = notion
         self.tasks = tasks
+        self.team = team
     }
 
     public init(from decoder: Decoder) throws {
@@ -152,11 +155,12 @@ public struct Project: Sendable, Hashable, Decodable, Identifiable {
         lastActivityAt = date(.lastActivityAt)
         notion = string(.notion).flatMap { $0.isEmpty ? nil : $0 }
         tasks = (try? c.decodeIfPresent(ProjectTasks.self, forKey: .tasks)).flatMap { $0 }
+        team = (try? c.decodeIfPresent(ProjectTeam.self, forKey: .team)).flatMap { $0 }
     }
 
     enum CodingKeys: String, CodingKey {
         case id, title, folders, goals, state, notes, links, createdBy, createdByThread, createdAt, updatedAt, stateUpdatedAt
-        case archived, icon, threadCount, lastActivityAt, notion, tasks
+        case archived, icon, threadCount, lastActivityAt, notion, tasks, team
     }
 }
 

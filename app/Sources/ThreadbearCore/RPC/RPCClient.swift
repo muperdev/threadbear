@@ -61,6 +61,8 @@ public enum RPCNotification: Sendable {
     /// Every project, archived ones too, after any change. Thread
     /// membership comes as `thread.updated`.
     case projectsUpdated([Project])
+    /// The team this Mac is on, whole, whenever it changes (shared projects).
+    case teamUpdated(TeamState)
     /// The librarian's status, whole, whenever it changes.
     case librarianUpdated(LibrarianStatus)
     /// The Connectors gateway's services, whole, whenever what the panel
@@ -305,6 +307,10 @@ public final class RPCClient: Sendable {
         case "projects.updated":
             guard let params = decoded(ProjectsResult.self, method: method, data: data) else { return nil }
             return .projectsUpdated(params.projects)
+        case "team.updated":
+            guard let params = try? decoder.decode(RPCNotificationEnvelope<TeamResult>.self, from: data).params
+            else { return nil }
+            return .teamUpdated(params.team)
         case "librarian.updated":
             guard let params = decoded(LibrarianResult.self, method: method, data: data) else { return nil }
             return .librarianUpdated(params.librarian)
