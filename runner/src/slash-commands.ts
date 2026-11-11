@@ -133,9 +133,10 @@ export function planCommand(provider: Provider, cmd: ParsedCommand, skills: Read
     return CLAUDE_ELSEWHERE.has(name) ? { kind: 'note', text: `/${name} is part of Claude Code's terminal app. ${ELSEWHERE[name]}` } : { kind: 'cli' };
   }
   if (name === 'clear' || name === 'new') return { kind: 'clear' };
-  if (provider === 'grok') {
-    // Grok runs its own commands from the prompt (ACP's available commands).
-    return name in ELSEWHERE ? { kind: 'note', text: `/${name} is part of Grok's terminal app and doesn't run in Threadbear.${ELSEWHERE[name] ? ` ${ELSEWHERE[name]}` : ''}` } : { kind: 'cli' };
+  if (provider === 'grok' || provider === 'devin') {
+    // Grok and Devin run their own commands from the prompt (ACP's available commands).
+    const who = provider === 'grok' ? 'Grok' : 'Devin';
+    return name in ELSEWHERE ? { kind: 'note', text: `/${name} is part of ${who}'s terminal app and doesn't run in Threadbear.${ELSEWHERE[name] ? ` ${ELSEWHERE[name]}` : ''}` } : { kind: 'cli' };
   }
   if (name === 'compact' || name === 'review') return { kind: 'cli' };
   if (name === 'status' || name === 'context' || name === 'cost' || name === 'usage') return { kind: 'status' };
@@ -153,7 +154,7 @@ export function planCommand(provider: Provider, cmd: ParsedCommand, skills: Read
 export function commandList(provider: Provider, cli: SlashCommand[]): SlashCommand[] {
   const own =
     provider === 'codex' ? [...THREADBEAR_COMMANDS, ...CODEX_COMMANDS]
-    : provider === 'grok' ? [...THREADBEAR_COMMANDS, ...GROK_COMMANDS]
+    : provider === 'grok' || provider === 'devin' ? [...THREADBEAR_COMMANDS, ...GROK_COMMANDS]
     : provider === 'claude' ? [...THREADBEAR_COMMANDS, FAST_COMMAND]
     : THREADBEAR_COMMANDS;
   const seen = new Set(own.map((c) => c.name));

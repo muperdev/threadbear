@@ -331,7 +331,10 @@ export const newThreadsPart = {
     if (modelRow(account, model)) return true;
     if (account.provider === 'codex') return !account.models?.length && model.startsWith('gpt-');
     if (account.provider === 'grok') return !account.models?.length && model.startsWith('grok-');
-    if (model.startsWith('grok-')) return false;
+    // Devin's ids overlap Claude's and GPT's (claude-opus-5-5-medium), so a
+    // Devin thread keeps to its own list once it's known.
+    if (account.provider === 'devin') return !account.models?.length;
+    if (model.startsWith('grok-') || model.startsWith('swe-')) return false;
     // An ACP agent runs what it lists, and nothing can be told from the name.
     if (account.provider !== 'claude') return false;
     if (isClaudeModel(model)) return true;

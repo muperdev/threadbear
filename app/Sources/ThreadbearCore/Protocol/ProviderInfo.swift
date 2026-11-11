@@ -66,6 +66,9 @@ public enum Providers {
         // The grok experiment's, as a runner from before hello's providers had it too.
         "grok": ProviderInfo(id: "grok", name: "Grok", cliName: "Grok Build", loginCommand: "grok login", effort: "codex",
                              autoMode: "asks", sandbox: false, rewind: false, smallJobs: false, usageReadings: false),
+        // The devin experiment's, the same.
+        "devin": ProviderInfo(id: "devin", name: "Devin", cliName: "Devin", loginCommand: "devin auth login", effort: "codex",
+                              autoMode: "asks", sandbox: false, rewind: false, smallJobs: false, usageReadings: false),
     ]
 
     private static let told = OSAllocatedUnfairLock(initialState: [String: ProviderInfo]())

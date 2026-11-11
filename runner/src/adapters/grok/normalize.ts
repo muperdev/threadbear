@@ -90,6 +90,44 @@ type OpenTool = {
   called: boolean;
   diffed: boolean;
   streamed?: number; // how much of a command's output has gone out as deltas
+  lastText?: string; // the newest text an update carried (Devin's output)
+  exitCode?: number; // `_meta.terminal_exit.exit_code` (Devin's)
+};
+
+// A tool_call (or an update or permission request's toolCall) as the
+// tool it is: Grok's name and input are in `_meta["x.ai/tool"]`.
+export type ToolOf = (u: AnyMsg | undefined) => { rawName: string; tool: MappedTool };
+
+export const grokToolOf: ToolOf = (u) => {
+  const meta = u?._meta?.['x.ai/tool'] as AnyMsg | undefined;
+  const rawName = str(meta?.name) || str(u?.title);
+  return { rawName, tool: mapTool(rawName, (meta?.input as AnyMsg) ?? u?.rawInput, meta) };
+};
+
+// Devin's (devin acp, checked on 3000.12.32): the tool's name is
+// `_meta["cognition.ai/inferenceToolName"]` (exec, read, write, edit, ...;
+// MCP tools as mcp__<server>__<tool>, also in `cognition.ai/toolName`),
+// and its input already uses Claude's names.
+export const devinToolOf: ToolOf = (u) => {
+  const meta = (u?._meta ?? {}) as AnyMsg;
+  const rawName = str(meta['cognition.ai/toolName']) || str(meta['cognition.ai/inferenceToolName']) || str(u?.title);
+  const input = u?.rawInput && typeof u.rawInput === 'object' ? { ...(u.rawInput as AnyMsg) } : {};
+  const pick = (...keys: string[]) => Object.fromEntries(keys.filter((k) => input[k] !== undefined && input[k] !== null).map((k) => [k, input[k]]));
+  switch (rawName) {
+    case 'exec':
+      return { rawName, tool: { name: 'Bash', kind: 'command', input: { command: str(input.command), ...pick('description'), ...(input.run_in_background || input.is_background ? { run_in_background: true } : {}) } } };
+    case 'read':
+      return { rawName, tool: { name: 'Read', kind: 'read', input: { file_path: str(input.file_path) || str(input.path), ...pick('offset', 'limit') } } };
+    case 'write':
+      return { rawName, tool: { name: 'Write', kind: 'write', input: { file_path: str(input.file_path) || str(input.path), content: str(input.content) } } };
+    case 'edit':
+      return { rawName, tool: { name: 'Edit', kind: 'edit', input: { file_path: str(input.file_path), old_string: str(input.old_string), new_string: str(input.new_string), ...(input.replace_all ? { replace_all: true } : {}) } } };
+    case 'todo_write':
+    case 'todowrite':
+      return { rawName, tool: { name: 'TodoWrite', kind: 'todo', input: { todos: Array.isArray(input.todos) ? input.todos : [] } } };
+  }
+  if (/^mcp__[^_]/.test(rawName)) return { rawName, tool: { name: rawName, kind: toolKind(rawName), input } };
+  return { rawName, tool: { name: rawName || 'tool', kind: ACP_KINDS[str(u?.kind)] ?? 'other', input } };
 };
 
 type OpenText = { itemId: string; type: 'assistant.text' | 'reasoning'; text: string };
@@ -113,10 +151,17 @@ export class GrokNormalizer {
   contextWindow?: number;
   commands: SlashCommand[] = [];
   title?: string;
+  private name: string;
+  private toolOf: ToolOf;
+  private terminalOnly: ReadonlySet<string>;
 
-  constructor(ctx: NormalizerContext, o: { log?: Logger; prefix?: string } = {}) {
+  // `name`, `toolOf` and `terminalOnly` make it another ACP agent's (Devin's).
+  constructor(ctx: NormalizerContext, o: { log?: Logger; prefix?: string; name?: string; toolOf?: ToolOf; terminalOnly?: ReadonlySet<string> } = {}) {
     this.ctx = ctx;
     this.log = o.log;
+    this.name = o.name ?? 'Grok';
+    this.toolOf = o.toolOf ?? grokToolOf;
+    this.terminalOnly = o.terminalOnly ?? TERMINAL_ONLY;
     // Item ids must be unique across the thread's life, resumes included.
     this.prefix = o.prefix ?? `g${Date.now().toString(36)}`;
   }
@@ -149,7 +194,11 @@ export class GrokNormalizer {
         this.plan(out, update.entries);
         break;
       case 'available_commands_update':
-        this.commands = commandsFrom(update.availableCommands);
+        this.commands = commandsFrom(update.availableCommands, this.terminalOnly);
+        break;
+      case 'usage_update':
+        // ACP's own context line (Devin): tokens in the window, its size.
+        if (typeof update.used === 'number' && update.used > 0) out.push({ kind: 'context', contextTokens: update.used, ...(typeof update.size === 'number' ? { contextWindow: update.size } : this.contextWindow ? { contextWindow: this.contextWindow } : {}) });
         break;
       case 'session_info_update':
         if (typeof update.title === 'string' && update.title) this.title = update.title;
@@ -189,9 +238,7 @@ export class GrokNormalizer {
   private toolCall(out: AdapterOutput[], u: AnyMsg): void {
     const id = str(u.toolCallId);
     if (!id) return;
-    const meta = u._meta?.['x.ai/tool'] as AnyMsg | undefined;
-    const rawName = str(meta?.name) || str(u.title);
-    const tool = mapTool(rawName, (meta?.input as AnyMsg) ?? u.rawInput, meta);
+    const { rawName, tool } = this.toolOf(u);
     const open: OpenTool = { id, rawName, tool, called: false, diffed: false };
     this.tools.set(id, open);
     this.emitCall(out, open);
@@ -204,11 +251,14 @@ export class GrokNormalizer {
     if (!open) {
       // An update for a call we never saw start (a resume mid-call).
       if (!id) return;
-      const meta = u._meta?.['x.ai/tool'] as AnyMsg | undefined;
-      open = { id, rawName: str(meta?.name) || str(u.title), tool: mapTool(str(meta?.name) || str(u.title), u.rawInput, meta), called: false, diffed: false };
+      open = { id, ...this.toolOf(u), called: false, diffed: false };
       this.tools.set(id, open);
     }
     if (typeof u.title === 'string' && u.title) open.title = u.title;
+    const text = contentText(u.content);
+    if (text) open.lastText = text;
+    const exit = (u._meta as AnyMsg | undefined)?.terminal_exit?.exit_code;
+    if (typeof exit === 'number') open.exitCode = exit;
     if (!open.called) this.emitCall(out, open);
     if (!open.diffed && Array.isArray(u.content)) this.diff(out, open, u.content as AnyMsg[], u.status === 'completed');
     if (u.status === 'in_progress' && open.tool.name === 'Bash') this.stream(out, open, contentText(u.content));
@@ -221,9 +271,7 @@ export class GrokNormalizer {
     const outs: AdapterOutput[] = [];
     let open = this.tools.get(id);
     if (!open) {
-      const meta = toolCall?._meta?.['x.ai/tool'] as AnyMsg | undefined;
-      const rawName = str(meta?.name) || str(toolCall?.title);
-      open = { id, rawName, tool: mapTool(rawName, (meta?.input as AnyMsg) ?? toolCall?.rawInput, meta), called: false, diffed: false };
+      open = { id, ...this.toolOf(toolCall), called: false, diffed: false };
       if (typeof toolCall?.title === 'string') open.title = toolCall.title;
       this.tools.set(id, open);
     }
@@ -287,8 +335,14 @@ export class GrokNormalizer {
       if (raw.output && typeof raw.output === 'object' && !('OkayOutput' in raw.output)) ok = false;
     } else if (raw.type === 'ReadFile' && raw.FileContent && typeof raw.FileContent === 'object') {
       text = str(raw.FileContent.raw_output) || str(raw.FileContent.content);
+    } else if (open.tool.name === 'Bash' && open.lastText !== undefined && !contentText(u.content)) {
+      // Devin's: the output came with the updates while it ran, the exit
+      // code in terminal_exit.
+      text = open.lastText;
+      if (open.exitCode !== undefined && open.exitCode !== 0) ok = false;
     } else {
       text = contentText(u.content) || outputForPrompt(raw);
+      if (open.exitCode !== undefined && open.exitCode !== 0) ok = false;
     }
     if (!text && !ok) text = contentText(u.content) || 'Failed';
     out.push({ kind: 'event', event: { type: 'tool.result', itemId: open.id, ok, ...truncateResultText(text, open.id, this.ctx), images: [] } });
@@ -335,13 +389,13 @@ export class GrokNormalizer {
     const outcome: TurnResult['outcome'] = error ? 'failed' : reason === 'cancelled' ? 'interrupted' : reason === 'refusal' ? 'failed' : 'completed';
     out.push(...this.closeOpen(outcome === 'interrupted' ? 'Interrupted' : 'Not finished'));
     const r: TurnResult = { outcome, durationMs };
-    const usage = turnUsage(stop?._meta?.usage);
+    const usage = turnUsage(stop?._meta?.usage ?? (stop as AnyMsg | undefined)?.usage);
     if (usage) r.usage = usage;
     if (error) {
       r.error = error;
       const kind = errorKind(error);
       if (kind) r.errorKind = kind;
-    } else if (reason === 'refusal') r.error = 'Grok refused to go on with this.';
+    } else if (reason === 'refusal') r.error = `${this.name} refused to go on with this.`;
     out.push({ kind: 'result', result: r });
     return out;
   }
@@ -424,12 +478,15 @@ export function errorKind(message: string): TurnResult['errorKind'] | undefined 
 // Commands that only make sense in Grok's terminal app are left out.
 const TERMINAL_ONLY = new Set(['model', 'effort', 'always-approve', 'hooks-trust', 'hooks-untrust', 'hooks-add', 'hooks-remove', 'feedback', 'dashboard', 'theme', 'density', 'settings', 'exit', 'quit']);
 
-export function commandsFrom(list: unknown): SlashCommand[] {
+// Devin's: its login, modes (the thread's mode sets them) and terminal UI.
+export const DEVIN_TERMINAL_ONLY: ReadonlySet<string> = new Set(['login', 'logout', 'billing', 'workspace', 'ask', 'plan', 'code', 'bypass', 'smart', 'mode', 'model', 'help', 'bug', 'mcp', 'share', 'rename', 'fast', 'exit', 'quit', 'theme', 'settings']);
+
+export function commandsFrom(list: unknown, terminalOnly: ReadonlySet<string> = TERMINAL_ONLY): SlashCommand[] {
   if (!Array.isArray(list)) return [];
   const out: SlashCommand[] = [];
   for (const c of list as AnyMsg[]) {
     const name = str(c?.name);
-    if (!name || TERMINAL_ONLY.has(name)) continue;
+    if (!name || terminalOnly.has(name)) continue;
     const cmd: SlashCommand = { name, source: 'cli' };
     if (str(c.description)) cmd.description = str(c.description);
     const hint = str(c.input?.hint);

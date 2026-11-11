@@ -77,17 +77,32 @@ export const PROVIDER_INFO: Record<Provider, ProviderInfo> = {
     smallJobs: false,
     usageReadings: false,
   },
+  // The Devin CLI (adapters/devin/, docs/devin-plan.md), driven by the Grok
+  // adapter in Devin's dialect, behind the devin experiment.
+  devin: {
+    id: 'devin',
+    name: 'Devin',
+    cliName: 'Devin',
+    loginCommand: 'devin auth login',
+    effort: 'codex',
+    autoMode: 'asks',
+    sandbox: false,
+    rewind: false,
+    smallJobs: false,
+    usageReadings: false,
+  },
 };
 
 const ACP: readonly Provider[] = ['cursor', 'opencode'];
 
 // The providers this runner offers: the ACP agents only with the experiment
-// on, and Grok only with the grok experiment on, so with them off nothing of
-// theirs turns up anywhere.
+// on, and Grok and Devin only with their own experiments on, so with them
+// off nothing of theirs turns up anywhere.
 export function activeProviders(home: string): Provider[] {
   const acp = experimentOn(home, 'acpAgents');
   const grok = experimentOn(home, 'grok');
-  return PROVIDERS.filter((p) => (p === 'grok' ? grok : acp || !ACP.includes(p)));
+  const devin = experimentOn(home, 'devin');
+  return PROVIDERS.filter((p) => (p === 'grok' ? grok : p === 'devin' ? devin : acp || !ACP.includes(p)));
 }
 
 // One this build has no row for (a record or another runner's hello from a

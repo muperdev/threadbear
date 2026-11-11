@@ -91,10 +91,18 @@ export function isGrokLogin(dir: string): boolean {
   return isDirectory(dir) && fs.existsSync(path.join(dir, 'auth.json'));
 }
 
+// A Devin data folder (~/.local/share/devin) counts as a login when
+// credentials.toml exists (checked, never opened).
+export function isDevinLogin(dir: string): boolean {
+  return isDirectory(dir) && fs.existsSync(path.join(dir, 'credentials.toml'));
+}
+
 export type DiscoveryConfig = Pick<Config, 'claudeMainDir' | 'claudeMainJson' | 'tokenStatsAccountsDir'> &
-  Partial<Pick<Config, 'codexMainDir' | 'grokMainDir' | 'accountNotes' | 'accountsDir' | 'home' | 'cursorPath' | 'opencodePath'>> & {
+  Partial<Pick<Config, 'codexMainDir' | 'grokMainDir' | 'devinMainDir' | 'accountNotes' | 'accountsDir' | 'home' | 'cursorPath' | 'opencodePath'>> & {
     // Whether Grok logins are listed (the grok experiment), asked on every scan.
     grokOn?: () => boolean;
+    // The same for Devin's (the devin experiment). Only devin-main for now.
+    devinOn?: () => boolean;
   };
 
 // claude-main is ~/.claude (its .claude.json sits at ~/.claude.json);
@@ -139,6 +147,9 @@ export function discoverAccounts(cfg: DiscoveryConfig): Account[] {
       if (isGrokLogin(dir)) out.push({ id, provider: 'grok', title: providerTitle('grok', undefined, id), configDir: dir });
     }
   }
+  if (cfg.devinOn?.() && cfg.devinMainDir && isDevinLogin(cfg.devinMainDir)) {
+    out.push({ id: 'devin-main', provider: 'devin', title: providerTitle('devin', undefined, 'devin-main'), configDir: cfg.devinMainDir });
+  }
   if (cfg.home && experimentOn(cfg.home, 'acpAgents')) {
     out.push(...acpAccounts({ paths: { cursor: cfg.cursorPath, opencode: cfg.opencodePath } }));
   }
@@ -174,13 +185,14 @@ function codexTitle(email: string | undefined, id: string): string {
 function providerTitle(provider: Account['provider'], email: string | undefined, id: string): string {
   if (provider === 'codex') return codexTitle(email, id);
   if (provider === 'grok') return `Grok · ${email ?? id}`;
+  if (provider === 'devin') return `Devin · ${email ?? id}`;
   return email ?? id;
 }
 
 // The model an account names for sessions that name none: Claude's
 // settings.json, Codex's config.toml.
 function settingsModel(account: Account): string | undefined {
-  if (account.provider === 'grok') return undefined;
+  if (account.provider === 'grok' || account.provider === 'devin') return undefined;
   if (account.provider === 'codex') return readCodexConfig(path.join(account.configDir, 'config.toml')).model;
   return readSettingsModel(path.join(account.configDir, 'settings.json'));
 }
@@ -260,7 +272,7 @@ export class AccountRegistry {
     const id = this.usage.identityFor(account);
     if (id.email) out.email = id.email;
     if (id.plan) out.plan = id.plan;
-    out.title = out.provider === 'codex' || out.provider === 'grok' ? providerTitle(out.provider, out.email, out.id) : out.provider === 'claude' ? (out.email ?? out.id) : out.title;
+    out.title = out.provider === 'codex' || out.provider === 'grok' || out.provider === 'devin' ? providerTitle(out.provider, out.email, out.id) : out.provider === 'claude' ? (out.email ?? out.id) : out.title;
     const usage = this.usage.usageFor(out);
     if (usage) out.usage = usage;
     return out;

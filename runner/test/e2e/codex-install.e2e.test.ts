@@ -101,7 +101,7 @@ test('codex copies: install two real versions; a running app-server keeps workin
   for (const k of Object.keys(env)) if (/^THREADB(EAR|ARE)_/.test(k) || k === 'CLAUDE_CONFIG_DIR' || (k.startsWith('CODEX_') && k !== 'CODEX_HOME')) delete env[k];
   const released: string[] = [];
   const u = new CliUpdates({
-    cfg: testConfig(home, { cliUpdates: { claude: 'off', codex: 'auto', checkMinutes: 60, keepCodexVersions: 2 } }),
+    cfg: testConfig(home, { cliUpdates: { claude: 'off', codex: 'auto', grok: 'off', devin: 'off', checkMinutes: 60, keepCodexVersions: 2 } }),
     log: nullLogger,
     clock: realClock,
     env,

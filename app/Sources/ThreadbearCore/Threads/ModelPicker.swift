@@ -114,6 +114,7 @@ public enum ModelPicker {
         case "claude": return "sparkle"
         case "codex": return "chevron.left.forwardslash.chevron.right"
         case "grok": return "bolt"
+        case "devin": return "hexagon"
         default: return "cpu"
         }
     }

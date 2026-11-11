@@ -46,6 +46,11 @@ extension AppModel {
         cliCall(BusyKey.updateCli(provider)) { try await $0.updateCli(provider: provider, version: version, force: force) }
     }
 
+    /// Every CLI with a new version waiting, each with its own spinner.
+    func updateAllClis() {
+        for provider in CliText.updatable(clis) { updateCli(provider) }
+    }
+
     /// The menu says the new setting at once, and goes back if it's refused.
     func setCliPolicy(_ provider: String, _ policy: String) {
         guard let index = clis.firstIndex(where: { $0.provider == provider }) else {
@@ -178,6 +183,7 @@ extension AppModel {
         case "claude": return Account(id: "claude-main", provider: "claude", title: "Claude")
         case "codex": return Account(id: "codex-main", provider: "codex", title: "Codex")
         case "grok": return Account(id: "grok-main", provider: "grok", title: "Grok")
+        case "devin": return Account(id: "devin-main", provider: "devin", title: "Devin")
         default: return nil
         }
     }

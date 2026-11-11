@@ -81,8 +81,12 @@ public enum ComposerChips {
     /// Grok's: up to Extra High.
     public static let grokEffortLevels = ["low", "medium", "high", "xhigh"]
 
+    /// Devin's (`thought_level` on SWE-2): Medium, High and Max.
+    public static let devinEffortLevels = ["medium", "high", "max"]
+
     public static func effortLevels(provider: String) -> [String] {
         if provider == "grok" { return grokEffortLevels }
+        if provider == "devin" { return devinEffortLevels }
         return switch Providers.info(provider).effort {
         case "codex": codexEffortLevels
         case "none": []

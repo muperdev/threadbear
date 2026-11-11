@@ -38,15 +38,14 @@ export type CliUpdatesConfig = {
   // The ACP agents: absent is off, as they have no version feed to notify from.
   cursor?: CliPolicy;
   opencode?: CliPolicy;
-  // Grok Build updates itself, so this is never set or read; it's here as
-  // the updater looks policies up by provider.
-  grok?: CliPolicy;
+  grok: CliPolicy;
+  devin: CliPolicy;
   checkMinutes: number;
   keepCodexVersions: number; // Codex copies kept under <home>/tools/codex
   // Other CLIs' update commands, run daily (updates/extra.ts). None by default.
   extra?: ExtraUpdate[];
 };
-export const DEFAULT_CLI_UPDATES: CliUpdatesConfig = { claude: 'auto', codex: 'auto', checkMinutes: 60, keepCodexVersions: 2, extra: [] };
+export const DEFAULT_CLI_UPDATES: CliUpdatesConfig = { claude: 'auto', codex: 'auto', grok: 'auto', devin: 'auto', checkMinutes: 60, keepCodexVersions: 2, extra: [] };
 
 // Everything that differs between the real install and a test lives here, so
 // tests can point THREADBEAR_HOME and THREADBEAR_PORT somewhere harmless and
@@ -102,6 +101,10 @@ export type Config = {
   grokPath: string;
   grokArgs: string[]; // extra `grok agent` arguments, before `stdio`
   grokMainDir: string; // grok-main's GROK_HOME
+  // The Devin CLI (the devin experiment, docs/devin-plan.md): `devin acp`.
+  devinPath: string;
+  devinArgs: string[]; // extra `devin acp` arguments
+  devinMainDir: string; // devin-main's data folder, with credentials.toml
   tokenStatsLimitsFile: string; // Token Stats' limits.json, read only
   cliUpdates: CliUpdatesConfig;
   // Reads the CLIs' transcripts for the Usage panel's token counts
@@ -187,6 +190,8 @@ export type RunnerJson = {
   codexArgs?: string[];
   grokPath?: string;
   grokArgs?: string[];
+  devinPath?: string;
+  devinArgs?: string[];
   cliUpdates?: Partial<CliUpdatesConfig>;
   accountNotes?: Record<string, string>;
   poolFolders?: Record<string, string[]>;
@@ -432,6 +437,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, opts: { readOnl
     grokPath: expandHome(nonEmpty(env.THREADBEAR_GROK_PATH) ?? nonEmpty(json.grokPath) ?? '~/.local/bin/grok'),
     grokArgs: Array.isArray(json.grokArgs) ? json.grokArgs.filter((a): a is string => typeof a === 'string') : [],
     grokMainDir: expandHome(env.THREADBEAR_GROK_MAIN_DIR || '~/.grok'),
+    devinPath: expandHome(nonEmpty(env.THREADBEAR_DEVIN_PATH) ?? nonEmpty(json.devinPath) ?? '~/.local/bin/devin'),
+    devinArgs: Array.isArray(json.devinArgs) ? json.devinArgs.filter((a): a is string => typeof a === 'string') : [],
+    devinMainDir: expandHome(env.THREADBEAR_DEVIN_MAIN_DIR || '~/.local/share/devin'),
     tokenStatsLimitsFile: expandHome(
       env.THREADBEAR_TOKEN_STATS_LIMITS || '~/Library/Application Support/Token Stats/limits.json',
     ),
@@ -522,7 +530,7 @@ function stringMap(raw: unknown): Record<string, string> | undefined {
   return Object.fromEntries(Object.entries(raw).filter((e): e is [string, string] => typeof e[1] === 'string'));
 }
 
-// THREADBEAR_CLI_UPDATES=off turns both off whatever runner.json says: tests
+// THREADBEAR_CLI_UPDATES=off turns them all off whatever runner.json says: tests
 // and dev runners must never install a CLI.
 function cliUpdatesConfig(raw: Partial<CliUpdatesConfig> | undefined, envValue: string | undefined): CliUpdatesConfig {
   const policy = (v: unknown, fallback: CliPolicy): CliPolicy =>
@@ -533,6 +541,8 @@ function cliUpdatesConfig(raw: Partial<CliUpdatesConfig> | undefined, envValue: 
   return {
     claude: off ? 'off' : policy(raw?.claude, DEFAULT_CLI_UPDATES.claude),
     codex: off ? 'off' : policy(raw?.codex, DEFAULT_CLI_UPDATES.codex),
+    grok: off ? 'off' : policy(raw?.grok, DEFAULT_CLI_UPDATES.grok),
+    devin: off ? 'off' : policy(raw?.devin, DEFAULT_CLI_UPDATES.devin),
     checkMinutes: count(raw?.checkMinutes, DEFAULT_CLI_UPDATES.checkMinutes, 1),
     // Fewer than 2 would leave nothing for "Go back".
     keepCodexVersions: count(raw?.keepCodexVersions, DEFAULT_CLI_UPDATES.keepCodexVersions, 2),

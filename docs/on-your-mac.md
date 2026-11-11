@@ -133,7 +133,10 @@ File references are where to look.
   `grokPath`) for Grok threads, and while one runs serves that thread's
   threadbear tools to it over MCP on a free port on 127.0.0.1, at a path
   with a random secret that goes when the thread's CLI stops
-  (`runner/src/mcp-http.ts`).
+  (`runner/src/mcp-http.ts`). With the `devin` experiment on (off by
+  default) it starts the Devin CLI the same way (`devin acp`, from
+  `~/.local/bin/devin` or `devinPath`) for Devin threads; Devin also loads
+  the MCP servers in its own config.
 - **With the `acpAgents` experiment on** (off by default) it also starts the
   `opencode acp` and Cursor's `agent acp` CLIs for threads on them, runs each
   with `--version` when the runner starts, and runs its own updater
@@ -228,7 +231,16 @@ File references are where to look.
   `runner/bring-in.json` in the data folder.
 - **CLI updates** (`runner/src/updates/`): every hour it checks for new
   Claude Code and Codex versions and installs them. If you don't point it
-  at your own Codex, it installs one into the data folder. It also runs
+  at your own Codex, it installs one into the data folder. Once Grok
+  Build or the Devin CLI is installed, it checks those too: Grok with
+  `grok update --check --json` and `grok update`; Devin by reading
+  `https://static.devin.ai/cli/current/manifest.json`, downloading the
+  bundle it names with `curl`, checking its sha256, unpacking it into
+  Devin's own `~/.local/share/devin/cli/_versions/<version>` and pointing
+  `current` at it, as Devin's installer does (`devin update` needs a
+  terminal). It keeps the previous Devin version and removes older ones
+  nothing runs. Each CLI's Updates setting (Automatic, Ask me, Off) is in
+  the Updates panel. It also runs
   any update commands you list under `cliUpdates.extra` in `runner.json`
   (none unless you add them), once a day each, and keeps when each last
   ran in `extra-updates.json` in the data folder.
@@ -298,7 +310,9 @@ deletes the item. The microphone is only on while the mic is red.
   (`runner/src/accounts.ts`, `runner/src/token-tally.ts`;
   `THREADBEAR_TOKEN_TALLY=off` stops the counting). With the `grok`
   experiment on, whether `~/.grok/auth.json` (or a `grok-N` folder's)
-  exists, to list a Grok login; it's never opened. It never reads or
+  exists, to list a Grok login; it's never opened. With the `devin`
+  experiment on, whether `~/.local/share/devin/credentials.toml` exists,
+  to list a Devin login; it's never opened either. It never reads or
   copies login tokens or the Keychain.
 - With the `acpAgents` experiment on: whether `~/.opencode/bin/opencode`, an
   `opencode` or `cursor-agent` on your PATH, `~/.local/bin/cursor-agent` and

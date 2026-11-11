@@ -23,6 +23,8 @@ const HOSTS: Record<Provider, string> = {
   cursor: 'api2.cursor.sh',
   // Its free models; a login's own provider may be elsewhere.
   opencode: 'opencode.ai',
+  // The Devin CLI's API server (`devin auth status`).
+  devin: 'server.codeium.com',
 };
 
 // How long a probe may take in all, whatever arrives meanwhile: a proxy

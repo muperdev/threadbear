@@ -770,7 +770,7 @@ final class AppModel {
     static let lastModelKey = "lastModel"
     static let lastEffortKey = "lastEffort"
     static let newThreadFastKey = "newThreadFastMode"
-    static let memoryProviders = ["claude", "codex", "cursor", "opencode", "grok"]
+    static let memoryProviders = ["claude", "codex", "cursor", "opencode", "grok", "devin"]
     static let collapsedSectionsKey = "collapsedSections"
     static let dismissedRecapsKey = "dismissedRecaps"
     /// Set once Hibernating and Archive have been folded the first time.

@@ -68,6 +68,12 @@ export const DEFAULT_GROK_TIMINGS: GrokTimings = {
 export type GrokProcessOptions = {
   binary: string;
   args?: string[]; // extra `grok agent` arguments (grokArgs), before `stdio`
+  // Another ACP agent (Devin): its whole argument list, its environment,
+  // its name in messages, and its version when initialize doesn't say.
+  spawnArgs?: string[];
+  envFor?: (account: Account, threadEnv: Record<string, string> | undefined) => Record<string, string | undefined>;
+  name?: string;
+  knownVersion?: string;
   account: Account;
   env?: Record<string, string>;
   cwd: string;
@@ -110,9 +116,14 @@ export class GrokProcess {
   private exitWaiters: (() => void)[] = [];
   private closing = false;
 
+  private get name(): string {
+    return this.opts.name ?? 'grok';
+  }
+
   constructor(opts: GrokProcessOptions) {
     this.opts = opts;
     this.label = opts.label;
+    this.version = opts.knownVersion;
     this.t = { ...DEFAULT_GROK_TIMINGS, ...opts.timings };
   }
 
@@ -125,12 +136,12 @@ export class GrokProcess {
   async start(): Promise<InitializeResult> {
     const deadline = Date.now() + this.t.spawnRetryForMs;
     for (;;) {
-      if (this.closing) throw new GrokExitedError('grok was closed while it started');
+      if (this.closing) throw new GrokExitedError(`${this.name} was closed while it started`);
       try {
         const init = await this.startOnce();
         if (this.closing) {
           await this.stop();
-          throw new GrokExitedError('grok was closed while it started');
+          throw new GrokExitedError(`${this.name} was closed while it started`);
         }
         return init;
       } catch (e) {
@@ -150,9 +161,9 @@ export class GrokProcess {
     const spawn = groupSpawner(opts.registry, opts.log, (line) => this.stderr(line), opts.label);
     const child = spawn({
       command: opts.binary,
-      args: ['agent', '--no-leader', ...(opts.args ?? []), 'stdio'],
+      args: opts.spawnArgs ?? ['agent', '--no-leader', ...(opts.args ?? []), 'stdio'],
       cwd: opts.cwd,
-      env: grokEnv(opts.account, opts.env),
+      env: (opts.envFor ?? grokEnv)(opts.account, opts.env),
       signal: this.abort.signal,
     } as never) as unknown as ChildProcess;
     this.child = child;
@@ -179,7 +190,7 @@ export class GrokProcess {
       child.once('exit', (code, signal) => {
         const tail = this.stderrTail.slice(-5).join('\n');
         this.markExited();
-        const what = `grok exited (${signal ?? `code ${code}`})${tail ? `\n${tail}` : ''}`;
+        const what = `${this.name} exited (${signal ?? `code ${code}`})${tail ? `\n${tail}` : ''}`;
         for (const p of this.pending.values()) {
           if (p.timer) clearTimeout(p.timer);
           p.reject(new GrokExitedError(what));
@@ -289,12 +300,12 @@ export class GrokProcess {
     const id = this.nextId++;
     const ms = timeoutMs ?? (NO_TIMEOUT.has(method) ? 0 : SESSION_METHODS.has(method) ? this.t.sessionMs : this.t.requestMs);
     return new Promise<T>((resolve, reject) => {
-      if (this.exited) return reject(new GrokExitedError('grok is not running'));
+      if (this.exited) return reject(new GrokExitedError(`${this.name} is not running`));
       let timer: NodeJS.Timeout | undefined;
       if (ms > 0) {
         timer = setTimeout(() => {
           this.pending.delete(id);
-          reject(new Error(`Grok didn't answer ${method} within ${Math.round(ms / 1000)} s`));
+          reject(new Error(`${this.name === 'grok' ? 'Grok' : this.name} didn't answer ${method} within ${Math.round(ms / 1000)} s`));
         }, ms);
         timer.unref();
       }
@@ -304,7 +315,7 @@ export class GrokProcess {
       if (!this.write(msg)) {
         if (timer) clearTimeout(timer);
         this.pending.delete(id);
-        reject(new GrokExitedError('grok is not running'));
+        reject(new GrokExitedError(`${this.name} is not running`));
       }
     });
   }

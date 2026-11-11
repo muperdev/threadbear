@@ -603,7 +603,7 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
       for (const a of r.accounts) {
         const note = a.note ? `  (${a.note})` : '';
         // The provider has its own column, so not "Codex · " again.
-        const who = a.email ?? a.title.replace(/^(Codex|Grok) · /, '');
+        const who = a.email ?? a.title.replace(/^(Codex|Grok|Devin) · /, '');
         console.log(`${a.id === r.defaults.accountId ? '*' : ' '} ${a.id.padEnd(12)} ${providerName(a.provider).padEnd(9)}${who}${note}`);
       }
       return 0;

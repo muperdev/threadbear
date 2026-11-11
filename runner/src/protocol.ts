@@ -5,11 +5,12 @@
 export const PROTOCOL_VERSION = 1;
 
 // cursor and opencode run over ACP (adapters/acp/), behind the acpAgents
-// experiment, and grok is Grok Build's CLI (adapters/grok/, docs/grok-plan.md),
-// behind the grok experiment: activeProviders (providers.ts) is the list a
-// runner offers.
-export type Provider = 'claude' | 'codex' | 'cursor' | 'opencode' | 'grok';
-export const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'cursor', 'opencode', 'grok'];
+// experiment; grok is Grok Build's CLI (adapters/grok/, docs/grok-plan.md),
+// behind the grok experiment, and devin the Devin CLI (adapters/devin/,
+// docs/devin-plan.md), behind the devin experiment: activeProviders
+// (providers.ts) is the list a runner offers.
+export type Provider = 'claude' | 'codex' | 'cursor' | 'opencode' | 'grok' | 'devin';
+export const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'cursor', 'opencode', 'grok', 'devin'];
 
 // What a provider is called and can do (providers.ts holds the table). `id`
 // is a plain string as a client can be sent one it has never heard of.

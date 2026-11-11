@@ -1585,9 +1585,18 @@ stopped, and the thread gets told and wakes by itself to check on it, so you'll
 see it pick back up rather than go quiet.
 
 The Updates icon on the left-hand rail shows what's on its way for the app,
-the runner and the Claude Code and Codex tools. A grey dot means something
+the runner and the command line tools: Claude Code and Codex, plus Grok Build
+and Devin once they're installed. A grey dot means something
 is in progress and will sort itself out, and a coloured dot means it needs
 you. Right-click it for a quick Restart to Update.
+
+Each tool in the Updates panel shows its version, an Update button when a
+newer one is out, and an Updates menu: Automatic installs new versions by
+itself (the runner looks every hour), Ask me waits for you to click Update,
+and Off leaves it alone. When more than one tool has an update waiting,
+Update all installs them all at once. Check now looks for new versions
+straight away. Threads that are mid-turn finish on the version they started
+with; new turns pick up the new one.
 
 ### Mike's updates
 

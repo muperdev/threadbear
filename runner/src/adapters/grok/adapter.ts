@@ -20,8 +20,56 @@ import { placePictures } from '../../pictures.ts';
 import { truncateInput } from '../../tools.ts';
 import type { SlashCommand } from '../../slash-commands.ts';
 import type { McpHttpServer } from '../../mcp-http.ts';
-import { GrokExitedError, GrokProcess, GrokRpcError, type GrokTimings, type RequestId } from './process.ts';
-import { GrokNormalizer, mapTool, type MappedTool } from './normalize.ts';
+import { GrokExitedError, GrokProcess, GrokRpcError, type GrokProcessOptions, type GrokTimings, type RequestId } from './process.ts';
+import { GrokNormalizer, grokToolOf, type MappedTool, type ToolOf } from './normalize.ts';
+
+// What differs between the ACP agents this adapter drives: Grok Build and
+// the Devin CLI (adapters/devin, docs/devin-plan.md).
+export type AcpDialect = {
+  provider: 'grok' | 'devin';
+  name: string; // in what the thread shows: "Grok", "Devin"
+  binary: () => string;
+  spawnArgs?: () => string[]; // undefined: `grok agent --no-leader <grokArgs> stdio`
+  envFor?: GrokProcessOptions['envFor'];
+  version?: () => string | undefined; // when initialize doesn't say
+  // Grok picks a conversation up with session/resume; Devin only has
+  // session/load, which replays it first (dropped: the thread has it).
+  resume: 'session/resume' | 'session/load';
+  // Threadbear's instructions: Grok takes them as session/new's
+  // `_meta.rules`; Devin ignores that, so they lead the first prompt.
+  rulesIn: 'meta' | 'prompt';
+  effortConfigId: string;
+  effortIn: (v: unknown) => EffortLevel | undefined;
+  effortOut: (e: EffortLevel) => string;
+  // The model rows, the one running and context windows, from initialize
+  // and session/new (or session/load).
+  modelsOf: (init: AnyMsg | undefined, res: AnyMsg | undefined) => { rows: ModelChoice[]; current?: string; windows: Map<string, number> };
+  modelsNeedSession: boolean; // Devin's are only in a session's config options
+  modeFor?: (m: PermissionMode) => string | undefined; // the agent's own mode (Devin's `mode` option)
+  notFound: (e: GrokRpcError) => boolean;
+  toolOf?: ToolOf;
+  terminalOnly?: ReadonlySet<string>;
+};
+
+export function grokDialect(deps: Pick<GrokAdapterDeps, 'grokBinary'>): AcpDialect {
+  return {
+    provider: 'grok',
+    name: 'Grok',
+    binary: deps.grokBinary,
+    resume: 'session/resume',
+    rulesIn: 'meta',
+    effortConfigId: 'reasoning_effort',
+    effortIn: grokEffortIn,
+    effortOut: grokEffortOut,
+    modelsOf: (init, res) => {
+      const models = (res?.models ?? (init?._meta as AnyMsg | undefined)?.modelState) as AnyMsg | undefined;
+      return { rows: grokModelChoices(models?.availableModels), current: typeof models?.currentModelId === 'string' ? models.currentModelId : undefined, windows: contextWindows(models?.availableModels) };
+    },
+    modelsNeedSession: false,
+    notFound: (e) => e.detailCode === 'FS_NOT_FOUND' || /not found|no such session/i.test(e.message),
+    toolOf: grokToolOf,
+  };
+}
 
 export type GrokAdapterDeps = {
   grokBinary: () => string;
@@ -35,6 +83,8 @@ export type GrokAdapterDeps = {
   extraGuidance?: () => string;
   timings?: Partial<GrokTimings>;
   now?: () => number;
+  // Another ACP agent (Devin); Grok's when unset.
+  dialect?: AcpDialect;
 };
 
 type AnyMsg = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -65,7 +115,7 @@ export function grokModelChoices(rows: unknown): ModelChoice[] {
 }
 
 // Grok's effort ids and the protocol's.
-function grokEffortIn(v: unknown): EffortLevel | undefined {
+export function grokEffortIn(v: unknown): EffortLevel | undefined {
   if (v === 'minimal' || v === 'low') return 'low';
   if (v === 'medium' || v === 'high' || v === 'xhigh') return v;
   return undefined;
@@ -97,44 +147,63 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+export function processFor(deps: GrokAdapterDeps, d: AcpDialect, o: { account: Account; cwd: string; label: string; env?: Record<string, string> }): GrokProcess {
+  return new GrokProcess({
+    binary: d.binary(),
+    args: deps.grokArgs,
+    ...(d.spawnArgs ? { spawnArgs: d.spawnArgs() } : {}),
+    ...(d.envFor ? { envFor: d.envFor } : {}),
+    name: d.provider,
+    knownVersion: d.version?.(),
+    account: o.account,
+    env: o.env,
+    cwd: o.cwd,
+    registry: deps.registry,
+    log: deps.log,
+    label: o.label,
+    timings: deps.timings,
+  });
+}
+
 export class GrokAdapter implements AgentAdapter {
-  readonly provider = 'grok';
+  readonly provider: 'grok' | 'devin';
   readonly wakesAfterTasks = false;
   private deps: GrokAdapterDeps;
+  private dialect: AcpDialect;
   private live = new Set<GrokProcess>();
 
   constructor(deps: GrokAdapterDeps) {
     this.deps = deps;
+    this.dialect = deps.dialect ?? grokDialect(deps);
+    this.provider = this.dialect.provider;
   }
 
   start(opts: StartSessionOptions, sink: SessionSink): AgentSession {
-    if (opts.confined) throw new Error("This thread runs in a sandbox, and Grok can't, so it wasn't started. Move it to a Claude login.");
+    if (opts.confined) throw new Error(`This thread runs in a sandbox, and ${this.dialect.name} can't, so it wasn't started. Move it to a Claude login.`);
     const s = new GrokSession(opts, sink, this.deps, (p, live) => (live ? this.live.add(p) : this.live.delete(p)));
     s.start();
     return s;
   }
 
   binariesInUse(): string[] {
-    return this.live.size ? [this.deps.grokBinary()] : [];
+    return this.live.size ? [this.dialect.binary()] : [];
   }
 
-  // The models the account's Grok offers: initialize says, without a session.
+  // The models the account offers: Grok's initialize says, without a
+  // session; Devin's come with a session, made in a temp folder and deleted.
   async models(account: Account): Promise<ModelChoice[]> {
-    const p = new GrokProcess({
-      binary: this.deps.grokBinary(),
-      args: this.deps.grokArgs,
-      account,
-      cwd: os.tmpdir(),
-      registry: this.deps.registry,
-      log: this.deps.log,
-      label: `models:${account.id}`,
-      timings: this.deps.timings,
-    });
+    const d = this.dialect;
+    const cwd = d.modelsNeedSession ? fs.mkdtempSync(path.join(os.tmpdir(), `tb-${d.provider}-models-`)) : os.tmpdir();
+    const p = processFor(this.deps, d, { account, cwd, label: `models:${account.id}` });
     try {
-      const init = await p.start();
-      return grokModelChoices((init?._meta as AnyMsg | undefined)?.modelState?.availableModels);
+      const init = (await p.start()) as AnyMsg;
+      if (!d.modelsNeedSession) return d.modelsOf(init, undefined).rows;
+      const res = await p.request<AnyMsg>('session/new', { cwd, mcpServers: [] });
+      if (typeof res?.sessionId === 'string') await p.request('session/delete', { sessionId: res.sessionId }).catch(() => undefined);
+      return d.modelsOf(init, res).rows;
     } finally {
       await p.close().catch(() => undefined);
+      if (d.modelsNeedSession) fs.rmSync(cwd, { recursive: true, force: true });
     }
   }
 }
@@ -152,6 +221,7 @@ export class GrokSession implements AgentSession {
   private opts: StartSessionOptions;
   private sink: SessionSink;
   private deps: GrokAdapterDeps;
+  private d: AcpDialect;
   private track: (p: GrokProcess, live: boolean) => void;
   private now: () => number;
   private proc: GrokProcess;
@@ -167,6 +237,11 @@ export class GrokSession implements AgentSession {
   private effort?: EffortLevel;
   private liveModel?: string;
   private liveEffort?: string;
+  private liveMode?: string; // the agent's own (Devin's)
+  // Devin's session/load replays the conversation; it's dropped.
+  private replaying = false;
+  // Instructions that lead the first prompt (Devin's rulesIn: 'prompt').
+  private pendingRules?: string;
   private windows = new Map<string, number>();
   private tools?: CodexTools;
   private removeEndpoint?: () => void;
@@ -181,6 +256,7 @@ export class GrokSession implements AgentSession {
     this.opts = opts;
     this.sink = sink;
     this.deps = deps;
+    this.d = deps.dialect ?? grokDialect(deps);
     this.track = track;
     this.now = deps.now ?? Date.now;
     this.mode = opts.permissionMode;
@@ -188,25 +264,20 @@ export class GrokSession implements AgentSession {
     this.effort = opts.effort;
     this.rules = new Set(opts.allowRules ?? []);
     this.exitPromise = new Promise((r) => (this.resolveExit = r));
-    this.normalizer = new GrokNormalizer(fileContext(opts.cwd, opts.mediaDir, opts.blobsDir), { log: deps.log });
-    this.proc = new GrokProcess({
-      binary: deps.grokBinary(),
-      args: deps.grokArgs,
-      account: opts.account,
-      env: opts.env,
-      cwd: opts.cwd,
-      registry: deps.registry,
+    this.normalizer = new GrokNormalizer(fileContext(opts.cwd, opts.mediaDir, opts.blobsDir), {
       log: deps.log,
-      label: opts.threadId,
-      timings: deps.timings,
+      name: this.d.name,
+      toolOf: this.d.toolOf,
+      terminalOnly: this.d.terminalOnly,
     });
+    this.proc = processFor(deps, this.d, { account: opts.account, cwd: opts.cwd, label: opts.threadId, env: opts.env });
     this.proc.onNotification = (method, params) => this.notification(method, params);
     this.proc.onRequest = (id, method, params) => this.request(id, method, params);
     this.proc.onExit = (err) => this.exited(err);
   }
 
   get binaryPath(): string {
-    return this.deps.grokBinary();
+    return this.d.binary();
   }
 
   // ---- Start
@@ -215,7 +286,7 @@ export class GrokSession implements AgentSession {
     this.track(this.proc, true);
     void this.boot().catch((e: unknown) => {
       if (this.state === 'closing' || this.state === 'closed') return void this.finish();
-      this.deps.log.warn('grok session did not start', { threadId: this.opts.threadId, error: errText(e) });
+      this.deps.log.warn(`${this.d.provider} session did not start`, { threadId: this.opts.threadId, error: errText(e) });
       void this.finish(e instanceof Error ? e : new Error(String(e)), true);
     });
   }
@@ -255,34 +326,41 @@ export class GrokSession implements AgentSession {
     let res: AnyMsg;
     if (opts.resume) {
       this.sessionId = opts.sessionId;
+      this.replaying = this.d.resume === 'session/load';
       try {
-        res = await this.proc.request<AnyMsg>('session/resume', { sessionId: opts.sessionId, cwd: opts.cwd, mcpServers });
+        res = await this.proc.request<AnyMsg>(this.d.resume, { sessionId: opts.sessionId, cwd: opts.cwd, mcpServers });
       } catch (e) {
-        if (e instanceof GrokRpcError && (e.detailCode === 'FS_NOT_FOUND' || /not found|no such session/i.test(e.message))) {
-          throw new SessionNotFoundError(`The Grok session to resume wasn't found (${e.message}).`);
+        if (e instanceof GrokRpcError && this.d.notFound(e)) {
+          throw new SessionNotFoundError(`The ${this.d.name} session to resume wasn't found (${e.message}).`);
         }
         throw e;
+      } finally {
+        this.replaying = false;
       }
     } else {
       const defs = this.deps.toolsFor?.(opts.threadId) ?? [];
       const rules = [mcpServers.length ? toolGuidance(defs) : '', mcpServers.length ? (this.deps.extraGuidance?.() ?? '') : '', opts.instructions ?? ''].filter(Boolean).join('\n\n');
-      res = await this.proc.request<AnyMsg>('session/new', { cwd: opts.cwd, mcpServers, ...(rules ? { _meta: { rules } } : {}) });
-      if (typeof res?.sessionId !== 'string') throw new Error('Grok started a session without an id');
+      const meta = rules && this.d.rulesIn === 'meta' ? { _meta: { rules } } : {};
+      if (rules && this.d.rulesIn === 'prompt') this.pendingRules = rules;
+      res = await this.proc.request<AnyMsg>('session/new', { cwd: opts.cwd, mcpServers, ...meta });
+      if (typeof res?.sessionId !== 'string') throw new Error(`${this.d.name} started a session without an id`);
       this.sessionId = res.sessionId;
     }
     if (this.state !== 'starting') return;
-    const models = (res?.models ?? (init?._meta as AnyMsg | undefined)?.modelState) as AnyMsg | undefined;
-    this.windows = contextWindows(models?.availableModels);
-    this.liveModel = typeof models?.currentModelId === 'string' ? models.currentModelId : undefined;
-    const effortOpt = Array.isArray(res?.configOptions) ? (res.configOptions as AnyMsg[]).find((o) => o?.id === 'reasoning_effort') : undefined;
+    const models = this.d.modelsOf(init as AnyMsg, res);
+    this.windows = models.windows;
+    this.liveModel = models.current;
+    const effortOpt = Array.isArray(res?.configOptions) ? (res.configOptions as AnyMsg[]).find((o) => o?.id === this.d.effortConfigId) : undefined;
     if (typeof effortOpt?.currentValue === 'string') this.liveEffort = effortOpt.currentValue;
+    const mode = res?.modes?.currentModeId;
+    if (typeof mode === 'string') this.liveMode = mode;
     this.normalizer.setSession(this.sessionId!, this.liveModel);
     this.normalizer.contextWindow = this.liveModel ? this.windows.get(this.liveModel) : undefined;
     await this.applySettings();
     if (this.state !== 'starting') return;
     this.sink.output({ kind: 'session', nativeSessionId: this.sessionId!, ...(this.liveModel ? { model: this.liveModel } : {}) });
     if (this.proc.version) this.sink.output({ kind: 'cliVersion', version: this.proc.version });
-    const level = grokEffortIn(this.liveEffort);
+    const level = this.d.effortIn(this.liveEffort);
     if (level) this.sink.output({ kind: 'effort', level });
     this.state = 'ready';
     const early = this.early;
@@ -303,16 +381,25 @@ export class GrokSession implements AgentSession {
         this.normalizer.setSession(this.sessionId, model);
         this.normalizer.contextWindow = this.windows.get(model) ?? this.normalizer.contextWindow;
       } catch (e) {
-        this.sink.output({ kind: 'event', event: { type: 'system.note', text: `Grok didn't switch to ${model}: ${errText(e)}` } });
+        this.sink.output({ kind: 'event', event: { type: 'system.note', text: `${this.d.name} didn't switch to ${model}: ${errText(e)}` } });
       }
     }
-    const effort = this.effort ? grokEffortOut(this.effort) : undefined;
+    const effort = this.effort ? this.d.effortOut(this.effort) : undefined;
     if (effort && effort !== this.liveEffort) {
       try {
-        await this.proc.request('session/set_config_option', { sessionId: this.sessionId, configId: 'reasoning_effort', value: effort });
+        await this.proc.request('session/set_config_option', { sessionId: this.sessionId, configId: this.d.effortConfigId, value: effort });
         this.liveEffort = effort;
       } catch (e) {
-        this.deps.log.info('grok did not take the effort level', { threadId: this.opts.threadId, effort, error: errText(e) });
+        this.deps.log.info(`${this.d.provider} did not take the effort level`, { threadId: this.opts.threadId, effort, error: errText(e) });
+      }
+    }
+    const mode = this.d.modeFor?.(this.mode);
+    if (mode && mode !== this.liveMode) {
+      try {
+        await this.proc.request('session/set_config_option', { sessionId: this.sessionId, configId: 'mode', value: mode });
+        this.liveMode = mode;
+      } catch (e) {
+        this.deps.log.info(`${this.d.provider} did not take the mode`, { threadId: this.opts.threadId, mode, error: errText(e) });
       }
     }
   }
@@ -322,6 +409,7 @@ export class GrokSession implements AgentSession {
   private notification(method: string, params: unknown): void {
     if (method !== 'session/update' && method !== '_x.ai/session_notification') return;
     const p = (params ?? {}) as AnyMsg;
+    if (this.replaying) return;
     if (!this.sessionId || this.state === 'starting') {
       this.early.push([method, params]);
       return;
@@ -339,8 +427,7 @@ export class GrokSession implements AgentSession {
 
   private noteMcpCall(u: AnyMsg): void {
     if (typeof u.toolCallId !== 'string') return;
-    const meta = u._meta?.['x.ai/tool'] as AnyMsg | undefined;
-    const name = mapTool(String(meta?.name ?? u.title ?? ''), (meta?.input as AnyMsg) ?? u.rawInput, meta).name;
+    const name = (this.d.toolOf ?? grokToolOf)(u).tool.name;
     const prefix = `mcp__${SERVER_NAME}__`;
     if (!name.startsWith(prefix)) return;
     this.mcpCalls.push({ id: u.toolCallId, tool: name.slice(prefix.length) });
@@ -361,7 +448,7 @@ export class GrokSession implements AgentSession {
     this.proc.respondError(id, -32601, `Threadbear doesn't handle ${method}.`);
   }
 
-  // A tool Grok wants to run, answered from the thread's mode, its "Always
+  // A tool the agent wants to run, answered from the thread's mode, its "Always
   // allow" rules, or the approval card.
   private async permission(id: RequestId, p: AnyMsg): Promise<void> {
     const options = (Array.isArray(p.options) ? p.options : []) as AnyMsg[];
@@ -397,7 +484,7 @@ export class GrokSession implements AgentSession {
 
   send(input: UserInput): void {
     if (this.state === 'closing' || this.state === 'closed') {
-      this.deps.log.warn('a message reached a grok session that has ended', { threadId: this.opts.threadId });
+      this.deps.log.warn(`a message reached a ${this.d.provider} session that has ended`, { threadId: this.opts.threadId });
       return;
     }
     this.held.push(input);
@@ -420,7 +507,11 @@ export class GrokSession implements AgentSession {
     let error: string | undefined;
     try {
       await this.applySettings();
-      res = await this.proc.request<AnyMsg>('session/prompt', { sessionId: this.sessionId, prompt: promptBlocks(inputs) });
+      const blocks = promptBlocks(inputs);
+      // Devin's instructions, once, ahead of the first message.
+      if (this.pendingRules) blocks.unshift({ type: 'text', text: `<threadbear_instructions>\n${this.pendingRules}\n</threadbear_instructions>\n\n` });
+      this.pendingRules = undefined;
+      res = await this.proc.request<AnyMsg>('session/prompt', { sessionId: this.sessionId, prompt: blocks });
     } catch (e) {
       if (e instanceof GrokExitedError || this.state === 'closing' || this.state === 'closed') return; // the exit reports it
       error = errText(e);
@@ -447,7 +538,7 @@ export class GrokSession implements AgentSession {
 
   async interrupt(): Promise<void> {
     if (this.state === 'closed' || this.state === 'closing') {
-      if (!this.proc.alive) throw new Error('The Grok process has already exited.');
+      if (!this.proc.alive) throw new Error(`The ${this.d.name} process has already exited.`);
       return;
     }
     const dropped = this.held.map((m) => m.id).filter((x): x is string => Boolean(x));
@@ -472,6 +563,7 @@ export class GrokSession implements AgentSession {
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
     this.mode = mode;
+    if (this.state === 'ready' && this.d.modeFor) await this.applySettings();
   }
 
   async commands(): Promise<SlashCommand[]> {
