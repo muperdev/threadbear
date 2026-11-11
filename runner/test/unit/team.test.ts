@@ -124,6 +124,16 @@ function person(hubOf: () => Hub, remotes: Record<string, string> = {}) {
   return { h, home, root, projects, team, repo, control, notes, settle };
 }
 
+// Moves the runners' clocks on and lets their work run until `cond` holds:
+// in a full suite the machine is busy, and a fixed number of turns of the
+// event loop wasn't always enough.
+async function eventually(cond: () => boolean, ...people: { h: { clock: { advance(ms: number): void } } }[]): Promise<void> {
+  for (let i = 0; i < 300 && !cond(); i++) {
+    for (const p of people) p.h.clock.advance(11_000);
+    await new Promise((r) => setTimeout(r, 2));
+  }
+}
+
 async function twoOnATeam() {
   const { b, hub } = memoryHub();
   const remotes: Record<string, string> = {};
@@ -132,7 +142,7 @@ async function twoOnATeam() {
   await host.team.create({ name: 'Collabute', memberName: 'Behrooz' });
   const { invite } = await host.team.invite();
   await sam.team.join({ invite, name: 'Sam' });
-  await tick(10);
+  await eventually(() => host.team.state().members.length === 2 && sam.team.state().members.length === 2, host, sam);
   return { b, host, sam };
 }
 
@@ -182,13 +192,11 @@ test('a shared project stays in step both ways, folders stay each person\'s own'
   assert.equal(samP.goals, 'Ship reviews');
   // Sam's agent moves the state on: Behrooz's copy follows.
   sam.projects.update(samP.id, { state: 'API done, UI next', by: 'agent' });
-  await sam.settle();
-  await host.settle();
+  await eventually(() => host.projects.record(p.id)!.state === 'API done, UI next', host, sam);
   assert.equal(host.projects.record(p.id)!.state, 'API done, UI next');
   // And back the other way, without an echo.
   host.projects.update(p.id, { goals: 'Ship reviews by Friday' });
-  await host.settle();
-  await sam.settle();
+  await eventually(() => sam.projects.record(samP.id)!.goals === 'Ship reviews by Friday', host, sam);
   assert.equal(sam.projects.record(samP.id)!.goals, 'Ship reviews by Friday');
   assert.equal(sam.projects.record(samP.id)!.state, 'API done, UI next');
 });
@@ -200,8 +208,7 @@ test("the board and the brief: each sees the other's threads, not their own", as
   const { projectId: samP } = await sam.team.add({ sharedId: host.team.state().projects[0]!.id });
   const t = host.h.runner.create({ text: 'Build the review feature', cwd: host.root, accountId: 'claude-3', projectIds: [p.id] }).thread;
   host.h.runner.update({ threadId: t.id, title: 'Review feature' } as never);
-  await host.settle();
-  await sam.settle();
+  await eventually(() => sam.team.state().cards.some((c) => !c.mine && c.title === 'Review feature'), host, sam);
   const cards = sam.team.state().cards.filter((c) => !c.mine);
   assert.equal(cards.length, 1);
   assert.equal(cards[0]!.memberName, 'Behrooz');
@@ -221,15 +228,14 @@ test('a teammate\'s message waits for a pass-on, then reaches the thread; the se
   const { projectId: samP } = await sam.team.add({ sharedId: host.team.state().projects[0]!.id });
   const target = host.h.runner.create({ text: 'Migration', cwd: host.root, accountId: 'claude-3', projectIds: [p.id] }).thread;
   const from = sam.h.runner.create({ text: 'Schema change', cwd: sam.root, accountId: 'claude-3', projectIds: [samP] }).thread;
-  await host.settle();
-  await sam.settle();
+  await eventually(() => sam.team.state().cards.some((c) => c.threadId === target.id), host, sam);
   const ref = cardRef('Behrooz', target.id);
   // Through the agent's own tool.
   const tools = buildThreadbearTools(sam.h.runner as never, from.id, Date.now, undefined, undefined, undefined, { team: sam.control });
   const send = tools.find((x) => x.name === 'send_message')!;
   const out = await send.handler({ threadId: ref, text: 'Hold the migration until my schema lands.' } as never, {});
   assert.match(JSON.stringify(out), /Sent to Behrooz's thread/);
-  await tick(10);
+  await eventually(() => host.team.state().waiting.length === 1 && host.notes(target.id).length > 0, host, sam);
   const waiting = host.team.state().waiting;
   assert.equal(waiting.length, 1);
   assert.equal(waiting[0]!.fromName, 'Sam');
@@ -237,11 +243,11 @@ test('a teammate\'s message waits for a pass-on, then reaches the thread; the se
   const before = host.h.adapter.sessions.flatMap((s) => s.sent.map((x) => JSON.stringify(x))).join('\n');
   assert.doesNotMatch(before, /Hold the migration/);
   await host.team.answer({ id: waiting[0]!.id, action: 'pass' });
-  await tick(10);
+  await eventually(() => host.h.adapter.sessions.some((x) => x.sent.some((y) => JSON.stringify(y).includes('Hold the migration'))), host, sam);
   const after = host.h.adapter.sessions.flatMap((s) => s.sent.map((x) => JSON.stringify(x))).join('\n');
   assert.match(after, /From Sam's agent/);
   assert.match(after, /Hold the migration/);
-  await sam.settle();
+  await eventually(() => sam.notes(from.id).some((n) => /Behrooz passed your message on/.test(n)), host, sam);
   assert.ok(sam.notes(from.id).some((n) => /Behrooz passed your message on/.test(n)));
 });
 
@@ -252,10 +258,9 @@ test('a project set to deliver passes messages straight in', async () => {
   host.team.setDelivery({ projectId: p.id, delivery: 'deliver' });
   await sam.team.add({ sharedId: host.team.state().projects[0]!.id });
   const target = host.h.runner.create({ text: 'Migration', cwd: host.root, accountId: 'claude-3', projectIds: [p.id] }).thread;
-  await host.settle();
-  await sam.settle();
+  await eventually(() => sam.team.state().cards.some((c) => c.threadId === target.id), host, sam);
   await sam.team.sendToCard({ ref: cardRef('Behrooz', target.id), text: 'Schema landed.', fromThreadId: 'samthread01' });
-  await tick(20);
+  await eventually(() => host.h.adapter.sessions.some((x) => x.sent.some((y) => JSON.stringify(y).includes('Schema landed'))) && host.team.state().waiting.length === 0, host, sam);
   assert.equal(host.team.state().waiting.length, 0);
   assert.match(host.h.adapter.sessions.flatMap((s) => s.sent.map((x) => JSON.stringify(x))).join('\n'), /Schema landed/);
 });
@@ -273,7 +278,7 @@ test('a handover waits on their Mac; taking it starts a thread in the project wi
   const hand = tools.find((x) => x.name === 'hand_over');
   assert.ok(hand, 'hand_over is there on a team');
   await hand!.handler({ to: 'sam', note: 'Two alarms still flapping; the fix is half done.', links: [{ title: 'PR', url: 'https://github.com/collabute/infra/pull/9' }] } as never, {});
-  await tick(10);
+  await eventually(() => sam.team.state().waiting.length === 1, host, sam);
   const w = sam.team.state().waiting;
   assert.equal(w.length, 1);
   assert.equal(w[0]!.kind, 'handover');
@@ -283,7 +288,7 @@ test('a handover waits on their Mac; taking it starts a thread in the project wi
   assert.equal(made.cwd, samRepo);
   assert.deepEqual(made.projects?.map((x) => x.id), [samP]);
   assert.match(sam.h.adapter.sessions.flatMap((s) => s.sent.map((x) => JSON.stringify(x))).join('\n'), /Handover from Behrooz[\s\S]*Two alarms still flapping[\s\S]*pull\/9/);
-  await host.settle();
+  await eventually(() => host.notes(t.id).some((n) => /Sam took over this work/.test(n)), host, sam);
   assert.ok(host.notes(t.id).some((n) => /Sam took over this work/.test(n)));
 });
 
@@ -293,7 +298,7 @@ test('appendNote on a shared project reaches the team log and teammates\' read_p
   await host.team.share({ projectId: p.id });
   const { projectId: samP } = await sam.team.add({ sharedId: host.team.state().projects[0]!.id });
   await host.team.logNote(p.id, 'Decided: reviews live behind the reviews flag until Friday.');
-  await tick(10);
+  await eventually(() => sam.team.projectLines(sam.projects.record(samP)!).join('\n').includes('reviews flag'), host, sam);
   const lines = sam.team.projectLines(sam.projects.record(samP)!).join('\n');
   assert.match(lines, /Behrooz: Decided: reviews live behind the reviews flag/);
 });
