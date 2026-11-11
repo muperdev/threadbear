@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ConvexAdminError, convexEnv, envValue, prodArgs, readConvexAdmin, siteOf } from '../../src/convex-admin.ts';
+import { ConvexAdminError, convexEnv, convexRunReason, envValue, prodArgs, readConvexAdmin, siteOf } from '../../src/convex-admin.ts';
 
 function home(files: Record<string, string>): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-convex-admin-'));
@@ -79,4 +79,21 @@ test('siteOf prefers sync.site, else the cloud twin', () => {
   assert.equal(siteOf('https://mac.tail1.ts.net:3210', 'https://mac.tail1.ts.net:3211/'), 'https://mac.tail1.ts.net:3211');
   assert.equal(siteOf('https://mac.tail1.ts.net:3210'), undefined);
   assert.equal(siteOf(undefined), undefined);
+});
+
+// The static-hosting CLI says only "Could not reach component" when the
+// deployment refuses it, so deploy-backend asks Convex itself and shows why.
+// This is the real output of a disabled deployment (11 Nov 2026).
+test("convexRunReason keeps Convex's own words and drops the CLI's noise", () => {
+  const out = [
+    ' Ignoring `--prod`, `--preview-name`, or `--deployment-name` flags and using deployment from CONVEX_DEPLOY_KEY',
+    '✖ Failed to run function "lib:getUrls":',
+    'Error: [Request ID: 83cbb7f66728c5af] Server Error',
+    'You have exceeded the free plan limits, so your deployments have been disabled. Please upgrade to a Pro plan or reach out to us at support@convex.dev for help.',
+    '',
+  ].join('\n');
+  assert.equal(convexRunReason(out), 'You have exceeded the free plan limits, so your deployments have been disabled. Please upgrade to a Pro plan or reach out to us at support@convex.dev for help.');
+  assert.equal(convexRunReason('✖ Failed to run function "lib:getUrls":\nError: [Request ID: ab12] Could not find function'), 'Could not find function');
+  assert.equal(convexRunReason('✖ Failed to run function "lib:getUrls":\nError: [Request ID: ab12] Server Error\n'), 'Server Error');
+  assert.equal(convexRunReason(''), undefined);
 });

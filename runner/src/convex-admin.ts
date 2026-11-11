@@ -103,6 +103,20 @@ export function prodArgs(admin: ConvexAdmin): string[] {
   return admin.kind === 'cloud' ? ['--prod'] : [];
 }
 
+// Why a `convex run` failed, in Convex's own words: its output less the
+// CLI's lines around them. A deployment Convex has disabled (over the free
+// plan's limits) says so only here; the static-hosting CLI swallows it into
+// "Could not reach component" (11 Nov 2026).
+export function convexRunReason(output: string): string | undefined {
+  const lines = output.split('\n').map((l) => l.trim()).filter(Boolean)
+    .filter((l) => !/^Ignoring `--prod`/.test(l) && !/^✖ Failed to run function/.test(l))
+    .map((l) => l.replace(/^Error: \[Request ID: [^\]]*\]\s*/, ''));
+  // "Server Error" is a heading when Convex says more after it.
+  const said = lines.length > 1 ? lines.filter((l) => l !== 'Server Error') : lines;
+  const reason = said.join(' ').slice(0, 300);
+  return reason || undefined;
+}
+
 // A backend only this Mac can reach: setup --self-hosted --local puts it on
 // 127.0.0.1 (docs/self-hosting.md, "On this Mac only"). No phone or other
 // Mac can pair with it, and its website and share links only open here.

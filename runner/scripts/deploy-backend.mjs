@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { ConvexAdminError, convexEnv, prodArgs, readConvexAdmin } from '../src/convex-admin.ts';
+import { ConvexAdminError, convexEnv, convexRunReason, prodArgs, readConvexAdmin } from '../src/convex-admin.ts';
 
 const HELP = `deploy-backend.mjs: deploy convex/ and web/ at a commit to the runner's Convex deployment, if they changed.
 
@@ -315,7 +315,11 @@ function main(argv) {
     try {
       step(`Uploading the website at ${short}`, npx, ['static-hosting', 'upload', '--build', '--build-command', 'npm run web:build', '--dist', 'web/dist', ...prodArgs(admin)], opts);
     } catch (e) {
-      failed('website', e);
+      // The upload says only "Could not reach component" when Convex refuses
+      // it, so ask Convex directly and put its reason first.
+      const probe = spawnSync(npx, ['convex', 'run', '--component', 'staticHosting', 'lib:getUrls', '{}'], { ...opts, encoding: 'utf8', timeout: 60_000 });
+      const why = probe.status === 0 ? undefined : convexRunReason(`${probe.stderr ?? ''}\n${probe.stdout ?? ''}`);
+      failed('website', why ? new Fail(`Convex says: ${why} (${e.message ?? e})`) : e);
     }
     writeJson(stateFile, { ...readJson(stateFile), site: { tree: want.site, commit, at: new Date().toISOString(), ...(siteUrl ? { url: siteUrl } : {}) }, failed: undefined });
   }
