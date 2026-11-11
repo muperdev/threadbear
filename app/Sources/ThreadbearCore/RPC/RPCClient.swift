@@ -308,8 +308,7 @@ public final class RPCClient: Sendable {
             guard let params = decoded(ProjectsResult.self, method: method, data: data) else { return nil }
             return .projectsUpdated(params.projects)
         case "team.updated":
-            guard let params = try? decoder.decode(RPCNotificationEnvelope<TeamResult>.self, from: data).params
-            else { return nil }
+            guard let params = decoded(TeamResult.self, method: method, data: data) else { return nil }
             return .teamUpdated(params.team)
         case "librarian.updated":
             guard let params = decoded(LibrarianResult.self, method: method, data: data) else { return nil }

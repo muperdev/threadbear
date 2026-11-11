@@ -131,8 +131,6 @@ struct TeamSettings: View {
             }
         }
         .formStyle(.grouped)
-        .fixedSize(horizontal: false, vertical: true)
-        .scrollIndicators(.never)
         .onAppear { app.loadTeam() }
     }
 }

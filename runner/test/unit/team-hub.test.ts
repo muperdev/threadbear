@@ -63,7 +63,7 @@ test('an expired invite is refused, and a name already on the team', async () =>
 test('a member key opens nothing the runners and phones use', async () => {
   const b = await withSam();
   // sync.ts checks keys against RUNNER_KEY and runnerKeys alone.
-  assert.equal(await outcome(call(b.ctx, sync.heartbeat ?? sync.listThreads, { key: SAM_KEY, runnerId: 'm5runner0001' })), 'auth');
+  assert.equal(await outcome(call(b.ctx, sync.runnerWatch, { key: SAM_KEY })), 'auth');
   // And the owner key is not a member key.
   assert.equal(await outcome(call(b.ctx, team.state, { key: OWNER + 'x'.repeat(20) })), 'auth');
 });
