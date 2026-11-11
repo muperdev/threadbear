@@ -29,6 +29,11 @@ struct ProjectPage: View {
                     .controlSize(.large)
                     .tip("Start a thread in this project, in its folder, with its goals from the first message")
                 }
+                // The projectDecisions experiment: its threads' open cards
+                // of asks first, as that's what's waiting on Mike.
+                if app.projectDecisionsOn {
+                    DecisionsSection(project: project)
+                }
                 TextSection(project: project, field: .goals)
                 TextSection(project: project, field: .state)
                 TasksSection(project: project)
@@ -134,7 +139,7 @@ private struct TitleField: View {
 }
 
 /// A section's heading, with anything that acts on the section at its right.
-private struct PageHeading<Trailing: View>: View {
+struct PageHeading<Trailing: View>: View {
     let title: String
     var detail: String? = nil
     @ViewBuilder var trailing: () -> Trailing

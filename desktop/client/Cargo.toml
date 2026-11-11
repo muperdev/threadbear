@@ -1,0 +1,19 @@
+[package]
+name = "threadbear-client"
+version = "0.1.0"
+description = "Threadbear's runner connection, shared by the desktop apps: challenge sign-in, requests, notifications, reconnecting"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+tokio-tungstenite = "0.28"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.9"
+subtle = "2"
+dirs = "6"

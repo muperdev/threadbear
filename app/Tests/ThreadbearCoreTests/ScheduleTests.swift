@@ -195,6 +195,53 @@ final class ScheduleTests: XCTestCase {
         XCTAssertEqual(params["cron"], .string("0 * * * *"))
         XCTAssertEqual(params["text"], .string("new"))
         XCTAssertNil(params["at"])
+        XCTAssertNil(params["model"], "a model left out stays as it is")
+        let models = ScheduleUpdate(model: .some("opus"), effort: .some(nil)).params
+        XCTAssertEqual(models["model"], .string("opus"))
+        XCTAssertEqual(models["effort"], .null, "nil effort goes back to the default")
+    }
+
+    // MARK: Model and effort
+
+    private let opus = ModelChoice(id: "opus", model: "claude-opus-5-5", title: "Opus 5.5", effortLevels: ["low", "medium", "high", "xhigh", "max"])
+    private let haiku = ModelChoice(id: "haiku", model: "claude-haiku-5-5", title: "Haiku 5.5")
+    private let sol = ModelChoice(id: "gpt-6.1-sol", model: "gpt-6.1-sol", title: "GPT-6.1 Sol", effortLevels: ["low", "high", "ultra"], defaultEffort: "high")
+
+    private var logins: RunnerLogins {
+        RunnerLogins(
+            accounts: [
+                Account(id: "claude-1", title: "One", defaultModel: "opus", models: [opus, haiku]),
+                Account(id: "codex-1", provider: "codex", title: "Codex", defaultModel: "gpt-6.1-sol", models: [sol]),
+            ],
+            pools: [Pool(id: "mixed", title: "Mixed", accountIds: ["claude-1", "codex-1"])],
+            defaults: RunnerDefaults(cwd: "/tmp", accountId: "claude-1", efforts: ["claude": "high"])
+        )
+    }
+
+    func testScheduleModelsFromAPinnedLogin() {
+        let models = ScheduleModels(accountId: "claude-1", poolId: nil, model: nil, logins: logins)
+        XCTAssertEqual(models.provider, "claude")
+        XCTAssertEqual(models.rows.map(\.id), ["opus", "haiku"])
+        XCTAssertEqual(models.defaultModelTitle, "Default (Opus 5.5)")
+        XCTAssertEqual(models.defaultEffortTitle, "Default (High)", "the runner's default effort for Claude")
+        XCTAssertEqual(models.effortLevels, ["low", "medium", "high", "xhigh", "max"])
+    }
+
+    func testScheduleModelsOnAPoolFollowTheChosenModelsProvider() {
+        let codex = ScheduleModels(accountId: nil, poolId: "mixed", model: "gpt-6.1-sol", logins: logins)
+        XCTAssertEqual(codex.provider, "codex")
+        XCTAssertEqual(codex.effortLevels, ["low", "high", "ultra"])
+        XCTAssertEqual(codex.defaultEffortTitle, "Default (High)", "Sol's own level")
+        let unset = ScheduleModels(accountId: nil, poolId: "mixed", model: nil, logins: logins)
+        XCTAssertEqual(unset.provider, "claude", "no model: the pool's first login")
+    }
+
+    func testScheduleModelsWithNoLoginUseTheRunnersDefault() {
+        let models = ScheduleModels(accountId: nil, poolId: nil, model: nil, logins: logins)
+        XCTAssertEqual(models.account?.id, "claude-1")
+        let empty = ScheduleModels(accountId: nil, poolId: nil, model: nil, logins: RunnerLogins(accounts: [], pools: [], defaults: RunnerDefaults(cwd: "", accountId: "")))
+        XCTAssertEqual(empty.defaultModelTitle, "Default")
+        XCTAssertEqual(empty.rows.map(\.id), ModelPicker.aliases, "before hello, the aliases the CLI always takes")
     }
 
     // MARK: Presets

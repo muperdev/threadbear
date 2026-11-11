@@ -82,7 +82,12 @@ public enum ComposerChips {
     public static let grokEffortLevels = ["low", "medium", "high", "xhigh"]
 
     public static func effortLevels(provider: String) -> [String] {
-        provider == "codex" ? codexEffortLevels : provider == "grok" ? grokEffortLevels : effortLevels
+        if provider == "grok" { return grokEffortLevels }
+        return switch Providers.info(provider).effort {
+        case "codex": codexEffortLevels
+        case "none": []
+        default: effortLevels
+        }
     }
 
     /// Goldilocks: what the porridge is like at each level, under its name

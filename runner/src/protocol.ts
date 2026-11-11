@@ -4,9 +4,27 @@
 
 export const PROTOCOL_VERSION = 1;
 
-// grok: Grok Build's CLI (docs/grok-plan.md), behind the grok experiment.
-export type Provider = 'claude' | 'codex' | 'grok';
-export const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'grok'];
+// cursor and opencode run over ACP (adapters/acp/), behind the acpAgents
+// experiment, and grok is Grok Build's CLI (adapters/grok/, docs/grok-plan.md),
+// behind the grok experiment: activeProviders (providers.ts) is the list a
+// runner offers.
+export type Provider = 'claude' | 'codex' | 'cursor' | 'opencode' | 'grok';
+export const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'cursor', 'opencode', 'grok'];
+
+// What a provider is called and can do (providers.ts holds the table). `id`
+// is a plain string as a client can be sent one it has never heard of.
+export type ProviderInfo = {
+  id: string;
+  name: string;
+  cliName: string;
+  loginCommand: string;
+  effort: 'claude' | 'codex' | 'none';
+  autoMode: 'classifier' | 'asks';
+  sandbox: boolean;
+  rewind: boolean;
+  smallJobs: boolean;
+  usageReadings: boolean;
+};
 
 export function isProvider(v: unknown): v is Provider {
   return typeof v === 'string' && (PROVIDERS as readonly string[]).includes(v);
@@ -124,6 +142,9 @@ export type CliStatus = {
   policy: CliPolicy;
   inUse: { version: string; threadIds: string[] }[];
   previousVersion?: string; // Codex: the kept version "Go back" returns to
+  // An agent with no version feed to compare against: its row offers an
+  // update on demand (ACP agents).
+  canUpdateNow?: boolean;
   checkedAt?: string;
   hold?: { version: string; reason: string; missing?: string[] };
   update?: {
@@ -163,6 +184,9 @@ export type RunnerDefaults = {
   model?: string;
   models?: Partial<Record<Provider, string>>;
   efforts?: Partial<Record<Provider, EffortLevel>>;
+  // The mode a threads.create with none starts on (runner.json's
+  // defaults.permissionMode). Absent: full.
+  permissionMode?: Exclude<PermissionMode, 'plan'>;
 };
 
 export type ThreadStatus = 'idle' | 'starting' | 'running' | 'waiting' | 'error' | 'stopped';
@@ -172,6 +196,20 @@ export type ArchivedBy = 'mike' | 'agent' | 'threadbear';
 export type ArchiveVerdict = 'worked' | 'didntWork' | 'notNeeded';
 export const ARCHIVE_VERDICTS: readonly ArchiveVerdict[] = ['worked', 'didntWork', 'notNeeded'];
 
+// What fills a thread's context, in Claude's own words (threads.contextUsage,
+// docs/protocol.md "Context breakdown"). Rows are the CLI's /context rows:
+// `id` names a row (absent from a CLI that predates it, and a later CLI may
+// add ids), `kind` says whether it counts: 'used' is in the window, 'buffer'
+// the autocompact reserve, 'free' the rest, 'deferred' tool schemas kept out
+// of the window until loaded.
+export type ContextUsage = {
+  at: string; // when Claude answered
+  model?: string;
+  totalTokens: number; // in the window now
+  maxTokens: number; // the window it's measured against
+  categories: { id?: string; name: string; tokens: number; kind: string }[];
+};
+
 export type ThreadSummary = {
   id: string;
   title: string;
@@ -179,6 +217,9 @@ export type ThreadSummary = {
   accountId: string;
   poolId?: string; // absent: pinned to accountId
   waitingForRoom?: WaitingForRoom;
+  // Off: a turn that hits its login's limit doesn't wait for room and
+  // carry on by itself (Mike turned it off on the limit box). Absent: on.
+  carryOnAtReset?: false;
   // Its last turn couldn't reach the API; it carries on by itself once
   // the runner reaches it again (Runner.onNetworkLost).
   waitingForNetwork?: { since: string };
@@ -252,6 +293,9 @@ export type ThreadSummary = {
   // Mike's last message to it, one line, for the sidebar's "You: ..."
   // (docs/protocol.md, "What Mike last asked"). Absent until he's sent one.
   asked?: string;
+  // The librarian's recap of it: what it's for, then bullets on where it
+  // stands (docs/protocol.md, "The recap box"). The recapBox experiment.
+  recap?: string;
   // A panel the agent asked to show Mike (show_panel), waiting for him to
   // look at the thread (docs/protocol.md, "Showing panels").
   panelRequest?: PanelRequest;
@@ -259,6 +303,9 @@ export type ThreadSummary = {
   // (docs/protocol.md, "Sharing"). Absent until it's first shared; "off"
   // keeps the link for when it's shared again.
   share?: ThreadShare;
+  // Moving to another runner (docs/protocol.md, "Moving a thread to another
+  // runner"): while it goes, and for a minute after it fails, with why.
+  moving?: { moveId: string; to: string; toName: string; state: string; note?: string };
   sample?: true; // one of the tour's sample threads (threads.samples): made up, never sent to
   // What's still open on the done card of its last turn (experiment
   // looseEnds; docs/protocol.md, "Loose ends"): seq is that card's
@@ -420,6 +467,10 @@ export type LibrarianEntry = {
   outcome: LibrarianOutcome;
   text: string;
   projectIds?: string[];
+  // Why it joined each project, by id, and the look's line overall. Only on
+  // a look that filed the thread somewhere.
+  reasons?: Record<string, string>;
+  why?: string;
   costUsd?: number;
 };
 
@@ -657,7 +708,7 @@ export type DesignReview = {
   id: string;
   title: string;
   note?: string;
-  // The option id the agent would pick, marked "my pick" in the window.
+  // The option id the agent would pick, marked with a star and "Recommended" in the window.
   recommended?: string;
   // image is the option's first shot, kept for clients that only show one.
   // shots, when given, is every shot in order, image included. url: the
@@ -687,6 +738,9 @@ export type ReplyButtonStart = {
   why?: string;
 };
 export type ReplyButtonSend = { threadId: string; threadTitle: string; text: string };
+// A command on an ask card (end_turn's asks[].run): only the runner makes
+// one, from the ask, and its press runs the command once in `cwd`.
+export type ReplyButtonRun = { command: string; cwd: string };
 export type ReplyButton = {
   id: string;
   title: string;
@@ -694,6 +748,12 @@ export type ReplyButton = {
   turnId?: string;
   start?: ReplyButtonStart;
   send?: ReplyButtonSend;
+  run?: ReplyButtonRun;
+  // A run's command is going now.
+  running?: { at: string };
+  // How a run's command came out (with `pressed`). exitCode is absent when
+  // it was stopped, as a timeout does.
+  ran?: { ok: boolean; exitCode?: number; durationMs: number };
   pressed?: { at: string; threadId: string };
   failed?: { at: string; error: string };
 };
@@ -734,6 +794,8 @@ export type EventBody =
       title: string;
       input: Record<string, unknown>;
       options: ApprovalOption[];
+      // Why it's asking (Auto's safety check, a rule, a hook), when the CLI says.
+      reason?: string;
     }
   // The agent's other calls from the same reply, waiting behind this card
   // (docs/protocol.md, "Queued calls"). A later one replaces the list.
@@ -784,7 +846,7 @@ export type EventBody =
       text: string;
       truncated: boolean;
       durationMs: number;
-      trigger?: HookTrigger | 'worktree.setup'; // set when a hook or a new worktree's setup ran it, absent for a chip or tb run
+      trigger?: HookTrigger | 'worktree.setup' | 'worktree.teardown'; // set when a hook, a new worktree's setup or an archived one's teardown ran it, absent for a chip or tb run
     }
   // Mike edited the message at fromSeq (docs/protocol.md, "Editing a
   // message"): fromSeq..toSeq are gone from the conversation. Outside any turn.
@@ -813,7 +875,10 @@ export type NeedsWho = 'you' | 'nothing';
 // (suggested, an index into options) marked; he can always write his own.
 // optionNotes: with one reply, what each option does if Mike picks it, in
 // the options' order ("" for none); the card draws them under the labels.
-export type Ask = { action: string; where?: string; reply?: string; why?: string; options?: string[]; optionNotes?: string[]; suggested?: number; links?: AskLink[] };
+// run: a command the card offers to run (docs/protocol.md, "Run on the card").
+export type Ask = { action: string; where?: string; reply?: string; why?: string; options?: string[]; optionNotes?: string[]; suggested?: number; links?: AskLink[]; run?: AskRun };
+// buttonId, cwd and the states are the runner's, added once the card is made.
+export type AskRun = { command: string; buttonId?: string; cwd?: string; running?: true; failed?: string };
 // Somewhere to go to do or judge an ask: a web page, or a file or folder
 // on this Mac (an absolute or ~ path). The app shows each as a button.
 export type AskLink = { title: string; url: string };
@@ -877,6 +942,12 @@ export type Schedule = {
   model?: string;
   effort?: EffortLevel;
   permissionMode?: PermissionMode;
+  // Set by the runner when there's no permissionMode: the mode its runs start
+  // with, this runner's default (runner.json's defaults.permissionMode, else
+  // full). Absent for another runner's schedule, whose default isn't known
+  // here. Raising a schedule's mode is checked against it (threadbear-mcp.ts,
+  // scheduleModes); never stored.
+  defaultMode?: PermissionMode;
   // A shell command run first, in its folder; a run whose check prints
   // nothing is skipped (experiment scheduleChecks, schedule-check.ts).
   check?: string;
@@ -929,6 +1000,7 @@ export const ErrorCode = {
   convexSignedOut: -32040, // the runner's Convex CLI isn't signed in ("The Convex panel")
   convexNoAccess: -32041, // its Convex login can't reach the deployment
   backgroundRunning: -32050, // threads.edit without stopBackground while background work runs
+  notAllowed: -32060, // the calling thread doesn't have the access for this (A thread's own key)
   other: -32000,
 } as const;
 

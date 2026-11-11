@@ -6,13 +6,14 @@
 // every send is a logged no-op. Each device row says whether it's a
 // sandbox (Xcode) or production (TestFlight, App Store) install, and
 // goes to the matching APNs host.
-import { createCipheriv, createPrivateKey, randomBytes, sign } from 'node:crypto';
+import { createPrivateKey, randomBytes, sign } from 'node:crypto';
 import http2 from 'node:http2';
 import { v } from 'convex/values';
 import { internal } from './_generated/api';
 import { internalAction, type ActionCtx } from './_generated/server';
 import { failureText } from './pushHealth';
 import { pushText } from './pushText';
+import { seal } from './pushSeal';
 import { API_VERSION } from './version';
 
 // The push relay (relay/, docs/push-relay.md): Mike's Convex project that
@@ -21,16 +22,10 @@ import { API_VERSION } from './version';
 // off (and so notifications, for a backend with no key of its own).
 const RELAY_URL = 'https://impartial-hound-393.ap-southeast-2.convex.site';
 
-type Target = { apnsToken: string; environment: 'sandbox' | 'production'; notify: 'away' | 'always' | 'off'; pushKey?: string };
-
-// AES-256-GCM with the phone's own key, as the app's notification extension
-// opens it (CryptoKit's AES.GCM.SealedBox combined: nonce, ciphertext, tag).
-export function seal(pushKey: string, text: string): string {
-  const nonce = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', Buffer.from(pushKey, 'base64'), nonce);
-  const ct = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
-  return Buffer.concat([nonce, ct, cipher.getAuthTag()]).toString('base64');
-}
+// platform "android" (API 66): apnsToken is the phone's Firebase token, and the
+// push goes through the relay to Firebase, even for a backend with an Apple
+// key of its own, which has no use for Android.
+type Target = { apnsToken: string; environment: 'sandbox' | 'production'; notify: 'away' | 'always' | 'off'; pushKey?: string; platform?: 'android' };
 
 async function relayInstall(ctx: ActionCtx, url: string): Promise<{ installId: string; installKey: string } | { failure: string }> {
   const known = await ctx.runQuery(internal.devices.relayInstall, { url });
@@ -70,7 +65,7 @@ async function sendViaRelay(ctx: ActionCtx, alert: { title: string; body: string
     const res = await fetch(`${url}/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${install.installId}.${install.installKey}`, 'X-Threadbear-Version': `api-${API_VERSION}` },
-      body: JSON.stringify({ deviceToken: t.apnsToken, environment: t.environment, threadId: alert.threadId, ...(t.pushKey ? { encrypted: seal(t.pushKey, JSON.stringify({ title: alert.title, body: alert.body })) } : {}) }),
+      body: JSON.stringify({ deviceToken: t.apnsToken, environment: t.environment, threadId: alert.threadId, ...(t.platform ? { platform: t.platform } : {}), ...(t.pushKey ? { encrypted: seal(t.pushKey, JSON.stringify({ title: alert.title, body: alert.body })) } : {}) }),
     }).catch((e: Error) => ({ ok: false, status: 0, json: async () => ({ reason: e.message }) }) as unknown as Response);
     const r = (await res.json().catch(() => ({}))) as { ok?: boolean; gone?: boolean; reason?: string; status?: number; error?: string };
     if (res.status === 401) {
@@ -191,6 +186,10 @@ async function deliver(ctx: ActionCtx, alert: { title: string; body: string; thr
   if (!targets.length) return { sent: 0, failed: 0, skipped: 'noDevices' };
   const cfg = apnsConfig();
   if (!cfg || process.env.PUSH_VIA === 'relay') return await sendViaRelay(ctx, alert, targets);
+  // An Apple key is no use for an Android phone: those go through the relay,
+  // to Firebase, after the Apple ones are sent.
+  const apple = targets.filter((t) => t.platform !== 'android');
+  const android = targets.filter((t) => t.platform === 'android');
   const payload = JSON.stringify({ aps: { alert: { title: alert.title, body: alert.body }, sound: 'default', 'thread-id': alert.threadId }, threadId: alert.threadId });
   const jwt = providerToken(cfg);
   let sent = 0;
@@ -198,7 +197,7 @@ async function deliver(ctx: ActionCtx, alert: { title: string; body: string; thr
   let broken = 0;
   let failure: string | undefined;
   for (const env of ['sandbox', 'production'] as const) {
-    const tokens = targets.filter((t) => t.environment === env).map((t) => t.apnsToken);
+    const tokens = apple.filter((t) => t.environment === env).map((t) => t.apnsToken);
     if (!tokens.length) continue;
     const host = env === 'production' ? 'https://api.push.apple.com' : 'https://api.sandbox.push.apple.com';
     const session = http2.connect(host);
@@ -222,7 +221,12 @@ async function deliver(ctx: ActionCtx, alert: { title: string; body: string; thr
       session.close();
     }
   }
-  return { sent, failed, broken, ...(failure ? { failure } : {}) };
+  const direct: SendSummary = { sent, failed, broken, ...(failure ? { failure } : {}) };
+  if (!android.length) return direct;
+  const relayed = await sendViaRelay(ctx, alert, android);
+  const bad = (direct.broken ?? 0) + (relayed.broken ?? 0);
+  const why = direct.failure ?? relayed.failure;
+  return { sent: direct.sent + relayed.sent, failed: direct.failed + relayed.failed, ...(bad ? { broken: bad } : {}), ...(why ? { failure: why } : {}) };
 }
 
 // Scheduled by sync:upsertThreads when a thread starts needing Mike, and by

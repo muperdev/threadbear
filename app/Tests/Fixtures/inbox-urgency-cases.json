@@ -1,0 +1,14 @@
+{
+  "about": "Cases for how much an inbox thread wants Mike (urgency, lowest first) and whether it counts in the badge. The Mac (ThreadSections, ThreadbearCoreTests/InboxUrgencyTests.swift), the phone (InboxSections, ThreadbearKitTests/InboxUrgencyTests.swift) and the website (web/src/sections.ts, sections.test.ts) all run every case through their own inbox code. The rule is app/Sources/ThreadbearCore/Threads/InboxUrgency.swift. Each thread is short: status (idle when absent), needsYou, unread, pendingReviews. counted is whether it's in the badge (the website's Needs you filter).",
+  "cases": [
+    { "name": "asking a question", "thread": { "status": "waiting" }, "urgency": 0, "counted": true },
+    { "name": "a design review waiting", "thread": { "pendingReviews": 1 }, "urgency": 0, "counted": true },
+    { "name": "finished, unread, wanting him", "thread": { "needsYou": true, "unread": true }, "urgency": 2, "counted": true },
+    { "name": "finished, unread, wanting him, failed", "thread": { "needsYou": true, "unread": true, "status": "error" }, "urgency": 1, "counted": true },
+    { "name": "read, still wanting him", "thread": { "needsYou": true }, "urgency": 2, "counted": true },
+    { "name": "finished unread, said it needs nothing: done (Mike, 9 Nov)", "thread": { "unread": true }, "urgency": 4, "counted": false },
+    { "name": "finished unread, said nothing, but stopped", "thread": { "unread": true, "status": "stopped" }, "urgency": 3, "counted": false },
+    { "name": "read, last turn failed", "thread": { "status": "error" }, "urgency": 3, "counted": false },
+    { "name": "read and done", "thread": {}, "urgency": 4, "counted": false }
+  ]
+}

@@ -9,6 +9,7 @@
     "shots": "node scripts/shots.mjs",
     "images": "node scripts/images.mjs && node scripts/og.mjs",
     "check": "node scripts/build.mjs && npx wrangler@4 deploy --dry-run",
-    "deploy": "node scripts/build.mjs && npx wrangler@4 deploy"
+    "deploy": "node scripts/build.mjs && npx wrangler@4 deploy",
+    "media": "node scripts/media.mjs"
   }
 }

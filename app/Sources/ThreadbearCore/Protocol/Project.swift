@@ -456,10 +456,15 @@ public struct LibrarianEntry: Sendable, Hashable, Decodable, Identifiable {
     /// "Put it in Threadbear", "Made Poddle and put it there".
     public var text: String
     public var projectIds: [String]
+    /// Why it joined each project, by project id.
+    public var reasons: [String: String]
+    /// The look's line overall, on a look that filed the thread somewhere.
+    public var why: String?
     public var costUsd: Double?
 
     public init(id: String, at: Date? = nil, threadId: String, threadTitle: String = "", reason: LibrarianReason = .asked,
-                outcome: Outcome = .nothing, text: String = "", projectIds: [String] = [], costUsd: Double? = nil) {
+                outcome: Outcome = .nothing, text: String = "", projectIds: [String] = [], reasons: [String: String] = [:],
+                why: String? = nil, costUsd: Double? = nil) {
         self.id = id
         self.at = at
         self.threadId = threadId
@@ -468,6 +473,8 @@ public struct LibrarianEntry: Sendable, Hashable, Decodable, Identifiable {
         self.outcome = outcome
         self.text = text
         self.projectIds = projectIds
+        self.reasons = reasons
+        self.why = why
         self.costUsd = costUsd
     }
 
@@ -482,10 +489,12 @@ public struct LibrarianEntry: Sendable, Hashable, Decodable, Identifiable {
         outcome = (try? c.decodeIfPresent(Outcome.self, forKey: .outcome)).flatMap { $0 } ?? .other
         text = string(.text) ?? ""
         projectIds = c.lossyArray(String.self, forKey: .projectIds)
+        reasons = (try? c.decodeIfPresent([String: String].self, forKey: .reasons)).flatMap { $0 } ?? [:]
+        why = string(.why)
         costUsd = (try? c.decodeIfPresent(Double.self, forKey: .costUsd)).flatMap { $0 }
     }
 
-    enum CodingKeys: String, CodingKey { case id, at, threadId, threadTitle, reason, outcome, text, projectIds, costUsd }
+    enum CodingKeys: String, CodingKey { case id, at, threadId, threadTitle, reason, outcome, text, projectIds, reasons, why, costUsd }
 }
 
 /// What the librarian is doing, has done and will do next.

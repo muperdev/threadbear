@@ -51,6 +51,35 @@ struct PanePreview: Equatable {
         return nil
     }
 
+    /// The path on the Mac it's from, for a file fetched from another
+    /// runner's Mac (`.file` is then this Mac's cached copy).
+    var remotePath: String?
+
+    /// The file or folder it shows, by its own path (another Mac's, for a
+    /// fetched copy). Nil for a page or an explanation.
+    var shownPath: String? {
+        switch target {
+        case .file(let path): remotePath ?? path
+        case .folder(let path), .remote(let path, _): path
+        case .page, .explain: nil
+        }
+    }
+
+    /// The pane bar's title: a file's or folder's own name, whatever the
+    /// link to it said (David, 9 Nov).
+    var barTitle: String {
+        guard let path = shownPath else { return title }
+        let name = (path as NSString).lastPathComponent
+        return name.isEmpty ? title : name
+    }
+
+    /// Hovering the bar's title: the full path, and the Mac it's on when
+    /// that isn't this one.
+    var barTip: String? {
+        guard let path = shownPath else { return nil }
+        return away.map { "\(path) on \($0)" } ?? path
+    }
+
     /// What Open hands to the default app or browser. Another Mac's folder
     /// has no copy here to hand over.
     var externalURL: URL? {
@@ -189,6 +218,11 @@ extension AppModel {
     func show(_ preview: PanePreview, in threadId: String) {
         var preview = preview
         preview.opened = (panePreview[threadId]?.opened ?? 0) + 1
+        // A Markdown file opens as its bar's menu last left it (MarkdownView).
+        if preview.away == nil, let path = preview.fileURL?.path, MarkdownView.opensRaw(path: path),
+           TextFileView.shows(path), TextFileView.canEdit(path) {
+            preview.editing = true
+        }
         panePreview[threadId] = preview
         // Over the section it's from, opening that if it's closed.
         showPane(preview.from)

@@ -115,12 +115,28 @@ extension NSView {
 extension EnvironmentValues {
     /// Goes up by one with each message sent from a composer, so its send
     /// arrow nudges.
-    @Entry var sendNudges = 0
+    // Written out rather than @Entry: SwiftUI's macros ship with Xcode
+    // only, and this builds with the command line tools too.
+    var sendNudges: Int {
+        get { self[SendNudgesKey.self] }
+        set { self[SendNudgesKey.self] = newValue }
+    }
     /// Shared by a sidebar list's rows: the selected row's highlight is
     /// matched in it, so it slides from row to row, and a thread's rows
     /// are, so one that moves from Running to the Inbox glides up there
     /// rather than vanishing and turning up somewhere else.
-    @Entry var sidebarRowSpace: Namespace.ID? = nil
+    var sidebarRowSpace: Namespace.ID? {
+        get { self[SidebarRowSpaceKey.self] }
+        set { self[SidebarRowSpaceKey.self] = newValue }
+    }
+}
+
+private struct SendNudgesKey: EnvironmentKey {
+    static var defaultValue: Int { 0 }
+}
+
+private struct SidebarRowSpaceKey: EnvironmentKey {
+    static var defaultValue: Namespace.ID? { nil }
 }
 
 extension View {

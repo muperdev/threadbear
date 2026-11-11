@@ -70,7 +70,9 @@ this Mac sleeps, and share links only opening on their tailnet
 (docs/self-hosting.md). If they still want it, check `docker info` works
 (**Ask** them to install and start Docker Desktop or OrbStack if not) and
 that `tailscale status` shows this Mac logged in (**Ask** them to install
-and log in to Tailscale if not). Then, in place of the commands above:
+and log in to Tailscale if not), to a tailnet of their own: setup puts the
+backend on whichever tailnet that is, so **Ask** if it looks like their
+work's. Then, in place of the commands above:
 
 ```sh
 ./threadbear setup --self-hosted --dry-run --yes
@@ -80,6 +82,23 @@ and log in to Tailscale if not). Then, in place of the commands above:
 No Convex login or team is needed. If it stops asking for HTTPS
 certificates or MagicDNS, **Ask** them to turn those on in the Tailscale
 admin console (DNS), then run it again.
+
+**If they won't use the phone, or can't use Tailscale** (their work keeps
+them on its own tailnet, and Tailscale only has one on at a time), add
+`--local`: the same backend on this Mac's 127.0.0.1 only, with no
+Tailscale at all. Say what that leaves out first: no iPhone app at all, no
+second Mac, and the website and share links only open on this Mac. Don't
+pick it for them because Tailscale is missing; ask which they want. Check
+`docker info` as above, then:
+
+```sh
+./threadbear setup --self-hosted --local --dry-run --yes
+./threadbear setup --self-hosted --local --yes
+```
+
+Running setup again later keeps it local. To move it onto a tailnet once
+they have Tailscale, `./threadbear setup --self-hosted --tailnet`; their
+threads stay.
 
 If your own permission check refuses to run setup (Claude Code's auto mode
 does: it's a script you've just downloaded), that's its job, so don't try to
@@ -151,42 +170,49 @@ runner, like a second Mac: its threads show in the Mac app's sidebar and on
 the phone, and the composer's machine chip starts threads there. It runs the
 runner only, no app. Ubuntu 24.04 on x86_64 is what's been tried, on a
 Hetzner cloud server with 8 GB. Do this as an ordinary user with sudo, not root.
+Normal thread control uses Convex; steps 4 and 8 are only for direct access.
 
 1. **Packages:** `sudo apt-get install -y git build-essential imagemagick
-   librsvg2-bin bubblewrap jq lsof` (ImageMagick and rsvg-convert stand in for
+   librsvg2-bin bubblewrap jq lsof rsync` (ImageMagick and rsvg-convert stand in for
    macOS's sips and Quick Look when pictures are converted, rsvg-convert
    alone drawing SVGs; Codex's sandbox
    wants bubblewrap; lsof checks who's on the other end of a handover's
-   socket, and minimal images leave it out). zsh isn't needed: patch
+   socket, and minimal images leave it out; rsync is needed by the installation
+   checks). zsh isn't needed: patch
    commands run in the account's own shell, else bash. Set the account's full name, which agents are told:
    `sudo chfn -f "Their Name" $USER`. And a git identity, as on any machine
    that commits: `git config --global user.name` and `user.email`.
-2. **Node 24 with nvm**, at the path the scripts expect:
-   `nvm install 24.22.1` (else pass `--node` to the install script).
+2. **Node 24 or newer**, from nvm (`nvm install 24`), your package manager or
+   nodejs.org. The scripts take the `node` on PATH, else nvm's newest, so an
+   ssh session without nvm on its PATH still finds it; `--node` on the install
+   script, or `THREADBEAR_NODE`, picks one yourself.
 3. **The CLIs, logged in on this server:** Claude Code with its native
    installer (`curl -fsSL https://claude.ai/install.sh | bash`, which puts
    it in `~/.local/bin/claude`, where the runner looks), then
    `claude auth login`; Codex with `npm i -g @openai/codex`, then
    `codex login --device-auth`. Both print a link for them to open in their
    own browser. Never copy credentials over from the Mac.
-4. **Tailscale:** install it and `sudo tailscale up --hostname=<name>`, and
+4. **Tailscale (optional):** install it and `sudo tailscale up --hostname=<name>`, and
    **Ask** them to open the link it prints. Once it's on their tailnet, close
    the server's public SSH port in the cloud's firewall and use the tailnet
    name instead.
 5. **The code:** clone their fork to `~/dev/me/threadbear` (any folder
    works) and, in `runner/`, `npm ci`.
-6. **Join their backend:** copy `secrets/convex-key` from the Mac's data
-   folder to the same place here (`~/Library/Application Support/Threadbear`;
-   the folders keep their macOS names on Linux, so every path in these docs
-   is the same) with `scp`, never by printing it, and `chmod 600` it. Then
-   write `runner.json` there: `port` 8797, and `sync` with `url` (the Mac's
-   `sync.url`), `name` (what the sidebar calls this machine) and `rpcUrl`
-   (`wss://<tailnet name>:8798/rpc`).
+6. **Join their backend:** make `~/Library/Application Support/Threadbear`
+   here (the folders keep their macOS names on Linux, so every path in these
+   docs is the same). Write `runner.json` there: `port` 8797, `defaults` with
+   `cwd` (the work folder, which must exist) and `permissionMode` `"auto"`, as
+   setup gives a new Mac (threads that name no mode start on Auto), and
+   `sync.name` (what the sidebar calls this machine). Then, on the first Mac,
+   run `tb runner add <name> --ssh <user@server>`. It writes the backend URL,
+   a runner id and a separate runner key to this server. Never copy the Mac's
+   main key or deploy key. Add `sync.rpcUrl` (`wss://<tailnet name>:8798/rpc`)
+   only when setting up the direct Tailscale connection in step 8.
 7. **Install:** `runner/scripts/install-runner.sh`. On Linux it writes a
    systemd user service, `~/.config/systemd/user/com.mikerosoft.threadbear.runner.service`,
    in place of the LaunchAgent. Turn on lingering once, or it stops when
    nobody is logged in: `sudo loginctl enable-linger $USER`.
-8. **Reach it from the Mac:** `sudo tailscale serve --bg --https=8798
+8. **Direct access from the Mac (optional):** `sudo tailscale serve --bg --https=8798
    http://127.0.0.1:8797` here, then `tb pair` here prints the two files to
    copy to the Mac.
 9. **Updates:** the runner follows its checkout's `main` like the Mac's

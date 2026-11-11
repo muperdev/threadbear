@@ -97,6 +97,12 @@ final class ModelsTests: XCTestCase {
             "approvalId": "ap1", "name": "Bash", "title": "rm -rf build", "input": [:], "options": ["allow", "allowAlways", "deny", "somethingNew"],
         ]).payload else { return XCTFail() }
         XCTAssertEqual(approval.options, [.allow, .allowAlways, .deny])
+        XCTAssertNil(approval.reason)
+        guard case .approvalRequested(let asked) = E.event(7, "approval.requested", [
+            "approvalId": "ap2", "name": "Bash", "title": "./deploy.sh", "input": [:], "options": ["allow", "deny"],
+            "reason": "Auto mode's safety check couldn't clear this: Deploys to production.",
+        ]).payload else { return XCTFail() }
+        XCTAssertEqual(asked.reason, "Auto mode's safety check couldn't clear this: Deploys to production.")
         guard case .questionRequested(let question) = E.event(8, "question.requested", [
             "approvalId": "q1", "questions": [["question": "Which?", "header": "Pick", "multiSelect": false, "options": [["label": "A"], ["label": "B", "description": "bee"]]]],
         ]).payload else { return XCTFail() }
@@ -251,6 +257,42 @@ final class ModelsTests: XCTestCase {
         let again = try JSONDecoder().decode(ThreadSummary.self, from: JSONEncoder().encode(thread))
         XCTAssertEqual(again.contextWindow, 258_400)
         XCTAssertNil(try JSONDecoder().decode(ThreadSummary.self, from: Data(#"{"id":"x","contextWindow":"big"}"#.utf8)).contextWindow)
+    }
+
+    /// The runner's default mode for new threads: by its name, with Plan
+    /// first as none, and a mode this app doesn't know as unknown, never as
+    /// Full access.
+    func testHelloDefaultPermissionMode() throws {
+        func mode(_ raw: String) throws -> PermissionMode? {
+            let json = #"{"cwd":"/w","accountId":"claude-3","permissionMode":\#(raw)}"#
+            return try JSONDecoder().decode(RunnerDefaults.self, from: Data(json.utf8)).permissionMode
+        }
+        XCTAssertEqual(try mode(#""auto""#), .auto)
+        XCTAssertEqual(try mode(#""ask""#), .ask)
+        XCTAssertEqual(try mode(#""full""#), .full)
+        XCTAssertNil(try mode(#""plan""#))
+        XCTAssertEqual(try mode(#""yolo""#), .unknown)
+        XCTAssertNil(try mode("7"))
+        XCTAssertNil(try JSONDecoder().decode(RunnerDefaults.self, from: Data(#"{"cwd":"/w","accountId":"a"}"#.utf8)).permissionMode)
+    }
+
+    /// A mode from a newer runner is never read, shown or sent as Full
+    /// access: it's `.unknown`, and what this app sends for it is Ask.
+    func testUnknownPermissionModeIsNeverFullAccess() throws {
+        func thread(_ json: String) throws -> ThreadSummary {
+            try JSONDecoder().decode(ThreadSummary.self, from: Data(json.utf8))
+        }
+        XCTAssertEqual(try thread(#"{"id":"t","permissionMode":"sandboxed"}"#).permissionMode, .unknown)
+        XCTAssertEqual(try thread(#"{"id":"t","permissionMode":"full"}"#).permissionMode, .full)
+        XCTAssertEqual(try thread(#"{"id":"t"}"#).permissionMode, .full, "none said: a runner from before modes, whose threads were all Full")
+        let schedule = try JSONDecoder().decode(Schedule.self, from: Data(#"{"id":"s","text":"x","permissionMode":"sandboxed"}"#.utf8))
+        XCTAssertEqual(schedule.permissionMode, .unknown)
+
+        XCTAssertEqual(PermissionMode.unknown.sent, .ask)
+        for mode in [PermissionMode.full, .ask, .auto, .plan] { XCTAssertEqual(mode.sent, mode) }
+        XCTAssertEqual(ThreadUpdate(permissionMode: .unknown).params["permissionMode"], .string("ask"))
+        XCTAssertEqual(NewScheduleRequest(text: "x", when: .cron("0 9 * * *"), permissionMode: .unknown).params["permissionMode"], .string("ask"))
+        XCTAssertEqual(NewScheduleRequest(text: "x", when: .cron("0 9 * * *"), permissionMode: .auto).params["permissionMode"], .string("auto"))
     }
 
     func testHelloWithPerProviderDefaultsAndCLIs() throws {

@@ -102,7 +102,9 @@ struct UpdatesPanel: View {
                 section("Runner") {
                     if let runner {
                         let lines = [UpdatesText.buildLine(runner), UpdatesText.oldRunnersLine(runner), UpdatesText.launcherLine(runner)]
-                        if lines.allSatisfy({ $0 == nil }) { line("The runner is up to date.") }
+                        let notFollowing = UpdatesText.followLines(runner)
+                        if lines.allSatisfy({ $0 == nil }) && notFollowing.isEmpty { line("The runner is up to date.") }
+                        ForEach(notFollowing, id: \.self) { line($0) }
                         if let build = lines[0] { line(build) }
                         if let old = lines[1] {
                             line(old)
@@ -247,7 +249,7 @@ private struct CliRow: View {
                     Button(title) { app.updateCli(cli.provider, force: cli.status == "held") }
                         .controlSize(.small)
                         .busy(app.isBusy(BusyKey.updateCli(cli.provider)))
-                        .tip(cli.status == "held" ? "Install it even though the check held it back" : "Install the new version now")
+                        .tip(cli.canUpdateNow ? "Ask it to update itself" : cli.status == "held" ? "Install it even though the check held it back" : "Install the new version now")
                 }
             }
             if let text = CliText.isUpdating(cli) ? CliText.bannerText(cli) : nil {
@@ -266,6 +268,7 @@ private struct CliRow: View {
                 // A menu, not a segmented control: two rows of three
                 // buttons were most of the popover's noise, and the choice
                 // is set once and left.
+                if !cli.canUpdateNow {
                 IconMenu {
                     ForEach(CliText.policies, id: \.self) { policy in
                         // A real tick beside the icon: the tick used to be
@@ -286,6 +289,7 @@ private struct CliRow: View {
                 // It already says the new setting (`setCliPolicy`).
                 .disabled(app.isBusy(BusyKey.cliPolicy(cli.provider)))
                 .tip("Whether new versions install by themselves")
+                }
                 Spacer()
                 if let back = CliText.goBackTitle(cli), let previous = cli.previousVersion {
                     Button(back) { app.updateCli(cli.provider, version: previous) }

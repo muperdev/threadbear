@@ -1,0 +1,70 @@
+{
+  "closed" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Tidy the imports in the uploader.",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 3,
+      "text" : "Sorted and de-duplicated the imports in all six files. The build and tests pass.",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 4,
+      "text" : "31s, $0.04",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "ak:4",
+      "inGroup" : false,
+      "kind" : "asks",
+      "seq" : 4,
+      "text" : "open, nothing needed, next: Turn on the lint rule that sorts imports",
+      "turn" : "turn_1"
+    }
+  ],
+  "open" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Tidy the imports in the uploader.",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 3,
+      "text" : "Sorted and de-duplicated the imports in all six files. The build and tests pass.",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 4,
+      "text" : "31s, $0.04",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "ak:4",
+      "inGroup" : false,
+      "kind" : "asks",
+      "seq" : 4,
+      "text" : "open, nothing needed, next: Turn on the lint rule that sorts imports",
+      "turn" : "turn_1"
+    }
+  ]
+}

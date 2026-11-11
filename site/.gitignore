@@ -1,3 +1,6 @@
 # The built site (npm run build) and the review screenshots (npm run shots).
 dist/
 review/
+
+# The changelog's pictures and clips before they go up to R2 (scripts/media.mjs).
+.media/

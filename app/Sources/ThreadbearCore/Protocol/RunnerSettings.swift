@@ -59,6 +59,32 @@ public struct RunnerSettings: Sendable, Hashable, Decodable {
         enum CodingKeys: String, CodingKey { case pool, privateFolders }
     }
 
+    /// One experiment (runner/src/experiments/<id>.md) and its switch.
+    public struct Experiment: Sendable, Hashable, Decodable, Identifiable {
+        public var id: String
+        public var name: String
+        /// The guide's paragraph, as Markdown.
+        public var does: String
+        public var on: Bool
+
+        public init(id: String, name: String, does: String = "", on: Bool = false) {
+            self.id = id
+            self.name = name
+            self.does = does
+            self.on = on
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            id = try c.decode(String.self, forKey: .id)
+            name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? id
+            does = (try? c.decodeIfPresent(String.self, forKey: .does)) ?? ""
+            on = (try? c.decodeIfPresent(Bool.self, forKey: .on)) ?? false
+        }
+
+        enum CodingKeys: String, CodingKey { case id, name, does, on }
+    }
+
     public var defaultCwd: String
     public var idleMinutes: Int
     public var maxLiveCLIs: Int
@@ -69,19 +95,36 @@ public struct RunnerSettings: Sendable, Hashable, Decodable {
     /// One reply (docs/protocol.md): end_turn carries the card, and the
     /// agent's message after it is the reply. Takes over from bullet replies.
     public var oneReply: Bool
+    /// Review by another lab: a code change is reviewed on the other
+    /// provider before its thread is done. On unless turned off.
+    public var labReview: Bool
+    /// Whether the runner sends `labReview` at all. An older one doesn't
+    /// (it was an experiment there), so Settings shows no switch for it.
+    public var labReviewSupported: Bool
+    /// Keep the Mac out of idle sleep while threads work. nil from a runner
+    /// that isn't on a Mac (or is too old), and Settings then hides it.
+    public var keepAwake: Bool?
     public var bringIn: BringIn
     /// Whether the runner sends `bringIn` at all. An older one doesn't.
     public var bringInSupported: Bool
     public var models: Models
+    /// Every experiment there is, oldest first. Empty from an older runner,
+    /// and Settings then shows no Experiments section.
+    public var experiments: [Experiment]
 
     public init(defaultCwd: String = "", idleMinutes: Int = 30, maxLiveCLIs: Int = 6, followMain: Bool = true, bulletReplies: Bool = true, oneReply: Bool = false,
-                bringIn: BringIn = .standard, bringInSupported: Bool = false, models: Models = Models()) {
+                labReview: Bool = true, labReviewSupported: Bool = false, keepAwake: Bool? = nil,
+                bringIn: BringIn = .standard, bringInSupported: Bool = false, models: Models = Models(), experiments: [Experiment] = []) {
+        self.experiments = experiments
         self.defaultCwd = defaultCwd
         self.idleMinutes = idleMinutes
         self.maxLiveCLIs = maxLiveCLIs
         self.followMain = followMain
         self.bulletReplies = bulletReplies
         self.oneReply = oneReply
+        self.labReview = labReview
+        self.labReviewSupported = labReviewSupported
+        self.keepAwake = keepAwake
         self.bringIn = bringIn
         self.bringInSupported = bringInSupported
         self.models = models
@@ -95,12 +138,16 @@ public struct RunnerSettings: Sendable, Hashable, Decodable {
         followMain = (try? c.decodeIfPresent(Bool.self, forKey: .followMain)) ?? true
         bulletReplies = (try? c.decodeIfPresent(Bool.self, forKey: .bulletReplies)) ?? true
         oneReply = (try? c.decodeIfPresent(Bool.self, forKey: .oneReply)) ?? false
+        labReviewSupported = c.contains(.labReview)
+        labReview = (try? c.decodeIfPresent(Bool.self, forKey: .labReview)) ?? true
+        keepAwake = try? c.decodeIfPresent(Bool.self, forKey: .keepAwake)
         bringInSupported = c.contains(.bringIn)
         bringIn = BringIn.decode(c) ?? .standard
         models = (try? c.decodeIfPresent(Models.self, forKey: .models)) ?? Models()
+        experiments = c.lossyArray(Experiment.self, forKey: .experiments)
     }
 
-    enum CodingKeys: String, CodingKey { case defaultCwd, idleMinutes, maxLiveCLIs, followMain, bulletReplies, oneReply, bringIn, models }
+    enum CodingKeys: String, CodingKey { case defaultCwd, idleMinutes, maxLiveCLIs, followMain, bulletReplies, oneReply, labReview, keepAwake, bringIn, models, experiments }
 }
 
 /// Fields for `settings.update`; nil ones are left out, so an edit to one
@@ -112,13 +159,18 @@ public struct SettingsUpdate: Sendable, Hashable {
     public var followMain: Bool?
     public var bulletReplies: Bool?
     public var oneReply: Bool?
+    public var labReview: Bool?
+    public var keepAwake: Bool?
     public var bringIn: RunnerSettings.BringIn?
     /// `.some(nil)` sends null: no pool, so no small jobs.
     public var pool: String??
     public var privateFolders: [String]?
+    /// Experiment id to on or off.
+    public var experiments: [String: Bool]?
 
-    public init(defaultCwd: String? = nil, idleMinutes: Int? = nil, maxLiveCLIs: Int? = nil, followMain: Bool? = nil, bulletReplies: Bool? = nil, oneReply: Bool? = nil,
-                bringIn: RunnerSettings.BringIn? = nil, pool: String?? = nil, privateFolders: [String]? = nil) {
+    public init(defaultCwd: String? = nil, idleMinutes: Int? = nil, maxLiveCLIs: Int? = nil, followMain: Bool? = nil, bulletReplies: Bool? = nil, oneReply: Bool? = nil, labReview: Bool? = nil, keepAwake: Bool? = nil,
+                bringIn: RunnerSettings.BringIn? = nil, pool: String?? = nil, privateFolders: [String]? = nil, experiments: [String: Bool]? = nil) {
+        self.experiments = experiments
         self.pool = pool
         self.bringIn = bringIn
         self.defaultCwd = defaultCwd
@@ -127,6 +179,8 @@ public struct SettingsUpdate: Sendable, Hashable {
         self.followMain = followMain
         self.bulletReplies = bulletReplies
         self.oneReply = oneReply
+        self.labReview = labReview
+        self.keepAwake = keepAwake
         self.privateFolders = privateFolders
     }
 
@@ -138,11 +192,14 @@ public struct SettingsUpdate: Sendable, Hashable {
         if let followMain { params["followMain"] = .bool(followMain) }
         if let bulletReplies { params["bulletReplies"] = .bool(bulletReplies) }
         if let oneReply { params["oneReply"] = .bool(oneReply) }
+        if let labReview { params["labReview"] = .bool(labReview) }
+        if let keepAwake { params["keepAwake"] = .bool(keepAwake) }
         if let bringIn { params["bringIn"] = bringIn.json }
         var models: [String: JSONValue] = [:]
         if let pool { models["pool"] = pool.map { .string($0) } ?? .null }
         if let privateFolders { models["privateFolders"] = .array(privateFolders.map { .string($0) }) }
         if !models.isEmpty { params["models"] = .object(models) }
+        if let experiments, !experiments.isEmpty { params["experiments"] = .object(experiments.mapValues { .bool($0) }) }
         return params
     }
 }
@@ -189,6 +246,14 @@ public enum SettingsText {
         case .important: "Only important ones"
         case .off: "Never"
         }
+    }
+
+    /// An experiment's paragraph as plain text for its ⓘ: the guide writes
+    /// it in Markdown, so code marks and doubled spaces go.
+    public static func experimentAbout(_ does: String) -> String {
+        does.replacingOccurrences(of: "`", with: "")
+            .replacingOccurrences(of: #"[ \t]{2,}"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// A folder as Mike would write it: "~/dev/x" for one in his home.

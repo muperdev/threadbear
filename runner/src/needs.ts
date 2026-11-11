@@ -49,6 +49,19 @@ export function endTurnForm(input: unknown): 'oneReply' | 'bullets' | undefined 
   return undefined;
 }
 
+export const MAX_RUN_COMMAND = 8000;
+
+// Why a command can't go on a card, if it can't. What's on the card is what
+// Mike is agreeing to, so it has to be what runs: a control character can
+// redraw what's shown, and invisible or bidi ones can show a different
+// command. ShellBlock.swift holds the Mac's ▶ to the same rule.
+export function runCommandProblem(command: string): string | undefined {
+  if (!command.trim()) return 'run is empty.';
+  if (command.length > MAX_RUN_COMMAND) return `run is over ${MAX_RUN_COMMAND} characters: put it in a script and run that.`;
+  if (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Cs}\p{Cn}]/u.test(command.replace(/[\n\t]/g, ''))) return 'run has control or invisible characters in it, so the card could show something other than what runs. Take them out.';
+  return undefined;
+}
+
 // end_turn's input, checked. Undefined when it isn't usable, so the turn
 // falls back to the text.
 export function needsFromTool(input: unknown): Needs | undefined {
@@ -89,6 +102,7 @@ export function needsFromTool(input: unknown): Needs | undefined {
     }
     const links = linksFrom(r.links);
     if (links.length) ask.links = links;
+    if (typeof r.run === 'string' && !runCommandProblem(r.run)) ask.run = { command: r.run.replace(/\s+$/, '') };
     asks.push(ask);
     if (asks.length === MAX_ASKS) break;
   }
@@ -573,13 +587,20 @@ const CODEX_MESSAGE_END_TURN_DESCRIPTION =
 // long turn or in a thread another agent started, as the reply reported
 // only the latest step (28cee9ef: one experiment's result, never the plan
 // it was for). One line, only then: he likes replies at their usual length.
+// "What they asked" and "a few words on what it is": trying Ghostex's
+// coordinator on 9 Nov 2026, Mike lost track of replies that answered his
+// earlier question without saying which, and refused "Merge these 8 in
+// this order: #38, #24, #25..." for want of what each one was and how
+// serious ("I need more context on what these things are").
 const ONE_REPLY_REPLY =
   'Then write your reply as ordinary text straight after it, as your final message. ' +
   'That reply is the only text the user sees from this turn: everything you write before end_turn folds away into your working, out of sight. So don\'t write your answer before calling it, and call no tools after it. ' +
   'The reply: lead with the point and keep it as short as it can be while they can act on it without reading your working. ' +
   'If they may have lost track (a long turn, work picked up from another thread, a thread they didn\'t start), open with one line on what the work is for and where it stands, before the latest step. ' +
+  'If it answers something they asked earlier (a note on a card, a follow-up question), open by saying what they asked. ' +
   'A work report is a few bullets of what changed and the result, each linked to where it can be checked: [tests pass](work:npm test) quotes a few words of a step in your working (the command you ran or its description) and opens it there, lit up; [its own thread](thread:<its id from list_threads>) opens another thread; web pages and files link as usual. ' +
   'An explanation, a draft or an answer to their question is prose, at the length it needs. ' +
+  'When they\'re deciding about several things (PRs, commits, findings), give each a few words on what it is, as they\'d see it, and how serious: never bare numbers or ids. A security question first says who could do what. ' +
   'When you\'re asking something, include the full draft to approve (text to send elsewhere goes in a ```slack, ```email or ```draft block, shown line for line with a Copy button) or the options to choose from in the reply. The question itself, and what each answer would do, are in the card under the reply, so don\'t repeat them. ' +
   'Never write a "What I need from you" section, a "Nothing needed from you" line or a list of follow-ups in the reply: asks and next are those. ';
 

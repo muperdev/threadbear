@@ -260,9 +260,63 @@ struct ScheduleEditor: View {
             } else {
                 LabeledContent("Folder") { FolderMenu(cwd: $state.cwd) }
                     .tip("The folder each new thread starts in")
+                modelRows
             }
         }
     }
+
+    /// The model and effort each new thread starts with, from the list of
+    /// the login it runs on. Only for this Mac: another Mac's threads use
+    /// its own defaults (the Folder row's tip says so).
+    @ViewBuilder
+    private var modelRows: some View {
+        let models = ScheduleModels(accountId: state.accountId, poolId: state.poolId, model: state.model, logins: logins)
+        LabeledContent("Model") {
+            HStack(spacing: zoomed(6)) {
+                Picker("Model", selection: modelChoice(models)) {
+                    Text(models.defaultModelTitle).tag(String?.none)
+                    Divider()
+                    ForEach(models.rows.filter { !$0.isDefault && !$0.isOlder }) { Text($0.title).tag(Optional($0.id)) }
+                    let older = models.rows.filter { !$0.isDefault && $0.isOlder }
+                    if !older.isEmpty {
+                        Divider()
+                        ForEach(older) { Text($0.title).tag(Optional($0.id)) }
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+                .tip("The model each new thread starts on")
+                Picker("Effort", selection: $state.effort) {
+                    Text(models.defaultEffortTitle).tag(String?.none)
+                    Divider()
+                    ForEach(models.effortLevels, id: \.self) { level in
+                        Text(ComposerChips.effortTitle(level)).tag(Optional(level))
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+                .tip("How hard it thinks")
+            }
+        }
+    }
+
+    /// The model menu's pick. Picking the default row stores nil, so the
+    /// schedule follows the default if it changes; a level the new model
+    /// hasn't got goes back to its default.
+    private func modelChoice(_ models: ScheduleModels) -> Binding<String?> {
+        Binding(
+            // The default model chosen by name reads as Default: it's the same thread.
+            get: { models.rows.first { $0.isSelected && !$0.isDefault }?.id },
+            set: { model in
+                state.model = model
+                let levels = ScheduleModels(accountId: state.accountId, poolId: state.poolId, model: model, logins: logins).effortLevels
+                if let effort = state.effort, !levels.contains(effort) { state.effort = nil }
+            }
+        )
+    }
+
+    /// This Mac's logins and pools, as the composer's pickers read them.
+    private var logins: RunnerLogins { RunnerLogins(accounts: app.accounts, pools: app.pools, defaults: app.defaults) }
 
     /// Which Mac runs it, when there's more than one runner. Set when it's
     /// made: an existing schedule shows where it runs but can't move.

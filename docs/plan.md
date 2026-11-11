@@ -94,8 +94,9 @@ it works today read the guide and `docs/protocol.md`, "Runner keys".
   token in the secrets file by a challenge both sides answer, so the token
   itself never goes over the socket (docs/protocol.md, "Auth").
 - launchd LaunchAgent `com.mikerosoft.threadbear.runner`, KeepAlive, with the
-  Node path pinned in the plist (`~/.nvm/versions/node/v24.22.1/bin/node`
-  today; make it configurable). Its program is `~/Applications/Threadbear
+  Node path pinned in the plist (`--node`, `THREADBEAR_NODE`, else the
+  node on PATH or nvm's newest Node 24 or Homebrew's, by
+  `runner/scripts/find-node.sh`). Its program is `~/Applications/Threadbear
   Runner.app`, a small signed app (`runner/launcher/`) that runs `node
   launch.mjs` as its child: macOS attributes privacy prompts (Desktop,
   Documents, Dropbox, ...) to the LaunchAgent's program and everything under

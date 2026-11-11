@@ -3,7 +3,7 @@
 # what failed and the end of the log for each step that failed, and a
 # nonzero exit if any did.
 #
-#   ./check.sh [--quick | --app] [--all] [--e2e] [--shots DIR] [--local]
+#   ./check.sh [--quick | --runner | --app] [--all] [--e2e] [--shots DIR] [--local]
 #
 # With a check host set (THREADBEAR_CHECK_HOST, or "checkHost" in the
 # runner's runner.json, an ssh host such as "tinker-desk"; or "checkHosts",
@@ -17,7 +17,13 @@
 #
 #   (no options)  runner typecheck, unit tests and deploy tests, then the
 #                 app's swift build and swift test, and BearDock's tests
-#   --quick       runner typecheck and unit tests only (about a minute)
+#   --quick       runner typecheck and unit tests (about a minute), plus
+#                 the Mac app's release build when app/ or dock/ changed
+#   --runner      only the runner's typecheck and unit tests, nothing else
+#                 that --quick adds (Convex, web, app tools, iPhone kit), on
+#                 main too: the runner's self-update runs this (deploy.mjs),
+#                 so a website test can't hold the runner back, and a Linux
+#                 check host can take it
 #   --app         the app's swift build and swift test only, for a change
 #                 that doesn't touch runner/
 #   --all         don't skip the dock and deploy tests (below)
@@ -30,7 +36,8 @@
 # changed from main: runner/scripts/, launch.mjs, the launcher or the tests
 # themselves. BearDock's tests only run when dock/ changed (the app's own
 # build and tests cover how it uses it). The iPhone app's ThreadbearKit
-# tests run with any of the options when ios/ changed, --quick included, so
+# tests run with any of the options when ios/ changed, or a Mac app file
+# ThreadbearKit links to (IOS_NEEDS, below), --quick included, so
 # `tb land` runs them (MicTapTests guards a crash the phone hit twice). On
 # main itself, with nothing changed, everything runs.
 #
@@ -51,8 +58,12 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NODE="${THREADBEAR_NODE:-$HOME/.nvm/versions/node/v24.22.1/bin/node}"
+# Node: THREADBEAR_NODE, else the node on PATH, else nvm's newest
+# Node 24 or newer, else Homebrew's (runner/scripts/find-node.sh).
+. "$ROOT/runner/scripts/find-node.sh"
+NODE="$(threadbear_find_node)" || exit 1
 QUICK=0
+RUNNER_ONLY=0
 APP_ONLY=0
 ALL=0
 E2E=0
@@ -63,6 +74,7 @@ ARGS=("$@")
 while [ $# -gt 0 ]; do
   case "$1" in
     --quick) QUICK=1 ;;
+    --runner) QUICK=1; RUNNER_ONLY=1 ;;
     --app) APP_ONLY=1 ;;
     --all) ALL=1 ;;
     --e2e) E2E=1 ;;
@@ -97,22 +109,23 @@ if [ "$LOCAL" = 0 ] && [ "$E2E" = 0 ]; then
     code=$?
     [ "$code" = 255 ] || exit "$code"
     echo "So the checks run on this Mac instead, at low priority."
-    exec taskpolicy -b "$0" --local ${ARGS[@]+"${ARGS[@]}"}
+    # taskpolicy is macOS's; a Linux runner's self-update (deploy.mjs) gets
+    # here too, and there nice does the same job (Codex, 9 Nov).
+    if command -v taskpolicy >/dev/null 2>&1; then exec taskpolicy -b "$0" --local ${ARGS[@]+"${ARGS[@]}"}; fi
+    exec nice -n 10 "$0" --local ${ARGS[@]+"${ARGS[@]}"}
   fi
 elif [ "$E2E" = 1 ] && [ "$LOCAL" = 0 ]; then
   echo "--e2e runs on this Mac, which has the claude login it needs."
 fi
 
-if [ ! -x "$NODE" ]; then
-  echo "No Node binary at $NODE. Set THREADBEAR_NODE to a Node 24 binary." >&2
-  exit 1
-fi
 export PATH="$(dirname "$NODE"):$PATH"
 export THREADBEAR_NODE="$NODE"
 # Inside a Threadbear thread these name the live runner and the thread.
 # Every test makes its own temp data dir; none may find the real one.
+# THREADBEAR_CHECK_BUSY_EXIT is only for sending this run to a host: the
+# check-remote tests run under it would otherwise exit with it (Codex, 9 Nov).
 unset THREADBEAR_HOME THREADBEAR_DATA_DIR THREADBEAR_PORT THREADBEAR_URL THREADBEAR_LOG \
-  THREADBEAR_THREAD_ID THREADBEAR_RUNNER_VERSION THREADBEAR_RUNNER_HOME
+  THREADBEAR_THREAD_ID THREADBEAR_RUNNER_VERSION THREADBEAR_RUNNER_HOME THREADBEAR_CHECK_BUSY_EXIT
 # And their old names, which the runner and tb would otherwise take for these.
 for v in $(compgen -e | grep '^THREADBARE_' || true); do unset "$v"; done
 # No runner a check starts may install or update a CLI.
@@ -139,8 +152,40 @@ needed() {
   [ "$ALL" = 1 ] || [ -z "$CHANGED" ] || printf '%s\n' "$CHANGED" | grep -qE "$1|^check\.sh$"
 }
 
+# What the iPhone kit's tests cover: ios/, and the Mac app's files that
+# ThreadbearKit builds through links (SlashCommands.swift and the like). On
+# 9 Nov a change to one under app/ used a type the kit didn't have, the
+# kit's tests didn't run as nothing under ios/ had changed, and the iPhone
+# app stopped building on main.
+IOS_NEEDS='^ios/'
+ROOT_REAL="$(cd "$ROOT" && pwd -P)"
+while IFS= read -r link; do
+  to="$(readlink "$link")"
+  dir="$(cd "$(dirname "$link")" && cd "$(dirname "$to")" 2>/dev/null && pwd -P)" || continue
+  case "$dir/$(basename "$to")" in
+    "$ROOT_REAL"/ios/*) ;;
+    "$ROOT_REAL"/*) IOS_NEEDS="$IOS_NEEDS|^$(printf '%s' "${dir#"$ROOT_REAL"/}/$(basename "$to")" | sed 's/[][\\.*^$()+?{}|]/\\&/g')" ;;
+  esac
+done < <(find "$ROOT_REAL/ios" -type l -not -path '*/.build/*' 2>/dev/null)
+
 skip() {
   printf 'skip  %-20s (%s; --all runs it)\n' "$1" "$2"
+}
+
+# Swift's test modules (XCTest, Testing) come with Xcode, not the Command
+# Line Tools: with only those, swift test can't build a test target, so its
+# steps are skipped and say why (the app's build still runs).
+# (An if, not a case: patch trust follows check.sh, and it reads no case.)
+XCODE_DIR="${DEVELOPER_DIR:-}"
+if [ -z "$XCODE_DIR" ]; then XCODE_DIR="$(xcode-select -p 2>/dev/null || true)"; fi
+NO_XCODE=""
+if [ -z "$XCODE_DIR" ] || [ "${XCODE_DIR%/CommandLineTools}" != "$XCODE_DIR" ]; then NO_XCODE=1; fi
+swift_test_step() {
+  if [ -n "$NO_XCODE" ]; then
+    printf 'skip  %-20s (needs Xcode; only the Command Line Tools are here)\n' "$1"
+  else
+    step "$@"
+  fi
 }
 
 TMP_ROOT="${TMPDIR:-/tmp}"
@@ -186,7 +231,7 @@ runner_unit_tests() {
   local name="runner unit tests" dir="$ROOT/runner"
   local log="$LOGS/runner-unit-tests.log" list="$LOGS/runner-unit-tests.failed"
   local start=$SECONDS
-  local run=(node --test --test-timeout=300000 --test-force-exit --test-reporter=spec)
+  local run=(node --import=./test/helpers/clean-env.ts --test --test-timeout=300000 --test-force-exit --test-reporter=spec)
   if (cd "$dir" && "${run[@]}" --test-reporter-destination=stdout \
       --test-reporter=./test/helpers/failed-files-reporter.mjs --test-reporter-destination="$list" \
       "test/unit/**/*.test.ts") >"$log" 2>&1; then
@@ -219,6 +264,8 @@ if [ "$APP_ONLY" = 0 ]; then
     step "runner packages" "$ROOT/runner" npm ci --no-audit --no-fund
   fi
   step "runner typecheck" "$ROOT/runner" npm run typecheck
+fi
+if [ "$APP_ONLY" = 0 ] && [ "$RUNNER_ONLY" = 0 ]; then
   # The app's Node tools (the tour's end-to-end test, the mock runner)
   # aren't typechecked or run here: at least they have to parse. A quote
   # slip in tour-e2e.mjs went unnoticed until it was next run (2 Nov).
@@ -230,6 +277,8 @@ if [ "$APP_ONLY" = 0 ]; then
   step "convex typecheck" "$ROOT" npm run convex:typecheck
   step "web typecheck" "$ROOT" npm run web:typecheck
   step "web tests" "$ROOT" npm run web:test
+fi
+if [ "$APP_ONLY" = 0 ]; then
   runner_unit_tests
   if [ "$QUICK" = 0 ]; then
     if needed '^runner/(scripts/|launch\.mjs$|launcher/|test/deploy/)'; then
@@ -237,6 +286,20 @@ if [ "$APP_ONLY" = 0 ]; then
     else
       skip "runner deploy tests" "nothing they cover changed"
     fi
+  fi
+fi
+# --quick (what `tb land` runs) builds the Mac app too when app/ or dock/
+# changed: in release, as the installed app's self-update and app/install.sh
+# build it (app/build-app.sh), so debug-only code that slips out of its
+# #if DEBUG fails here. It did twice on main (28 and 29 Oct), and Mike's
+# self-update was stuck on an older build for a day. No tests, so it's a
+# minute or so on a warm build folder. The full check's own debug build and
+# tests cover the rest.
+if [ "$QUICK" = 1 ] && [ "$RUNNER_ONLY" = 0 ]; then
+  if needed '^(app|dock)/'; then
+    step "app release build" "$ROOT/app" "${LIMITED[@]}" swift build -c release --product Threadbear --disable-keychain
+  else
+    skip "app release build" "nothing in app/ or dock/ changed"
   fi
 fi
 if [ "$QUICK" = 0 ]; then
@@ -247,18 +310,24 @@ if [ "$QUICK" = 0 ]; then
     step "mock runner packages" "$ROOT/app/Tools/mock-runner" npm ci --no-audit --no-fund
   fi
   step "app build" "$ROOT/app" "${LIMITED[@]}" swift build --disable-keychain
-  step "app tests" "$ROOT/app" env THREADBEAR_REQUIRE_MOCK=1 "${LIMITED[@]}" swift test --disable-keychain
+  swift_test_step "app tests" "$ROOT/app" env THREADBEAR_REQUIRE_MOCK=1 "${LIMITED[@]}" swift test --disable-keychain
   # BearDock, the window's docking panels: its layout tests.
   if needed '^dock/'; then
-    step "dock tests" "$ROOT/dock" "${LIMITED[@]}" swift test --disable-keychain
+    swift_test_step "dock tests" "$ROOT/dock" "${LIMITED[@]}" swift test --disable-keychain
   else
     skip "dock tests" "nothing in dock/ changed"
   fi
 fi
 # The iPhone app's logic and source checks (ios/ThreadbearKit), on the Mac.
 # The app itself only builds with Xcode; ios/scripts/sim-shots.sh does that.
-if needed '^ios/'; then
-  step "iphone kit tests" "$ROOT/ios/ThreadbearKit" "${LIMITED[@]}" swift test --disable-keychain
+# Convex's Swift library (convex-swift) ships for Apple silicon only, so
+# on an Intel Mac the kit can't build at all.
+if [ "$RUNNER_ONLY" = 1 ]; then
+  :
+elif [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" != arm64 ]; then
+  printf 'skip  %-20s (%s)\n' "iphone kit tests" "Convex's Swift library is Apple silicon only"
+elif needed "$IOS_NEEDS"; then
+  swift_test_step "iphone kit tests" "$ROOT/ios/ThreadbearKit" "${LIMITED[@]}" swift test --disable-keychain
 else
   skip "iphone kit tests" "nothing in ios/ changed"
 fi

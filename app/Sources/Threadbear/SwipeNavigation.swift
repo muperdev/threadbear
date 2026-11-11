@@ -25,9 +25,9 @@ import WebKit
 /// same way (seen with real events on Tinker Desk, 7 Nov).
 ///
 /// Over a sidebar row nothing's held back, as the row (RowSwipeController)
-/// needs the whole gesture: a swipe left is its archive, and it gives up a
-/// swipe the other way to Back or Forward while there's somewhere to go
-/// (`takesFingersRight`).
+/// needs the whole gesture: moving it left is its archive, and it gives up a
+/// swipe the other way to Back while there's somewhere to go back to
+/// (`takesBack`).
 ///
 /// Which way is Back follows System Settings' natural scrolling, as Safari's
 /// does: the page moves with the content, so with natural scrolling fingers
@@ -78,12 +78,12 @@ final class SwipeNavigation {
         }
     }
 
-    /// Whether fingers going right go Back or Forward just now: a row
-    /// deciding what a swipe is asks, so the two never both take it.
-    /// `inverted`: natural scrolling, where that's Back.
-    func takesFingersRight(inverted: Bool) -> Bool {
-        guard scrollSwipesOn(), let app else { return false }
-        return inverted ? app.canGoBack : app.canGoForward
+    /// Whether a swipe moving the content right goes Back just now: a row
+    /// deciding what a swipe is asks, so the two never both take it. Rows
+    /// go by the content too, so archiving (the row going left) is never
+    /// Back, whichever way the system scrolls.
+    var takesBack: Bool {
+        scrollSwipesOn() && (app?.canGoBack ?? false)
     }
 
     /// Whether the event was ours (held back, or a page swipe's).
@@ -146,14 +146,13 @@ final class SwipeNavigation {
         release()
         guard scrollSwipesOn() else { return swipe.reset() }
         natural = event.isDirectionInvertedFromDevice
-        // A row only ever lets fingers going right by.
         let overRow = RowSwipeController.listening?.isHovered == true
         let free = freeWays(at: event.locationInWindow, in: window, scrolls: true)
         let ways = free.intersection(historyWays(app))
-        let fingersRight: NavigationSwipe.Direction = event.isDirectionInvertedFromDevice ? .back : .forward
-        // Over a row, a way with nowhere to go is the row's (it gives a
-        // little and stops); elsewhere the card says there's nowhere to go.
-        swipe.begin(allowed: overRow ? ways.intersection([fingersRight]) : ways,
+        // Over a row, content going left is the row's (archive) and a way
+        // with nowhere to go is too (it gives a little and stops);
+        // elsewhere the card says there's nowhere to go.
+        swipe.begin(allowed: overRow ? ways.intersection([.back]) : ways,
                     empty: overRow ? [] : free.subtracting(ways), holds: !overRow)
     }
 

@@ -90,9 +90,13 @@ type LoadedPatch = { info: PatchInfo; panels: Panel[]; actions: Action[]; hooks:
 // built in, so a fresh worktree builds from cold. With `keep`, an archived
 // thread's worktree is set aside, those folders and all, for the next
 // thread rather than removed (worktrees.ts, "spares").
-// `setupRun` is `setup` as it runs, for a patch trusted by its hash
-// (bindAutomatic); absent, `setup` runs as written.
-export type WorktreeConfig = { setup?: string; check?: string; keep?: string[]; setupRun?: string };
+// `teardown` runs in the worktree's root when its thread is archived or
+// deleted, before the cleanup, landed or not: for what setup made outside
+// the folder (a Convex deployment per worktree, elie-h's fork, 6 Nov), as a
+// branch landed by a squashed PR never counts as merged here.
+// `setupRun` and `teardownRun` are `setup` and `teardown` as they run, for
+// a patch trusted by its hash (bindAutomatic); absent, they run as written.
+export type WorktreeConfig = { setup?: string; check?: string; teardown?: string; keep?: string[]; setupRun?: string; teardownRun?: string };
 
 // A folder of one of the thread's projects.
 export type ProjectFolder = { folder: string; projectId: string };
@@ -418,7 +422,7 @@ async function loadPatchFile(file: string, source: 'home' | 'project', cache: Pa
 }
 
 // The patch version each bound automatic command (a hook's `exec`, a
-// setup's `setupRun`) was approved by, so the runner can check the patch
+// setup's `setupRun`, a teardown's `teardownRun`) was approved by, so the runner can check the patch
 // still hashes to it just before running it: a script runs from the
 // folder, not from the bytes that were hashed.
 const boundBy = new Map<string, { file: string; hash: string }>();
@@ -471,9 +475,10 @@ export function actionRunProblem(action: Action, info: PatchInfo | undefined, ve
 }
 
 // A trusted-by-hash patch's commands that run by themselves (its hooks and
-// worktree setup) as they'll run: each must be one hashed script and plain
-// words (automaticCommand), or the whole patch is refused with why, as a
-// patch whose code can't all be checked is. A copy, as `loaded` is cached.
+// worktree setup and teardown) as they'll run: each must be one hashed
+// script and plain words (automaticCommand), or the whole patch is refused
+// with why, as a patch whose code can't all be checked is. A copy, as
+// `loaded` is cached.
 // Actions aren't held to it, as one runs only when it's pressed, but what
 // each runs must be followable and hashed (actionCommandProblem), checked
 // again when it's pressed (actionRunProblem).
@@ -512,6 +517,12 @@ function bindAutomatic(loaded: LoadedPatch, file: string, files: string[], block
     const bound = automaticCommand(worktree.setup, folder, files, blocked);
     if ('problem' in bound) return refuse('worktree setup', bound.problem);
     worktree = { ...worktree, setupRun: note(bound.run) };
+  }
+  // Held to the same: it runs by itself too, as the thread is archived.
+  if (worktree?.teardown) {
+    const bound = automaticCommand(worktree.teardown, folder, files, blocked);
+    if ('problem' in bound) return refuse('worktree teardown', bound.problem);
+    worktree = { ...worktree, teardownRun: note(bound.run) };
   }
   return { ...loaded, actions, hooks, ...(worktree ? { worktree } : {}) };
 }
@@ -557,10 +568,10 @@ export function readPatchModule(id: string, source: 'home' | 'project', file: st
   };
   let worktree: WorktreeConfig | undefined;
   if (v.worktree !== undefined) {
-    const w = v.worktree as { setup?: unknown; check?: unknown; keep?: unknown };
+    const w = v.worktree as { setup?: unknown; check?: unknown; teardown?: unknown; keep?: unknown };
     if (!w || typeof w !== 'object' || Array.isArray(w)) return problem('worktree should be an object with setup and/or check.');
     worktree = {};
-    for (const key of ['setup', 'check'] as const) {
+    for (const key of ['setup', 'check', 'teardown'] as const) {
       if (w[key] === undefined) continue;
       if (typeof w[key] !== 'string' || !w[key].trim()) return problem(`worktree.${key} should be a command.`);
       worktree[key] = w[key];
@@ -1316,15 +1327,16 @@ export function runCommand(
       }, 50);
       tick.unref();
     };
+    // At the limit, the whole process group (a shell's children too) gets
+    // SIGTERM, then SIGKILL once the grace is up, whether or not
+    // `killGroup` asked for that on exit too: a command that ignores
+    // SIGTERM (`trap '' TERM`) never closed its pipes, and whatever waited
+    // on it (a worktree's setup before the first turn, its teardown before
+    // the cleanup, which messages, actions and handovers wait on) waited
+    // for ever (Codex's review, 9 Nov).
     const timer = setTimeout(() => {
       timedOut = true;
-      if (opts.killGroup) return endGroup();
-      // The whole process group: a shell's children too.
-      try {
-        process.kill(-child.pid!, 'SIGTERM');
-      } catch {
-        child.kill('SIGTERM');
-      }
+      endGroup();
     }, timeoutMs);
     child.stdout.on('data', take);
     child.stderr.on('data', take);

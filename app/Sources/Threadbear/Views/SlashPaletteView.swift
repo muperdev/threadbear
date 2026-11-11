@@ -31,6 +31,9 @@ struct SlashPaletteView: View {
     var current: [String: String] = [:]
     var onFill: (SlashCommand) -> Void
     var onRun: (SlashCommand) -> Void
+    /// Typed partway through a message: a pick goes into the words, as
+    /// Return and Tab both do there, and nothing is sent.
+    var midMessage = false
     /// Opens a command's file in the side pane; nil when the thread's
     /// runner is another Mac's, whose files aren't here.
     var onOpen: ((String) -> Void)?
@@ -226,10 +229,15 @@ struct SlashPaletteView: View {
     private func actions(_ command: SlashCommand) -> some View {
         // Return comes through the composer's own keys, so no
         // keyboard shortcut here to fight it.
-        Button("Run") { onRun(command) }
-            .tip("Send /\(command.name) now (Return)")
-        Button("Add details") { onFill(command) }
-            .tip("Put /\(command.name) in the box to type more after it (Tab)")
+        if midMessage {
+            Button("Insert") { onFill(command) }
+                .tip("Put /\(command.name) in the message, for the agent to run (Return or Tab)")
+        } else {
+            Button("Run") { onRun(command) }
+                .tip("Send /\(command.name) now (Return)")
+            Button("Add details") { onFill(command) }
+                .tip("Put /\(command.name) in the box to type more after it (Tab)")
+        }
         // With the other buttons, so it's always in sight: under
         // the path it scrolled away in a short palette.
         if let path = command.path, let onOpen {
@@ -272,7 +280,10 @@ extension SlashPaletteView {
 
     /// The list's: the longest name, its row's padding and the scroller.
     static func listWidth(_ commands: [SlashCommand]) -> Double {
-        let longest = commands.map { textWidth("/\($0.name)") }.max() ?? 0
+        // With none (still loading, or a new thread on a runner that
+        // can't list them yet) it holds the placeholder, which wrapped a
+        // letter a line at the width of no name at all.
+        guard let longest = commands.map({ textWidth("/\($0.name)") }).max() else { return zoomed(220) }
         return longest + zoomed(14) * 2 + zoomed(14)
     }
 
@@ -329,6 +340,41 @@ extension AppModel {
                 // the palette says there are none rather than spinning.
                 if self?.slashCommands[threadId] == nil { self?.slashCommands[threadId] = [] }
                 AppLog.write("rpc", "threads.commands failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Where a new thread's palette keeps its list: per login and folder,
+    /// so changing either in the box's chips asks again.
+    var newThreadCommandsKey: String {
+        "new\u{0}\(newThreadRunnerId ?? "")\u{0}\(newThreadAccountId)\u{0}\(newThreadCwd ?? draftLogins.defaults.cwd)"
+    }
+
+    /// The same for a new thread's box, before there's a thread
+    /// (`folders.commands`): the login, folder and mode it would start
+    /// with. Before 9 Nov 2026 a new thread's box had no palette, so its
+    /// first message couldn't pick a skill (David). Another runner's draft
+    /// isn't asked yet; its palette lists none.
+    func loadNewThreadSlashCommands() {
+        let key = newThreadCommandsKey
+        guard slashFetches[key] == nil else { return }
+        guard newThreadRunnerId == nil, let client else {
+            if slashCommands[key] == nil { slashCommands[key] = [] }
+            return
+        }
+        let accountId = newThreadAccountId.isEmpty ? nil : newThreadAccountId
+        let cwd = newThreadCwd
+        // As the new thread would be started with (PoolsModel).
+        let mode: PermissionMode? = newThreadPermission == .unknown ? nil : newThreadPermission
+        slashFetches[key] = Task { [weak self] in
+            defer { self?.slashFetches[key] = nil }
+            do {
+                let list = try await client.folderCommands(cwd: cwd, accountId: accountId, permissionMode: mode)
+                if self?.slashCommands[key] != list { self?.slashCommands[key] = list }
+            } catch {
+                // An older runner (-32601): none, as for a thread.
+                if self?.slashCommands[key] == nil { self?.slashCommands[key] = [] }
+                AppLog.write("rpc", "folders.commands failed: \(error.localizedDescription)")
             }
         }
     }

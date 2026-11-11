@@ -603,3 +603,13 @@ test("rotate-owner on a self-hosted backend goes ahead without a deploy-key list
   assert.equal(await runnerKeysCommand(n.cfg, ['rotate-owner'], {}, n.deps), 1);
   assert.deepEqual(n.convexCalls, []);
 });
+
+test("a Mac whose runner.json is JSON but not an object gets nothing written over it, and no key", async () => {
+  for (const remote of [[], 42, 'oops', null]) {
+    const s = setup(remote);
+    assert.equal(await runnerKeysCommand(s.cfg, ['add', 'new'], { ssh: 'new' }, s.deps), 1, JSON.stringify(remote));
+    assert.equal(s.sshCalls.filter((c) => c.command.includes('runner.json.new')).length, 0);
+    assert.deepEqual(minted(s), []);
+    assert.match(s.printed.join('\n'), /not an object/);
+  }
+});

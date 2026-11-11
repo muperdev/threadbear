@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PersistedEvent } from '../../src/protocol.ts';
-import { offersToTakeItBack, TRY_IT_FIRST, archiveFromTool, snoozeFromTool, bylineFromTool, endedThisTurn, CODEX_END_TURN_DESCRIPTION, CODEX_ONE_REPLY_DESCRIPTION, END_TURN_DESCRIPTION, END_TURN_FULL_NAME, endTurnDescription, needsFromText, needsFromTool, ONE_REPLY_DESCRIPTION, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, turnReply } from '../../src/needs.ts';
+import { runCommandProblem, offersToTakeItBack, TRY_IT_FIRST, archiveFromTool, snoozeFromTool, bylineFromTool, endedThisTurn, CODEX_END_TURN_DESCRIPTION, CODEX_ONE_REPLY_DESCRIPTION, END_TURN_DESCRIPTION, END_TURN_FULL_NAME, endTurnDescription, needsFromText, needsFromTool, ONE_REPLY_DESCRIPTION, replyWithoutRepeat, splitReplySection, summaryFromTool, summaryMarkdown, turnReply } from '../../src/needs.ts';
 import { END_TURN_TOOL } from '../../src/needs.ts';
 import { SERVER_NAME } from '../../src/threadbear-mcp.ts';
 import { ClaudeNormalizer, fileContext } from '../../src/adapters/claude/normalize.ts';
@@ -451,4 +451,14 @@ test('offersToTakeItBack knows the answers real cards used, and leaves others al
   for (const o of ['Can you do it?', 'Can you do it in Chrome?', 'Connected, you do it', 'Do it for me later', 'Can you do the copies?', 'Try it yourself']) assert.ok(offers(o), o);
   for (const o of ['Done', 'Signed in', 'Deploy it', "I can't do it", 'Not yet', 'Hold off']) assert.ok(!offers(o), o);
   assert.ok(!offersToTakeItBack([{ action: 'Can you do it?' }]));
+});
+
+test('a command on an ask has to be what it looks like', () => {
+  const asks = (run: string) => needsFromTool({ needs: 'you', asks: [{ question: 'Run it?', run }] })?.asks;
+  assert.equal(asks('npm test\n')?.[0].run?.command, 'npm test');
+  assert.equal(asks('a\n\tb')?.[0].run?.command, 'a\n\tb');
+  for (const bad of ['echo\u001b[201~', 'rm​ x', 'echo ‮oc', 'a b', ' ', 'x'.repeat(8001)]) {
+    assert.ok(runCommandProblem(bad), JSON.stringify(bad));
+    assert.equal(asks(bad)?.[0].run, undefined);
+  }
 });

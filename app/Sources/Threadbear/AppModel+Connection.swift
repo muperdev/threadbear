@@ -41,6 +41,8 @@ extension AppModel {
                 clis = hello.clis
                 clisSupported = hello.clis.isEmpty ? nil : true
                 runnerUpdates = hello.updates
+                experiments = hello.experiments
+                Providers.update(hello.providers)
                 // An older runner sends no pools; the app then works as it
                 // did before them.
                 pools = hello.pools ?? []
@@ -65,6 +67,9 @@ extension AppModel {
                 // Other runners' threads aren't this runner's to list.
                 for (id, thread) in threads where thread.isRemote && fresh[id] == nil { fresh[id] = thread }
                 threads = fresh
+                // A thread deleted while the app wasn't connected never
+                // reached forget(), so its Terminal shell would run on.
+                Terminals.shared.stopAll(except: list.map(\.id))
                 threadsLoaded = true
                 onThreadsLoaded?()
                 threadCountMayHaveChanged()
@@ -138,7 +143,8 @@ extension AppModel {
                 if case .reviewUpdated(let review) = event.payload { receiveReview(review, threadId: threadId) }
                 if case .buttonUpdated(let button) = event.payload { ReplyButtons.shared.receive(button, threadId: threadId) }
             case .threadDeleted(let threadId):
-                forget(threadId)
+                // A thread that moved away stays, as the other runner's.
+                if !movedAway(threadId) { forget(threadId) }
             case .accountsUpdated(let list):
                 // The runner learned something (its model lists, a
                 // default it saw a turn run on, new usage): replaces
@@ -250,8 +256,9 @@ extension AppModel {
         apply(thread)
     }
 
-    private func apply(_ thread: ThreadSummary) {
-        let previous = threads[thread.id]
+    private func apply(_ incoming: ThreadSummary) {
+        let previous = threads[incoming.id]
+        let thread = keepingAskedMove(incoming, over: previous)
         threads[thread.id] = thread
         threadCountMayHaveChanged()
         // The open transcript's "3 sub-agents working in the background"
@@ -291,7 +298,9 @@ extension AppModel {
         let panel = WindowDock.threadPanel(threadId)
         if dock.layout.contains(panel) { dock.close(panel) }
         threads[threadId] = nil
+        Terminals.shared.stop(threadId: threadId)
         drafts[threadId] = nil
+        contextUsage[threadId] = nil
         if let session = sessions.removeValue(forKey: threadId) { session.unsubscribe() }
         if selection == threadId { selection = nil }
         if subagentSelection?.threadId == threadId { subagentSelection = nil }

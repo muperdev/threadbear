@@ -17,6 +17,7 @@ import type { ModelSettings } from '../../src/models/index.ts';
 import type { CliRequest, CliResponse } from '../../src/models/claude-pool.ts';
 import { ledgerPath } from '../../src/models/ledger.ts';
 import { SettingsService, modelMethods, settingsMethods } from '../../src/settings.ts';
+import { EXPERIMENTS } from '../../src/experiments.ts';
 import { cleanTitle } from '../../src/runner.ts';
 import type { Notification } from '../../src/runner.ts';
 import { RpcServer } from '../../src/rpc.ts';
@@ -185,6 +186,40 @@ test('settings: update saves to runner.json, applies at once, and a bad field ch
     assert.throws(() => s.methods['settings.update'](bad), (e: RpcError) => e.code === ErrorCode.badParams, JSON.stringify(bad));
   }
   assert.equal(s.cfg.idleMs, 10 * 60_000, 'a refused update changed nothing');
+});
+
+test('settings: experiments lists each with its switch, and update saves only known ids', () => {
+  const s = settingsSetup();
+  const file = path.join(s.home, 'runner.json');
+  fs.writeFileSync(file, JSON.stringify({ experiments: { looseEnds: true } }));
+  const listed = s.svc.get().experiments;
+  assert.ok(listed.length > 0);
+  // Every experiment file shows, so a new one needs nothing in the app.
+  assert.deepEqual(listed.map((x) => x.id), EXPERIMENTS.map((x) => x.id));
+  assert.equal(listed.find((x) => x.id === 'looseEnds')?.on, true);
+  assert.equal(listed.find((x) => x.id === 'cardReviewer')?.on, false);
+  assert.ok(listed.every((x) => x.name && x.does), 'each has a name and what it does');
+  const r = s.methods['settings.update']({ experiments: { cardReviewer: true } }) as { settings: any };
+  assert.equal(r.settings.experiments.find((x: any) => x.id === 'cardReviewer').on, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).experiments, { looseEnds: true, cardReviewer: true }, 'the others are kept');
+  assert.equal(s.published.at(-1)?.method, 'settings.updated');
+  for (const bad of [{ experiments: { nope: true } }, { experiments: { cardReviewer: 'yes' } }, { experiments: [] }, { experiments: null }]) {
+    assert.throws(() => s.methods['settings.update'](bad), (e: RpcError) => e.code === ErrorCode.badParams, JSON.stringify(bad));
+  }
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).experiments, { looseEnds: true, cardReviewer: true }, 'a refused update changed nothing');
+});
+
+test('settings: keeping the Mac awake is on until turned off, and only a Mac shows it', () => {
+  const s = settingsSetup();
+  const mac = process.platform === 'darwin';
+  assert.equal(s.cfg.keepAwake, true, 'on by default');
+  assert.equal(s.svc.get().keepAwake, mac ? true : undefined);
+  const r = s.methods['settings.update']({ keepAwake: false }) as { settings: any };
+  assert.equal(s.cfg.keepAwake, false, 'applied at once');
+  assert.equal(r.settings.keepAwake, mac ? false : undefined);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(s.home, 'runner.json'), 'utf8')).keepAwake, false);
+  assert.throws(() => s.methods['settings.update']({ keepAwake: 'no' }), (e: RpcError) => e.code === ErrorCode.badParams);
+  assert.equal(s.cfg.keepAwake, false, 'a refused update changed nothing');
 });
 
 test("settings: bringIn is every 5 days until changed, and keeps the rest of runner.json's releases", () => {

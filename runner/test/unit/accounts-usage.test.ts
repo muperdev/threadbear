@@ -14,6 +14,7 @@ import type { AdapterOutput } from '../../src/adapters/types.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
 import { tmpDir } from '../helpers/fakes.ts';
+import { noFileWatches } from '../helpers/patience.ts';
 
 const FIX = path.join(import.meta.dirname, '..', 'fixtures');
 const LIMITS_FIXTURE = fs.readFileSync(path.join(FIX, 'token-stats', 'limits.json'), 'utf8');
@@ -456,7 +457,8 @@ test('a new limits.json is picked up by the 60-second check', () => {
   }
 });
 
-test('a new limits.json is picked up by the folder watch', async () => {
+test('a new limits.json is picked up by the folder watch', async (t) => {
+  if (noFileWatches(t)) return;
   const s = setup();
   const store = s.make();
   store.start();

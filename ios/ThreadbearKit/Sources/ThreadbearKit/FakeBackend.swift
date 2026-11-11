@@ -463,6 +463,10 @@ public final class FakeBackend: Backend, @unchecked Sendable {
         return MessagePage(messages: page, hasMore: before.count > limit, images: images)
     }
 
+    public func images(_ threadId: String, from: Int) -> AsyncThrowingStream<[MessageImage], Error> {
+        watch { [unowned self] in lock.withLock { (imagesById[threadId] ?? []).filter { $0.seq >= from } } }
+    }
+
     public func messages(_ threadId: String, limit: Int) -> AsyncThrowingStream<MessagePage, Error> {
         let page = watch { [unowned self] in
             let all = lock.withLock { messagesById[threadId] ?? [] }
@@ -608,6 +612,15 @@ public final class FakeBackend: Backend, @unchecked Sendable {
             s.messagesById[threadId] = list
         }
         return newCommand(threadId: started)
+    }
+
+    /// Stops the turn as a runner would: the thread goes idle, its working line gone.
+    public func interrupt(threadId: String) async throws -> String {
+        mutate { s in
+            s.threadsById[threadId]?.status = .idle
+            s.threadsById[threadId]?.working = nil
+        }
+        return newCommand()
     }
 
     /// A Claude thread's list, as a runner would send it, for the palette

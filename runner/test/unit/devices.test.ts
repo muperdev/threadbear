@@ -11,7 +11,7 @@ import type { Logger } from '../../src/log.ts';
 
 type Call = { kind: string; fn: string; args: Record<string, unknown> };
 
-function setup(opts: { url?: string; key?: string; boxKey?: string; fail?: (fn: string) => Error | undefined } = {}) {
+function setup(opts: { url?: string; site?: string; key?: string; boxKey?: string; fail?: (fn: string) => Error | undefined } = {}) {
   const h = makeHarness();
   const calls: Call[] = [];
   const logged: string[] = [];
@@ -37,7 +37,7 @@ function setup(opts: { url?: string; key?: string; boxKey?: string; fail?: (fn: 
     return null;
   };
   const sync = new ConvexSync({
-    config: { enabled: true, url: 'url' in opts ? opts.url : 'https://x.convex.cloud', runnerId: 'r1' },
+    config: { enabled: true, url: 'url' in opts ? opts.url : 'https://x.convex.cloud', runnerId: 'r1', ...(opts.site ? { site: opts.site } : {}) },
     key: 'key' in opts ? opts.key : 'k',
     runner: h.runner,
     version: '0.1.0+test',
@@ -91,6 +91,14 @@ test('pair: a phone gets a QR link, a browser a sign-in link, and the token is i
   assert.ok(!logged.some((l) => l.includes('tb_secret')), 'the token was logged');
 });
 
+test('pair: a backend on this Mac only (setup --self-hosted --local) signs a browser in but never issues a phone a link to 127.0.0.1', async () => {
+  const { methods, calls } = setup({ url: 'http://127.0.0.1:13210', site: 'http://127.0.0.1:13211' });
+  await assert.rejects(methods['devices.pair']({ kind: 'phone' }) as Promise<unknown>, (e: RpcError) => /on this Mac only/.test(e.message) && /--tailnet/.test(e.message));
+  assert.equal(calls.filter((c) => c.fn === 'sync:issueToken').length, 0, 'a token was issued for a phone that cannot use it');
+  const browser = (await methods['devices.pair']({ kind: 'browser', name: 'Safari' })) as { signInLink?: string };
+  assert.equal(browser.signInLink, 'http://127.0.0.1:13211/#token=tb_secret1');
+});
+
 test('list and revoke go through the backend each time; revoking an unknown id is bad params', async () => {
   const { methods } = setup();
   await methods['devices.pair']({ kind: 'phone' });
@@ -130,10 +138,11 @@ test('a backend without the token functions is said in words, and other failures
   await assert.rejects(down.methods['devices.pair']({ kind: 'browser' }) as Promise<unknown>, (e: RpcError) => e.code === -32000 && e.message === 'fetch failed');
 });
 
-test('a browser needs a cloud deployment: a local one has no website', async () => {
+test('a local deployment with no sync.site has no website, and no phone either', async () => {
   const { methods } = setup({ url: 'http://127.0.0.1:3210' });
-  const phone = (await methods['devices.pair']({ kind: 'phone' })) as { pairingLink?: string };
-  assert.ok(phone.pairingLink?.startsWith('threadbear://pair?url=http%3A%2F%2F127.0.0.1%3A3210'));
+  // Nor a phone: it can't reach this Mac's 127.0.0.1 (and the iPhone app
+  // refuses an http link anyway).
+  await assert.rejects(methods['devices.pair']({ kind: 'phone' }) as Promise<unknown>, (e: RpcError) => e.code === -32000 && /on this Mac only/.test(e.message));
   await assert.rejects(methods['devices.pair']({ kind: 'browser' }) as Promise<unknown>, (e: RpcError) => e.code === -32000 && /website/.test(e.message));
   const list = (await methods['devices.list']({})) as { site?: string };
   assert.equal(list.site, undefined);

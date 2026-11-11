@@ -99,6 +99,9 @@ public struct UserMessage: Sendable, Hashable {
 
     public enum Pending: Sendable, Hashable {
         case sending, queued
+        /// Held until a restarting runner is back, with a note under the
+        /// bubble saying so (`PendingMessage.waitingForRunner`).
+        case waitingForRunner
     }
 
     public init(text: String, images: [ImageRef] = [], origin: String? = nil, answers: [AskAnswer] = [], editOf: Int? = nil, review: ReviewAnswer? = nil, editable: Bool = false, pending: Pending? = nil) {

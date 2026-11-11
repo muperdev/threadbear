@@ -1,0 +1,13 @@
+[package]
+name = "threadbear-core"
+version = "0.1.0"
+description = "Threadbear's desktop logic with no UI in it: protocol types, inbox rules, the transcript reducer"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Local times for the sidebar's words and the Hibernate presets. Already in the
+# build through gpui-kit, at this exact version.
+chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }

@@ -2,11 +2,13 @@
 // the ones the runner does itself, and the picker's list.
 // Each method's `this` is the Runner; runner.ts puts them on its prototype.
 import crypto from 'node:crypto';
+import path from 'node:path';
 import type { Runner, ThreadState } from '../runner.ts';
 import { effortTitle, modelRow } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
-import type { Account, EffortLevel } from '../protocol.ts';
-import { isEffortLevel } from '../protocol.ts';
+import type { Account, EffortLevel, PermissionMode } from '../protocol.ts';
+import { ErrorCode, RpcError, isEffortLevel } from '../protocol.ts';
+import { expandHome } from '../config.ts';
 import type { QueuedSend } from '../store.ts';
 import { claudeOptions, claudeSettingsWithoutCommands } from '../claude-trust.ts';
 import { commandList, parseCommand, planCommand, type CommandPlan, type SlashCommand } from '../slash-commands.ts';
@@ -144,29 +146,45 @@ export const commandsPart = {
   // The picker's list for a thread (threads.commands): Threadbear's own,
   // then the CLI's for the thread's folder, skills included.
   async threadCommands(this: Runner, threadId: string): Promise<{ commands: SlashCommand[] }> {
-    const st = this.mustGet(threadId);
-    const { rec, rt } = st;
-    const account = this.accounts.get(rec.accountId);
+    const { rec, rt } = this.mustGet(threadId);
+    return this.listCommands(rec.accountId, rec.cwd, rec.permissionMode, rt.session?.commands ? () => rt.session!.commands!() : undefined);
+  },
+
+  // The same for a new thread's box, before there's a thread
+  // (folders.commands): the login and folder it would start on. With no
+  // login, the one a new thread would get.
+  async folderCommands(this: Runner, params: { cwd?: string; accountId?: string; permissionMode?: PermissionMode }): Promise<{ commands: SlashCommand[] }> {
+    // As create() works them out (new-threads.ts makeThread).
+    const accountId = params.accountId ?? this.defaultAccountId();
+    if (!this.accounts.get(accountId)) throw new RpcError(ErrorCode.accountNotFound, `No account called ${accountId}`);
+    const cwd = path.resolve(expandHome(params.cwd?.trim() ? params.cwd.trim() : this.cfg.defaults.cwd));
+    // A new Claude thread starts on Auto unless picked otherwise, so its
+    // allow rules wait for trust as they would (claudeOptions).
+    return this.listCommands(accountId, cwd, params.permissionMode ?? 'auto');
+  },
+
+  async listCommands(this: Runner, accountId: string, cwd: string, permissionMode: PermissionMode, live?: () => Promise<SlashCommand[]>): Promise<{ commands: SlashCommand[] }> {
+    const account = this.accounts.get(accountId);
+    const provider = account?.provider ?? 'claude';
     let cli: SlashCommand[] = [];
     // Claude's list in a folder whose settings Mike hasn't trusted is made
     // without them (claude-trust.ts), so it's cached apart.
-    const claude = rec.provider === 'claude' ? this.patchTrust.checkClaude(rec.cwd, claudeOptions(rec)) : undefined;
+    const claude = provider === 'claude' ? this.patchTrust.checkClaude(cwd, claudeOptions({ permissionMode })) : undefined;
     const skipped = claude && !claude.trusted ? claude.hash : undefined;
-    const untrusted = skipped ? claudeSettingsWithoutCommands(rec.cwd) : undefined;
-    const key = `${rec.accountId}\0${rec.cwd}\0${skipped ?? 'trusted'}`;
+    const untrusted = skipped ? claudeSettingsWithoutCommands(cwd) : undefined;
+    const key = `${accountId}\0${cwd}\0${skipped ?? 'trusted'}`;
     const cached = this.commandCache.get(key);
     if (cached && this.clock.now() - cached.at < LIST_TTL_MS) cli = cached.commands;
     else {
       try {
-        const live = rt.session?.commands ? await rt.session.commands() : undefined;
-        const adapter = this.adapters[rec.provider];
-        cli = live ?? (account && adapter?.commands ? await adapter.commands(account, rec.cwd, untrusted) : []);
+        const adapter = this.adapters[provider];
+        cli = (live ? await live() : undefined) ?? (account && adapter?.commands ? await adapter.commands(account, cwd, untrusted) : []);
         this.commandCache.set(key, { at: this.clock.now(), commands: cli });
       } catch (e) {
-        this.log.warn('could not list commands', { threadId, error: String(e) });
+        this.log.warn('could not list commands', { accountId, cwd, error: String(e) });
       }
     }
-    return { commands: commandList(rec.provider, cli) };
+    return { commands: commandList(provider, cli) };
   },
 };
 

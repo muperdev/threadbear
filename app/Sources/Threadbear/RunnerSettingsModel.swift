@@ -31,12 +31,12 @@ extension AppModel {
         if !settings.defaultCwd.isEmpty { defaults.cwd = (settings.defaultCwd as NSString).expandingTildeInPath }
     }
 
-    /// Pools with a Claude login: only those can take small jobs (titles,
-    /// the librarian). Settings › Models and the Librarian's page pick
+    /// Pools with a login that can take small jobs (titles, the librarian):
+    /// a Claude one, or an ACP agent's in a pool of its own. Settings › Models and the Librarian's page pick
     /// from these.
     var claudePools: [Pool] {
         pools.filter { pool in
-            pool.accountIds.contains { id in accounts.contains { $0.id == id && $0.provider == "claude" } }
+            pool.accountIds.contains { id in accounts.contains { $0.id == id && Providers.info($0.provider).smallJobs } }
         }
     }
 
@@ -57,15 +57,23 @@ extension AppModel {
             if let v = update.followMain { shown.followMain = v }
             if let v = update.bulletReplies { shown.bulletReplies = v }
             if let v = update.oneReply { shown.oneReply = v }
+            if let v = update.labReview { shown.labReview = v }
+            if let v = update.keepAwake { shown.keepAwake = v }
             if let v = update.bringIn { shown.bringIn = v }
             if let v = update.pool { shown.models.pool = v }
             if let v = update.privateFolders { shown.models.privateFolders = v }
+            if let v = update.experiments {
+                for i in shown.experiments.indices { if let on = v[shown.experiments[i].id] { shown.experiments[i].on = on } }
+            }
             runnerSettings = shown
         }
         Task {
             do {
                 receive(try await client.settingsUpdate(update))
                 settingsError = nil
+                // Standing instructions' box shows only while its
+                // experiment is on, so ask again rather than wait for a reopen.
+                if update.experiments != nil { loadStandingInstructions() }
             } catch {
                 settingsError = error.localizedDescription
                 AppLog.write("rpc", "settings.update failed: \(error.localizedDescription)")

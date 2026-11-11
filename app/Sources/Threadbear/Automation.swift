@@ -225,6 +225,8 @@ enum Automation {
                 "followMain": settings.followMain,
                 "bulletReplies": settings.bulletReplies,
                 "oneReply": settings.oneReply,
+                "labReview": settings.labReview,
+                "keepAwake": settings.keepAwake.map { $0 as Any } ?? NSNull(),
                 // "" is none (small jobs off), or an older runner with no pools.
                 "smallJobsPool": settings.models.pool ?? "",
                 "privateFolders": settings.models.privateFolders,
@@ -319,6 +321,12 @@ enum Automation {
             try? await Task.sleep(for: .milliseconds(150))
             return "ok \(subagentId) \(session.displayCount) rows"
         case "new":
+            // With `project` (an id): New Thread on that project's page.
+            if let id = c["project"] as? String {
+                guard let project = app.projects.first(where: { $0.id == id }) else { return "error no project \(id)" }
+                app.newThread(in: project)
+                return "ok"
+            }
             app.newThread()
             return "ok"
         case "open-panel":
@@ -442,6 +450,9 @@ enum Automation {
             guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
                                                windowNumber: window?.windowNumber ?? 0, context: nil, characters: chars,
                                                charactersIgnoringModifiers: chars, isARepeat: false, keyCode: 0) else { return "error no event" }
+            // A real key press has the menus updated first (a greyed-out
+            // item like Actual Size at 100%), as a scripted one doesn't.
+            NSApp.mainMenu?.items.forEach { $0.submenu?.update() }
             let taken = NSApp.mainMenu?.performKeyEquivalent(with: event) ?? false
             try? await Task.sleep(for: .milliseconds(150))
             let note = app.inboxEndNote.map { $0.empty ? " note=empty" : " note=end" } ?? ""
@@ -589,11 +600,25 @@ enum Automation {
             // or this accessibility label for an icon-only one. `tip` instead
             // presses a SwiftUI control with that tooltip, through the window
             // as a real click would go, without moving the pointer.
-            if let tip = c["tip"] as? String {
+            if let tip = c["tip"] as? String ?? c["tipPrefix"] as? String {
                 // {"settings": true}: in the Settings window (open it with `settings`).
-                guard let window = c["settings"] as? Bool == true ? SettingsWindow.current : mainWindow, let content = window.contentView,
-                      let anchor = all(TipAnchorView.self, in: content).last(where: { $0.text == tip && !$0.isHiddenOrHasHiddenAncestor })
-                else { return "error no control with the tip \(tip)" }
+                // A sheet over the window (the Move sheet) takes the click first.
+                // `tipPrefix` is for a tip that ends with a keyboard shortcut
+                // ("Archive (⌘E)"), which differs from one Mac to another.
+                let prefix = c["tipPrefix"] != nil
+                // The slash palette has a window of its own (SlashPalettePanel),
+                // looked in after the main window's controls.
+                let windows = c["settings"] as? Bool == true ? [SettingsWindow.current].compactMap { $0 }
+                    : [mainWindow?.attachedSheet ?? mainWindow].compactMap { $0 } + NSApp.windows.filter { $0 is SlashPalettePanel && $0.isVisible }
+                var found: (window: NSWindow, anchor: TipAnchorView)?
+                for candidate in windows {
+                    guard let content = candidate.contentView,
+                          let anchor = all(TipAnchorView.self, in: content).last(where: { (prefix ? $0.text.hasPrefix(tip) : $0.text == tip) && !$0.isHiddenOrHasHiddenAncestor })
+                    else { continue }
+                    found = (candidate, anchor)
+                    break
+                }
+                guard let (window, anchor) = found else { return "error no control with the tip \(tip)" }
                 let center = anchor.convert(NSPoint(x: anchor.bounds.midX, y: anchor.bounds.midY), to: nil)
                 for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                     guard let event = NSEvent.mouseEvent(with: type, location: center, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
@@ -651,6 +676,17 @@ enum Automation {
             let target = target(c, app)
             guard let id = target.id else { return target.error }
             app.archive(id)
+            return "ok \(id)"
+        case "move":
+            // Moves a thread to a runner (by name), or opens the Move sheet
+            // if there's something to say first, as Move to ▸ that runner does.
+            let target = target(c, app)
+            guard let id = target.id else { return target.error }
+            let want = (c["runner"] as? String ?? "").lowercased()
+            guard let thread = app.threads[id], let runner = app.moveTargets(for: thread).first(where: { $0.name.lowercased() == want || $0.id == want }) else {
+                return "error no runner \(want) to move it to"
+            }
+            app.openMove(id, to: runner)
             return "ok \(id)"
         case "star", "unstar":
             let target = target(c, app)
@@ -755,6 +791,14 @@ enum Automation {
                 controller.saveNow()
                 return "ok \(controller.conflict != nil ? "changed on disk, so not saved; " : "")file ends \(((try? String(contentsOf: controller.url, encoding: .utf8)) ?? "").suffix(40).debugDescription)"
             }
+            if c["copyImage"] as? Bool == true {
+                // The picture's right-click Copy Image, onto a private
+                // pasteboard: says what it put there.
+                guard let view = FilePreviewView.current else { return "error no picture is showing" }
+                let board = NSPasteboard(name: NSPasteboard.Name("threadbear.automation.copy.\(ProcessInfo.processInfo.processIdentifier)"))
+                guard view.copyImage(to: board), let types = board.pasteboardItems?.first?.types else { return "error nothing copied" }
+                return "ok copied " + types.map(\.rawValue).joined(separator: ",")
+            }
             if c["close"] as? Bool == true {
                 app.closePreview(in: thread.id)
             } else if c["back"] as? Bool == true {
@@ -783,6 +827,12 @@ enum Automation {
             }
             try? await Task.sleep(for: .milliseconds(300))
             return "ok \(app.panePreview[thread.id].map { "showing \($0.title)" } ?? "no preview")"
+        case "highlight":
+            return await highlightCommand(c, app: app)
+        case "tile":
+            return tile(c, app: app)
+        case "viewer":
+            return viewer(c)
         case "folder":
             // {"cmd":"folder","open":"name"} is a double-click on that row of
             // the folder showing in the pane, "select" a click, "expand" its
@@ -991,14 +1041,15 @@ enum Automation {
             try? await Task.sleep(for: .milliseconds(400))
             return "ok"
         case "project":
-            // {"cmd":"project","id":"p_…"} opens a project's page in the
+            // {"cmd":"project","id":"p_…"} (or "title") opens a project's page in the
             // detail area; {"cmd":"project","close":true} closes it, and
             // "newThread" true is the page's New Thread button.
             if c["close"] as? Bool == true {
                 app.openProjectId = nil
                 return "ok"
             }
-            guard let id = c["id"] as? String else {
+            // "title" finds it by name instead, for the specs.
+            guard let id = (c["id"] as? String) ?? (c["title"] as? String).flatMap({ title in app.projects.first { $0.title == title }?.id }) else {
                 return "error give an id: \(app.projects.map(\.id).joined(separator: ", "))"
             }
             guard app.project(id) != nil else { return "error no project \(id); there are \(app.projects.map(\.id).joined(separator: ", "))" }
@@ -1012,6 +1063,11 @@ enum Automation {
             return "ok"
         case "close-schedule":
             app.scheduleEditor = nil
+            return "ok"
+        case "archive-more":
+            // The Archived section's Show more row, which is often off the
+            // bottom of the list (a lazy stack doesn't draw it till then).
+            app.archiveLimit += ArchiveRows.step
             return "ok"
         case "sort":
             // The Inbox heading's sort menu.
@@ -1077,6 +1133,11 @@ enum Automation {
                 guard let review = app.reviewWindows.values.first(where: { $0.session.review.id == id })?.window else { return "error that review isn't open" }
                 window = review
             }
+            // {"settings": true}: the Settings window (open it with `settings`).
+            if c["settings"] as? Bool == true {
+                guard let settings = SettingsWindow.current, settings.isVisible else { return "error the Settings window isn't open" }
+                window = settings
+            }
             window.setContentSize(NSSize(width: number(c["w"]) ?? 1240, height: number(c["h"]) ?? 820))
             let size = AppDump.contentSize(window)
             return "ok \(Int(size.width))x\(Int(size.height))"
@@ -1136,6 +1197,8 @@ enum Automation {
             return await pageSwipe(c, app: app)
         case "decide":
             return decide(c, app: app)
+        case "decision":
+            return decision(c, app: app)
         case "hints":
             ShortcutHints.shared.setShowing(c["on"] as? Bool ?? true)
             try? await Task.sleep(for: .milliseconds(100))
@@ -1385,13 +1448,15 @@ enum Automation {
             return await waitFor(c, app: app)
         case "terminal":
             // The Terminal panel: {"toggle": true} is ⌘J, {"type": "ls\r"}
-            // types into the showing thread's shell; each says whether it's
+            // types into the showing thread's shell, {"put": "ls"} does what
+            // a ```bash block's play icon does; each says whether it's
             // showing and every shell's folder. SwiftTerm doesn't take in
             // output while the window is behind others, so look with `shot`
             // after `front` (ask Mike first).
             if c["toggle"] as? Bool == true { app.toggleTerminal() }
             let target = TerminalTarget.for(app.selectedThread) { app.runnerName(of: $0) }
-            if let text = c["type"] as? String { Terminals.shared.session(for: target).type(text) }
+            if let text = c["type"] as? String { Terminals.shared.open(target).type(text) }
+            if let command = c["put"] as? String { app.putInTerminal(ShellBlock(command: command), from: app.selection) { _ in } }
             if let ms = c["wait"] as? Int { try? await Task.sleep(for: .milliseconds(ms)) }
             let focused = (NSApp.mainWindow?.firstResponder as? NSView).map { String(describing: type(of: $0)) } ?? "none"
             return "ok shown=\(app.terminalShown) focus=\(focused) cwd=\(target.cwd) shells=\(Terminals.shared.debugSummary)"
@@ -1555,6 +1620,22 @@ enum Automation {
             guard let id = displayedRow(c["row"] as? String, app)?.id, let text = app.transcript.debugInfo(rowId: id) else { return "error no such row" }
             app.copyToPasteboard(text)
             return "ok " + json(text)
+        case "data-dir":
+            // The folder the app's files are in (shortcuts.json), so a test
+            // can edit one as Mike or an agent would.
+            return "ok \(app.dataDir.path)"
+        case "menus":
+            // Every menu in the menu bar and its items as they read: titles,
+            // keys ("⌘N"), submenus by name. For the specs on the menus.
+            return "ok " + json(mainMenus())
+        case "menu-item":
+            // An item in the menu bar by its title, as choosing it does.
+            guard let title = c["title"] as? String else { return "error title missing" }
+            guard let found = findMenuItem(title, in: NSApp.mainMenu) else { return "error no menu item \(title)" }
+            found.menu.update()
+            found.menu.performActionForItem(at: found.index)
+            try? await Task.sleep(for: .milliseconds(250))
+            return "ok"
         case "copy-thread-id":
             // What the ... menu's "Copy thread id" does.
             let target = target(c, app)
@@ -1575,6 +1656,72 @@ enum Automation {
 }
 
 extension Automation {
+    /// The menu bar's menus and their items, updated first as a menu is
+    /// when it opens (SwiftUI builds them lazily).
+    @MainActor
+    private static func mainMenus() -> [[String: Any]] {
+        guard let menu = NSApp.mainMenu else { return [] }
+        return menu.items.compactMap { top in
+            guard let submenu = top.submenu else { return nil }
+            submenu.update()
+            let items: [[String: Any]] = submenu.items.compactMap { item in
+                if item.isSeparatorItem { return nil }
+                var out: [String: Any] = ["title": item.title, "enabled": item.isEnabled]
+                if let key = ShortcutKey(menuItem: item) { out["key"] = key.display }
+                if let sub = item.submenu {
+                    sub.update()
+                    out["items"] = sub.items.filter { !$0.isSeparatorItem }.map(\.title)
+                }
+                return out
+            }
+            return ["title": top.title, "items": items]
+        }
+    }
+
+    /// The item with that title anywhere in the menu bar: its menu and index.
+    @MainActor
+    private static func findMenuItem(_ title: String, in menu: NSMenu?) -> (menu: NSMenu, index: Int)? {
+        guard let menu else { return nil }
+        menu.update()
+        for (index, item) in menu.items.enumerated() {
+            if item.title == title, !item.isSeparatorItem { return (menu, index) }
+            if let found = findMenuItem(title, in: item.submenu) { return found }
+        }
+        return nil
+    }
+
+    /// A decision on the open project's page (the projectDecisions
+    /// experiment), through the card's own calls: `thread` (its id or
+    /// title), `pick` "ask:choice" (both 1-based, 0 for Something else),
+    /// `write` "ask:words" in its Something else box, `send` as ⌘Return
+    /// there. Says the page's decisions after, as `dump` does.
+    @MainActor
+    static func decision(_ c: [String: Any], app: AppModel) -> String {
+        guard app.projectDecisionsOn else { return "error the projectDecisions experiment is off" }
+        guard let project = app.openProject else { return "error no project page open" }
+        let shown = AppDump.projectDecisionThreads(project, app: app)
+        guard let key = c["thread"] as? String else { return "error give a thread: " + shown.map(\.title).joined(separator: ", ") }
+        guard let thread = shown.first(where: { $0.id == key || $0.title == key }) else { return "error no decision from \(key); there are " + shown.map(\.title).joined(separator: ", ") }
+        if let pick = c["pick"] as? String {
+            let parts = pick.split(separator: ":").compactMap { Int($0) }
+            guard parts.count == 2, thread.asks.indices.contains(parts[0] - 1),
+                  parts[1] == 0 || Decisions.choices(for: thread.asks[parts[0] - 1]).indices.contains(parts[1] - 1) else { return "error no choice \(pick)" }
+            app.pickDecision(thread: thread, ask: parts[0] - 1, option: parts[1] == 0 ? Decisions.ownAnswer : parts[1] - 1)
+        }
+        if let value = c["write"] as? String {
+            guard let colon = value.firstIndex(of: ":"), let n = Int(value[..<colon]), thread.asks.indices.contains(n - 1) else { return "error no ask in \(value)" }
+            let ask = n - 1
+            if let now = app.threads[thread.id], app.picks(for: now)[ask] != Decisions.ownAnswer { app.pickDecision(thread: now, ask: ask, option: Decisions.ownAnswer) }
+            if let now = app.threads[thread.id] {
+                var note = app.notes(for: now)[ask] ?? AskNote()
+                note.text = String(value[value.index(after: colon)...])
+                app.setNote(thread: now, ask: ask, note: note)
+            }
+        }
+        if c["send"] as? Bool == true { app.decisionBoxReturn(threadId: thread.id, command: true) }
+        return "ok " + (AppDump.projectDecisionLines(project, app: app) ?? []).joined(separator: "\n")
+    }
+
     /// The open thread's card of asks, picked as its buttons pick:
     /// `pick` is "ask:option", both 1-based ("2:1" picks the second ask's
     /// first choice, or unpicks it if it was), `clear` drops every pick,

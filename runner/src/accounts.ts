@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import { acpAccounts } from './adapters/acp/agents.ts';
+import { experimentOn } from './experiments.ts';
 import path from 'node:path';
 import { isEffortLevel, type Account, type EffortLevel, type ModelChoice } from './protocol.ts';
 import type { UsageStore } from './usage.ts';
@@ -90,7 +92,7 @@ export function isGrokLogin(dir: string): boolean {
 }
 
 export type DiscoveryConfig = Pick<Config, 'claudeMainDir' | 'claudeMainJson' | 'tokenStatsAccountsDir'> &
-  Partial<Pick<Config, 'codexMainDir' | 'grokMainDir' | 'accountNotes' | 'accountsDir'>> & {
+  Partial<Pick<Config, 'codexMainDir' | 'grokMainDir' | 'accountNotes' | 'accountsDir' | 'home' | 'cursorPath' | 'opencodePath'>> & {
     // Whether Grok logins are listed (the grok experiment), asked on every scan.
     grokOn?: () => boolean;
   };
@@ -136,6 +138,9 @@ export function discoverAccounts(cfg: DiscoveryConfig): Account[] {
     for (const { id, dir } of [...grok, ...numbered('grok')]) {
       if (isGrokLogin(dir)) out.push({ id, provider: 'grok', title: providerTitle('grok', undefined, id), configDir: dir });
     }
+  }
+  if (cfg.home && experimentOn(cfg.home, 'acpAgents')) {
+    out.push(...acpAccounts({ paths: { cursor: cfg.cursorPath, opencode: cfg.opencodePath } }));
   }
   for (const a of out) {
     const note = cfg.accountNotes?.[a.id];
@@ -255,7 +260,7 @@ export class AccountRegistry {
     const id = this.usage.identityFor(account);
     if (id.email) out.email = id.email;
     if (id.plan) out.plan = id.plan;
-    out.title = providerTitle(out.provider, out.email, out.id);
+    out.title = out.provider === 'codex' || out.provider === 'grok' ? providerTitle(out.provider, out.email, out.id) : out.provider === 'claude' ? (out.email ?? out.id) : out.title;
     const usage = this.usage.usageFor(out);
     if (usage) out.usage = usage;
     return out;

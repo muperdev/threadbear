@@ -131,8 +131,8 @@ test('the owner key can do everything', () => {
   assert.equal(mayFinish(owner, { runnerId: 'any' }), true);
 });
 
-test('every function in convex/sync.ts and convex/relay.ts is sorted, and asks the gate under its own name', () => {
-  const src = ['sync.ts', 'relay.ts'].map((f) => fs.readFileSync(path.join(import.meta.dirname, '../../../convex', f), 'utf8')).join('\n');
+test('every function in convex/sync.ts, relay.ts and moves.ts is sorted, and asks the gate under its own name', () => {
+  const src = ['sync.ts', 'relay.ts', 'moves.ts'].map((f) => fs.readFileSync(path.join(import.meta.dirname, '../../../convex', f), 'utf8')).join('\n');
   const exported = [...src.matchAll(/^export const (\w+) = (?:mutation|query)\(/gm)].map((m) => m[1]!);
   assert.ok(exported.length > 40, 'found the functions');
   assert.deepEqual([...exported].sort(), Object.keys(ACCESS).sort());

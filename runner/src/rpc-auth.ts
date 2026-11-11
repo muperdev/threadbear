@@ -9,6 +9,26 @@ export const AUTH_VERSION = 1;
 
 export type AuthRole = 'client' | 'runner';
 
+const THREAD_KEY_CONTEXT = 'threadbear-thread-key-v1';
+
+// A thread's own credential (docs/protocol.md, "A thread's own key"): what its
+// CLI gets in place of the runner's token, and what the runner can work out
+// again from the id alone, so it stores nothing per thread and a key only ever
+// names the thread it was made for.
+export function threadKey(token: string, threadId: string): string {
+  return crypto.createHmac('sha256', Buffer.from(token, 'utf8')).update(`${THREAD_KEY_CONTEXT}\n${threadId}`).digest('hex');
+}
+
+export function isThreadKey(x: unknown): x is string {
+  return typeof x === 'string' && /^[0-9a-f]{64}$/.test(x);
+}
+
+// A thread id a client may name in auth.prove: short and on one line, as it
+// goes into the HMAC and the log.
+export function isThreadId(x: unknown): x is string {
+  return typeof x === 'string' && x.length > 0 && x.length <= 128 && /^[\w:.-]+$/.test(x);
+}
+
 // 32 random bytes, lowercase hex.
 export function newNonce(): string {
   return crypto.randomBytes(32).toString('hex');
@@ -57,8 +77,8 @@ export function loopbackPort(url: string): number | undefined {
 // Anything that isn't a challenge throws: a client never falls back to
 // sending the token. `port` is the loopback port the client dialed (see
 // loopbackPort); `server` which kind of server it meant to reach.
-export function answerChallenge(token: string, challenge: unknown, opts: { id?: number | string; port?: number; server?: AuthServer } = {}): {
-  request: { jsonrpc: '2.0'; id: number | string; method: 'auth.prove'; params: { nonce: string; proof: string } };
+export function answerChallenge(token: string, challenge: unknown, opts: { id?: number | string; port?: number; server?: AuthServer; threadId?: string } = {}): {
+  request: { jsonrpc: '2.0'; id: number | string; method: 'auth.prove'; params: { nonce: string; proof: string; threadId?: string } };
   runnerProved: (result: unknown) => boolean;
 } {
   const msg = challenge as { method?: unknown; params?: { nonce?: unknown; port?: unknown } } | null;
@@ -71,7 +91,7 @@ export function answerChallenge(token: string, challenge: unknown, opts: { id?: 
   const channel: AuthChannel = { server: opts.server ?? 'primary', port };
   const clientNonce = newNonce();
   return {
-    request: { jsonrpc: '2.0', id: opts.id ?? 1, method: 'auth.prove', params: { nonce: clientNonce, proof: authProof(token, 'client', runnerNonce, clientNonce, channel) } },
+    request: { jsonrpc: '2.0', id: opts.id ?? 1, method: 'auth.prove', params: { nonce: clientNonce, proof: authProof(token, 'client', runnerNonce, clientNonce, channel), ...(opts.threadId ? { threadId: opts.threadId } : {}) } },
     runnerProved: (result) => proofMatches(authProof(token, 'runner', runnerNonce, clientNonce, channel), (result as { proof?: unknown } | null)?.proof),
   };
 }

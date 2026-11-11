@@ -19,7 +19,7 @@ public enum RowDebug {
             if let pending = message.pending {
                 var plain = message
                 plain.pending = nil
-                return "(\(pending == .sending ? "sending" : "queued")) " + text(TranscriptRow(id: "", seq: 0, content: .user(plain)))
+                return "(\(pending == .sending ? "sending" : pending == .queued ? "queued" : "waiting for the runner")) " + text(TranscriptRow(id: "", seq: 0, content: .user(plain)))
             }
             if message.text.isEmpty { return message.images.count == 1 ? "1 image" : "\(message.images.count) images" }
             // A dump should say it wasn't Mike, as the transcript does.

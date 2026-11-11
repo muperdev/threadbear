@@ -61,6 +61,8 @@ export const threadFields = {
   // What Mike last said to it, one line: the row's "You: ..."
   // (docs/protocol.md, "What Mike last asked"). Since API 31.
   asked: v.optional(v.string()),
+  // The librarian's recap: what it's for, then where it stands. Since API 70.
+  recap: v.optional(v.string()),
   archivedAt: v.optional(v.string()),
   // Mike starred it: the phone's Starred section. Since API 27.
   starredAt: v.optional(v.string()),
@@ -85,11 +87,13 @@ export const threadFields = {
         options: v.optional(v.array(v.string())),
         // What each option does if Mike picks it (end_turn's { label, does }),
         // one per option: the Mac's relay card draws the answers as rows with
-        // these under them, as it does for its own runner's threads. Since API 61.
+        // these under them, as it does for its own runner's threads. Since API 64.
         optionNotes: v.optional(v.array(v.string())),
         suggested: v.optional(v.number()),
         links: v.optional(v.array(v.object({ title: v.string(), url: v.string() }))),
         ticked: v.optional(v.boolean()),
+        // A command with a Run button, pressed like a reply button (phone:press). Since API 71.
+        run: v.optional(v.object({ command: v.string(), buttonId: v.string(), cwd: v.optional(v.string()), running: v.optional(v.boolean()), failed: v.optional(v.string()) })),
       }),
     ),
   ),
@@ -159,6 +163,9 @@ export const threadFields = {
 // is at the top of the phone's inbox.
 export const views = ['inbox', 'hibernating', 'den'] as const;
 
+// A move's states, in order (docs/protocol.md, "Moving a thread to another runner").
+export const moveStates = ['asking', 'ready', 'packing', 'unpacking', 'claimed', 'done', 'failed', 'cancelled'] as const;
+
 export default defineSchema({
   // One row per runner (the Mac, Tinker Desk later), written every minute.
   // A phone treats one not seen for 3 minutes as offline.
@@ -183,6 +190,10 @@ export default defineSchema({
     // runner tiles. On this row since it rarely changes; the figures have a
     // row of their own (runnerStats), read only by the Runners view.
     pressure: v.optional(v.string()),
+    // Set while this runner isn't following GitHub's main properly (API 67,
+    // runner/src/follow-origin.ts): why, in a sentence or two, for the main
+    // Mac's Updates panel and the canary.
+    followProblem: v.optional(v.string()),
     // Its active schedules have been copied to scheduleWakes (API 45), once.
     wakesSeeded: v.optional(v.boolean()),
     // How a Mac app reaches this runner to open one of its threads (API 12):
@@ -254,6 +265,7 @@ export default defineSchema({
     startedBy: v.optional(v.object({ kind: v.string(), label: v.string(), icon: v.optional(v.string()), threadTitle: v.optional(v.string()), why: v.optional(v.string()) })),
     // What Mike last said to it, one line: the Mac row's "You: ...". Since API 32.
     asked: v.optional(v.string()),
+    recap: v.optional(v.string()), // the recap box, since API 70
     // Since API 29: when the backend last wrote the row, so a watching
     // runner reads only rows changed since its last answer
     // (sync:threadIndexSince), and `deleted` marks a thread that's gone,
@@ -300,8 +312,12 @@ export default defineSchema({
     // What was uploaded with it: the hour's allowance counts these, which
     // stay a day whatever happens to the file.
     bytes: v.optional(v.number()),
+    // A move's chunk (moves.ts moveChunkUrl): outside the runner's picture
+    // allowances, bounded by the move instead, and gone when it ends.
+    moveId: v.optional(v.string()),
   })
     .index('by_hash', ['ticketHash'])
+    .index('by_move', ['moveId'])
     .index('by_runner_issued', ['runnerId', 'issuedAt'])
     .index('by_issued', ['issuedAt']),
 
@@ -332,8 +348,13 @@ export default defineSchema({
     at: v.number(),
     bytes: v.optional(v.number()),
     attachedAt: v.optional(v.number()),
+    // A move's chunk (moves.ts moveChunkUrl): charged to its runner like
+    // any upload, and deleted with the rest of the move's when it ends,
+    // whether or not movePacked ever named it.
+    moveId: v.optional(v.string()),
   })
     .index('by_storageId', ['storageId'])
+    .index('by_move', ['moveId'])
     // A runner's bytes uploaded in the last hour (sync:redeemUpload's cap).
     .index('by_runner_at', ['runnerId', 'at'])
     .index('by_unattached', ['attachedAt', 'at']),
@@ -476,6 +497,35 @@ export default defineSchema({
     .index('by_state_done', ['state', 'doneAt'])
     // pruneOld: ones no runner took in COMMAND_KEEP_MS, by when they were made.
     .index('by_state_created', ['state', 'createdAt']),
+
+  // A thread moving from one runner to another (docs/protocol.md, "Moving a
+  // thread to another runner", API 64). Only the owner key starts one; each
+  // step is the runner whose turn it is (moves.ts), and the switch itself
+  // (moveClaim) is the one mutation where the thread changes hands.
+  threadMoves: defineTable({
+    moveId: v.string(),
+    threadId: v.string(),
+    from: v.string(),
+    to: v.string(),
+    state: v.union(...moveStates.map((x) => v.literal(x))),
+    cwd: v.optional(v.string()), // what Mike picked; absent, T chooses
+    accountId: v.optional(v.string()),
+    info: v.optional(v.any()), // S's description of the thread (moveInfo), JSON at most 16 KB
+    plan: v.optional(v.any()), // T's answer (moveReady), JSON at most 16 KB
+    key: v.optional(v.string()), // T's sealing key, raw X25519 base64
+    chunks: v.optional(v.array(v.id('_storage'))),
+    sha256: v.optional(v.string()),
+    bytes: v.optional(v.number()),
+    note: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    frozenAt: v.optional(v.number()),
+  })
+    .index('by_moveId', ['moveId'])
+    .index('by_thread', ['threadId', 'createdAt'])
+    .index('by_from', ['from', 'updatedAt'])
+    .index('by_to', ['to', 'updatedAt'])
+    .index('by_state', ['state', 'updatedAt']),
 
   // A runner on a runner key asking for a new thread on another runner
   // (docs/protocol.md, "Asking another runner"). It can't queue work there
@@ -870,6 +920,9 @@ export default defineSchema({
     // The phone's own key for encrypting what goes through the push relay
     // (API 4): base64 of 32 bytes, made on the phone and sent only here.
     pushKey: v.optional(v.string()),
+    // "android" (API 66): apnsToken is the phone's Firebase token, and a push
+    // goes through the relay to Firebase. Absent: an Apple token.
+    platform: v.optional(v.literal('android')),
   })
     .index('by_apnsToken', ['apnsToken'])
     // A token's phones: at most MAX_DEVICES_PER_TOKEN (phone:registerDevice),

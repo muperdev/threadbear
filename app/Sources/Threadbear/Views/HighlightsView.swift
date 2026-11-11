@@ -14,14 +14,17 @@ import UniformTypeIdentifiers
 struct HighlightsView: View {
     @Environment(AppModel.self) private var app
     let thread: ThreadSummary
-    @State private var editedOpen = false
-    /// "Show all" on Links and Changes, for the thread on show.
-    @State private var allLinks = false
-    @State private var allCommits = false
-    @State private var allSubagents = false
-    @State private var allStarted = false
+    /// The edited files open, and "Show all" on the long groups, for the
+    /// thread on show (the view is rebuilt per thread).
+    @State private var flags = HighlightsFlags()
 
     var body: some View {
+        // The scripted app reads and sets these (HighlightsFlags).
+        content.onAppear { HighlightsFlags.register(flags) }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if app.highlightsUnsupported {
             PaneNote(text: "This runner doesn't keep highlights yet.")
         } else if let fetched = app.highlights[thread.id] {
@@ -32,7 +35,7 @@ struct HighlightsView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        content(sections, projects: projects)
+                        rows(sections, projects: projects)
                     }
                     .padding(.bottom, zoomed(16))
                 }
@@ -53,7 +56,7 @@ struct HighlightsView: View {
     }
 
     @ViewBuilder
-    private func content(_ sections: HighlightSections, projects: [HighlightProjects.Row]) -> some View {
+    private func rows(_ sections: HighlightSections, projects: [HighlightProjects.Row]) -> some View {
         ForEach(toolPanels) { panel in
             ToolCard(panel: panel) { app.choosePanel(panel.id, in: thread.id) }
                 .padding(.horizontal, SidebarMetrics.outerInset)
@@ -126,9 +129,9 @@ struct HighlightsView: View {
             let all = SubagentRows.highlights(thread)
             SectionHeading(title: "Sub-agents", icon: "person.2", fold: fold(HighlightFold.subagents, count: all.count))
             if !isFolded(HighlightFold.subagents) {
-                let subagents = HighlightSections.capped(all, limit: HighlightSections.subagentLimit, showAll: allSubagents)
+                let subagents = HighlightSections.capped(all, limit: HighlightSections.subagentLimit, showAll: flags.allSubagents)
                 ForEach(subagents.shown) { subagentRow($0) }
-                if subagents.more > 0 { showAll(all.count) { allSubagents = true } }
+                if subagents.more > 0 { showAll(all.count) { flags.allSubagents = true } }
             }
         }
         // The threads it handed work to, or is waiting on, with where each
@@ -137,9 +140,9 @@ struct HighlightsView: View {
         if !started.isEmpty {
             SectionHeading(title: "Threads it started", icon: "pawprint", fold: fold(HighlightFold.startedThreads, count: started.count))
             if !isFolded(HighlightFold.startedThreads) {
-                let shown = HighlightSections.capped(started, limit: HighlightSections.subagentLimit, showAll: allStarted)
+                let shown = HighlightSections.capped(started, limit: HighlightSections.subagentLimit, showAll: flags.allStarted)
                 ForEach(shown.shown) { startedRow($0) }
-                if shown.more > 0 { showAll(started.count) { allStarted = true } }
+                if shown.more > 0 { showAll(started.count) { flags.allStarted = true } }
             }
         }
         if !sections.pinned.isEmpty {
@@ -157,17 +160,17 @@ struct HighlightsView: View {
         if !sections.links.isEmpty {
             SectionHeading(title: "Links", icon: "link", fold: fold(HighlightFold.links, count: sections.links.count))
             if !isFolded(HighlightFold.links) {
-                let links = HighlightSections.capped(sections.links, limit: HighlightSections.linkLimit, showAll: allLinks)
+                let links = HighlightSections.capped(sections.links, limit: HighlightSections.linkLimit, showAll: flags.allLinks)
                 ForEach(links.shown) { row($0) }
-                if links.more > 0 { showAll(sections.links.count) { allLinks = true } }
+                if links.more > 0 { showAll(sections.links.count) { flags.allLinks = true } }
             }
         }
         if !sections.commits.isEmpty || !sections.edited.isEmpty {
             SectionHeading(title: "Changes", icon: "arrow.triangle.branch", fold: fold(HighlightFold.changes, count: sections.commits.count + sections.edited.count))
             if !isFolded(HighlightFold.changes) {
-                let commits = HighlightSections.capped(sections.commits, limit: HighlightSections.commitLimit, showAll: allCommits)
+                let commits = HighlightSections.capped(sections.commits, limit: HighlightSections.commitLimit, showAll: flags.allCommits)
                 ForEach(commits.shown) { row($0) }
-                if commits.more > 0 { showAll(sections.commits.count) { allCommits = true } }
+                if commits.more > 0 { showAll(sections.commits.count) { flags.allCommits = true } }
                 if !sections.edited.isEmpty { edited(sections.edited) }
             }
         }
@@ -299,10 +302,10 @@ struct HighlightsView: View {
     /// its own app, since it's code to read in an editor, not to review.
     @ViewBuilder
     private func edited(_ paths: [String]) -> some View {
-        PaneRow(icon: editedOpen ? "chevron.down" : "chevron.right", title: HighlightText.editedCount(paths.count), quiet: true) {
-            withAnimation(.easeOut(duration: 0.15)) { editedOpen.toggle() }
+        PaneRow(icon: flags.editedOpen ? "chevron.down" : "chevron.right", title: HighlightText.editedCount(paths.count), quiet: true) {
+            withAnimation(.easeOut(duration: 0.15)) { flags.editedOpen.toggle() }
         }
-        if editedOpen {
+        if flags.editedOpen {
             ForEach(paths, id: \.self) { path in
                 PaneRow(icon: FileIcon.symbol(forPath: path), title: (path as NSString).lastPathComponent,
                         detail: HighlightText.folder(of: path, cwd: thread.cwd), indent: true) {
@@ -317,6 +320,30 @@ struct HighlightsView: View {
                 .iconContextMenu { FileMenu(path: path, thread: thread, title: (path as NSString).lastPathComponent) }
             }
         }
+    }
+}
+
+/// What a Highlights view has opened: the edited files and "Show all" on its
+/// long groups. A class, so the scripted app can read and set them
+/// (`highlight` in Automation, `pane` in AppDump); a view's own @State can't
+/// be reached from outside it.
+@Observable
+final class HighlightsFlags {
+    var editedOpen = false
+    var allLinks = false
+    var allCommits = false
+    var allSubagents = false
+    var allStarted = false
+
+    #if DEBUG
+    /// The one on screen, for the scripted app.
+    nonisolated(unsafe) static weak var current: HighlightsFlags?
+    #endif
+
+    static func register(_ flags: HighlightsFlags) {
+        #if DEBUG
+        current = flags
+        #endif
     }
 }
 
@@ -674,7 +701,8 @@ struct PreviewBody: View {
                 // two threads on one runner can show the same copy.
                 .id("\(thread.id) \(path)")
         } else {
-            QuickLookView(url: URL(fileURLWithPath: path), opened: preview.opened)
+            QuickLookView(url: URL(fileURLWithPath: path), opened: preview.opened,
+                          reveal: preview.away == nil ? { [app] in app.revealInFinder($0.path) } : nil)
         }
     }
 }
@@ -751,7 +779,12 @@ struct PreviewButtons: View {
         // A copy of another Mac's file: not edited here (only the copy
         // would change), and its folder is just the cache.
         if let file = preview.fileURL, preview.away == nil {
-            if preview.editing {
+            if PreviewRules.isMarkdown(file.path), TextFileView.shows(file.path), TextFileView.canEdit(file.path) {
+                MarkdownViewMenu(showing: preview.editing ? .markdown : .preview) { view in
+                    MarkdownView.current = view
+                    app.setPreviewEditing(view == .markdown, in: thread.id)
+                }
+            } else if preview.editing {
                 PaneHeaderButton(symbol: "checkmark", help: "Done. What you typed is saved.") { app.setPreviewEditing(false, in: thread.id) }
             } else if TextFileView.shows(file.path), TextFileView.canEdit(file.path) {
                 PaneHeaderButton(symbol: "pencil", help: "Edit the file here. It's saved as you type.") { app.setPreviewEditing(true, in: thread.id) }
@@ -764,6 +797,44 @@ struct PreviewButtons: View {
                 app.openExternally(url, from: preview.away == nil ? .thisMac : app.copyOrigin(of: thread))
             }
         }
+    }
+}
+
+/// A Markdown file's Preview or Markdown, in the panel's bar: the drawn
+/// page, or the raw text ready to type in. What's picked is how the next
+/// Markdown file opens too (MarkdownView).
+struct MarkdownViewMenu: View {
+    let showing: MarkdownView
+    let pick: (MarkdownView) -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        IconMenu {
+            ForEach(MarkdownView.allCases, id: \.self) { view in
+                Toggle(isOn: Binding(get: { showing == view }, set: { if $0 { pick(view) } })) {
+                    Label(view.title, systemImage: view.symbol)
+                }
+            }
+        } label: {
+            HStack(spacing: zoomed(3)) {
+                Text(showing.title)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: TypeScale.small - 2, weight: .semibold))
+            }
+            .font(.system(size: TypeScale.small, weight: .medium))
+            .foregroundStyle(hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+            .padding(.horizontal, zoomed(7))
+            .frame(height: zoomed(26))
+            .background(hovering ? SidebarMetrics.hover : .clear, in: RoundedRectangle(cornerRadius: zoomed(6)))
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .onHover { hovering = $0 }
+        .tip(showing == .preview ? "Showing it drawn as a page. Pick Markdown to edit the text." : "Showing the Markdown text, ready to type in. Pick Preview to read it as a page.")
+        .accessibilityLabel("Show as \(showing.title)")
     }
 }
 
@@ -784,6 +855,8 @@ struct QuickLookView: NSViewRepresentable {
     let url: URL
     /// Bumped by each open, so the same file opened again is read again.
     let opened: Int
+    /// Show in Finder on a picture's right-click menu (FilePreviewView.reveal).
+    var reveal: ((URL) -> Void)? = nil
 
     final class Coordinator {
         var shown: (URL, Int)?
@@ -794,6 +867,7 @@ struct QuickLookView: NSViewRepresentable {
     func makeNSView(context: Context) -> FilePreviewView { FilePreviewView() }
 
     func updateNSView(_ view: FilePreviewView, context: Context) {
+        view.reveal = reveal
         if let shown = context.coordinator.shown, shown.0 == url, shown.1 == opened { return }
         view.show(url)
         context.coordinator.shown = (url, opened)
@@ -834,9 +908,28 @@ final class FilePreviewView: NSView {
     /// Kept for the next file Quick Look shows; closing it would end it for good.
     private var quickLook: QLPreviewView?
 
+    #if DEBUG
+    /// The one in the pane, for the scripted app (AppDump's `pane`).
+    nonisolated(unsafe) static weak var current: FilePreviewView?
+    /// What it's showing: "picture 1200x800", "video", "quickLook".
+    var debugShows: String {
+        switch content {
+        case .picture(let view):
+            let rep = view.image?.representations.first
+            return "picture \(rep?.pixelsWide ?? Int(view.image?.size.width ?? 0))x\(rep?.pixelsHigh ?? Int(view.image?.size.height ?? 0))"
+        case .video: return "video"
+        case .quickLook: return "quickLook"
+        case nil: return "nothing"
+        }
+    }
+    #endif
+
     /// Reads `url` afresh, even when it's the file already shown.
     func show(_ url: URL) {
         self.url = url
+        #if DEBUG
+        Self.current = self
+        #endif
         let type = UTType(filenameExtension: url.pathExtension)
         if type?.conforms(to: .audiovisualContent) == true {
             let player: AVPlayerView
@@ -930,17 +1023,43 @@ final class FilePreviewView: NSView {
         return pressTarget(at: point)
     }
 
+    /// Shows the file in the Finder, for the picture's right-click menu.
+    /// Nil for a copy fetched from another Mac: its folder is just the
+    /// cache, as the panel's bar has no Reveal in Finder for one either.
+    var reveal: ((URL) -> Void)?
+
     /// A picture's right-click menu: Copy Image, to paste the picture
-    /// itself into Slack or X (Mike, 3 Nov). Copy path and Reveal in
-    /// Finder are on its Highlights row and the panel's bar already.
+    /// itself into Slack or X (Mike, 3 Nov), then Show in Finder and Copy
+    /// Path, as a file link in the transcript has. The panel's bar has a
+    /// Reveal in Finder button too, but a right-click on the picture is
+    /// where people look (Behrooz, 9 Nov).
     override func menu(for event: NSEvent) -> NSMenu? {
         guard case .picture = content else { return super.menu(for: event) }
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Copy Image", symbol: "doc.on.doc", action: #selector(copyImageItem), target: self))
+        if reveal != nil {
+            menu.addItem(.separator())
+            menu.addItem(NSMenuItem(title: "Show in Finder", symbol: "folder", action: #selector(showInFinderItem), target: self))
+            menu.addItem(NSMenuItem(title: "Copy Path", symbol: "doc.on.doc", action: #selector(copyPathItem), target: self))
+        }
         return menu
     }
 
     @objc private func copyImageItem() { copyImage() }
+
+    @objc private func showInFinderItem() {
+        if let url { reveal?(url) }
+    }
+
+    @objc private func copyPathItem() { copyPath() }
+
+    /// Puts the picture's path on `pasteboard` as text.
+    @discardableResult
+    func copyPath(to pasteboard: NSPasteboard = .general) -> Bool {
+        guard let url else { return false }
+        pasteboard.clearContents()
+        return pasteboard.setString(url.path, forType: .string)
+    }
 
     /// Puts the picture on `pasteboard` as the file's own bytes (a PNG
     /// stays a PNG, a GIF keeps its frames) and as TIFF, which every app

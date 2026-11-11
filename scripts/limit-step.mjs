@@ -156,6 +156,9 @@ function hitLimit(why) {
     const left = [...seen].filter(alive);
     const waited = Date.now() - askedAt;
     if (!left.length || waited >= 7_000) {
+      // A busy Mac can miss the 5-second check entirely. Always send the
+      // final signal before leaving, including to children just discovered.
+      kill(left, 'SIGKILL');
       clearInterval(stopping);
       finish(124);
     } else if (waited >= 5_000 && !told) {

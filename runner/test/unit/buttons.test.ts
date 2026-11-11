@@ -111,3 +111,87 @@ test('access is checked again when pressed', () => {
   assert.throws(() => h.runner.pressButton(thread.id, button.id), /now has Ask before edits/);
   assert.ok(h.runner.listButtons(thread.id).buttons[0].failed);
 });
+
+// Run on the card (docs/protocol.md): end_turn's asks[].run.
+function runFixture(on = true) {
+  const { h, thread, folder } = fixture();
+  fs.writeFileSync(path.join(h.home, 'runner.json'), JSON.stringify({ ...JSON.parse(readJson(path.join(h.home, 'runner.json'))), experiments: { runAsks: on } }));
+  const st = (h.runner as any).threads.get(thread.id);
+  st.rec.cwd = folder;
+  // The card is what a finished turn leaves.
+  st.rt.turn = undefined;
+  return { h, thread, st, folder };
+}
+function readJson(file: string): string {
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '{}';
+}
+function arm(h: any, st: any, command: string) {
+  const asks = h.runner.armRunAsks(st, [{ action: 'Backfill prod?', run: { command } }], 'turn_x');
+  st.rec.needs = { seq: 99, needs: 'you', asks };
+  return asks[0].run;
+}
+async function until(check: () => boolean) {
+  for (let i = 0; i < 400 && !check(); i++) await new Promise((r) => setTimeout(r, 25));
+  assert.ok(check(), 'timed out waiting');
+}
+const told = (h: any, id: string) => [...h.runner.events(id).events.filter((e: any) => e.type === 'user.message').map((e: any) => e.text), ...h.store.load(id)!.queue.map((q: any) => q.text)];
+
+test('a command on the card runs once and the agent hears how it went', async () => {
+  const { h, thread, st, folder } = runFixture();
+  const run = arm(h, st, 'echo ran >> count.txt; echo hello; exit 3');
+  assert.match(run.buttonId, /^[a-z0-9]{8}$/);
+  assert.equal(run.cwd, folder);
+  const first = h.runner.pressButton(thread.id, run.buttonId).button;
+  assert.ok(first.running, 'it answers at once, running');
+  assert.equal(st.rec.needs.asks[0].run.running, true, 'the phone sees it going');
+  h.runner.pressButton(thread.id, run.buttonId);
+  await until(() => Boolean(h.runner.listButtons(thread.id).buttons[0].pressed));
+  const button = h.runner.listButtons(thread.id).buttons[0];
+  assert.equal(button.running, undefined);
+  assert.equal(button.ran?.exitCode, 3);
+  assert.equal(button.ran?.ok, false);
+  assert.equal(fs.readFileSync(path.join(folder, 'count.txt'), 'utf8'), 'ran\n', 'a second press ran nothing');
+  await until(() => told(h, thread.id).some((t: string) => t.includes('pressed Run')));
+  const message = told(h, thread.id).find((t: string) => t.includes('pressed Run'))!;
+  assert.match(message, /failed with exit 3/);
+  assert.match(message, /hello/);
+  assert.ok(h.runner.events(thread.id).events.some((e: any) => e.type === 'action.run' && e.patch === 'card' && e.exitCode === 3));
+  h.runner.pressButton(thread.id, run.buttonId);
+  assert.equal(fs.readFileSync(path.join(folder, 'count.txt'), 'utf8'), 'ran\n', 'pressed for good');
+});
+
+test('only the open card can be run', () => {
+  const { h, thread, st } = runFixture();
+  const run = arm(h, st, 'echo hi');
+  st.rec.needs = { seq: 100, needs: 'nothing' };
+  assert.throws(() => h.runner.pressButton(thread.id, run.buttonId), /replaced/);
+  assert.match(h.runner.listButtons(thread.id).buttons[0].failed!.error, /replaced/);
+});
+
+test('a command can\'t be run once the agent has moved on', () => {
+  const { h, thread, st } = runFixture();
+  const run = arm(h, st, 'echo hi');
+  st.rt.turn = { turnId: 'turn_y' };
+  assert.throws(() => h.runner.pressButton(thread.id, run.buttonId), /out of date/);
+  st.rt.turn = undefined;
+});
+
+test('with the experiment off a run is dropped from the card', () => {
+  const { h, st } = runFixture(false);
+  const asks = h.runner.armRunAsks(st, [{ action: 'x', run: { command: 'ls' } }], 't');
+  assert.equal(asks[0].run, undefined);
+  assert.equal(st.rec.buttons, undefined);
+});
+
+test('a restart mid-run says it may have partly run, and can be pressed again', () => {
+  const { h, thread, st } = runFixture();
+  const run = arm(h, st, 'echo hi');
+  h.runner.persistButton(st, { ...st.rec.buttons[0], running: { at: new Date().toISOString() } });
+  h.runner.tellInterruptedRuns(st);
+  const button = h.runner.listButtons(thread.id).buttons[0];
+  assert.equal(button.running, undefined);
+  assert.match(button.failed!.error, /partly/);
+  assert.match(st.rec.needs.asks[0].run.failed, /partly/);
+  assert.equal(run.buttonId, button.id);
+  assert.ok(told(h, thread.id).some((t: string) => t.includes('partly run')));
+});

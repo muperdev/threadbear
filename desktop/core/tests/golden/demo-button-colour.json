@@ -1,0 +1,56 @@
+{
+  "closed" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Add a Share button to the photo viewer toolbar.",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:turn_1_read",
+      "inGroup" : false,
+      "kind" : "tool",
+      "seq" : 3,
+      "text" : "Read ~/dev/photo-sync/Sources/Viewer/Toolbar.swift",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "q:turn_1_q",
+      "inGroup" : false,
+      "kind" : "question",
+      "seq" : 5,
+      "text" : "Which colour should the Share button be?",
+      "turn" : "turn_1"
+    }
+  ],
+  "open" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Add a Share button to the photo viewer toolbar.",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:turn_1_read",
+      "inGroup" : false,
+      "kind" : "tool",
+      "seq" : 3,
+      "text" : "Read ~/dev/photo-sync/Sources/Viewer/Toolbar.swift",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "q:turn_1_q",
+      "inGroup" : false,
+      "kind" : "question",
+      "seq" : 5,
+      "text" : "Which colour should the Share button be?",
+      "turn" : "turn_1"
+    }
+  ]
+}

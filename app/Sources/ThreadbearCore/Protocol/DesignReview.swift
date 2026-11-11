@@ -149,7 +149,7 @@ public struct DesignReview: Sendable, Hashable, Codable, Identifiable {
     public var id: String
     public var title: String
     public var note: String?
-    /// The option id the agent would pick, marked "my pick" as on an asks card.
+    /// The option id the agent would pick, marked with a star and "Recommended" as on an asks card.
     public var recommended: String?
     public var options: [ReviewOption]
     public var status: String
@@ -252,7 +252,7 @@ public struct ReviewAnswer: Sendable, Hashable {
     /// draft, so the bubble shows it as it is.
     public static func parse(_ text: String, reviewId: String?, response: ReviewDraft?) -> ReviewAnswer? {
         guard let reviewId, let response else { return nil }
-        var rest = Substring(text)
+        var rest = Self.withoutPassedOver(text)
         // "Review: <title> (<id>)"
         let head = " (\(reviewId))"
         guard rest.hasPrefix("Review: "), let close = rest.range(of: head) else { return nil }
@@ -297,6 +297,16 @@ public struct ReviewAnswer: Sendable, Hashable {
             notes[id] = nil
         }
         return rest.isEmpty && !lines.isEmpty ? ReviewAnswer(lines: lines) : nil
+    }
+
+    /// The runner's last paragraph names the options he passed over, for the
+    /// agent writing follow-ups (`PASSED_OVER_TAIL` in runner/src/reviews.ts);
+    /// his bubble leaves it out.
+    static let passedOverTail = "Don't offer one of these later (a next step, a follow-up) as if it were new: say it's one they passed over."
+
+    static func withoutPassedOver(_ text: String) -> Substring {
+        guard text.hasSuffix(passedOverTail), let start = text.range(of: "\n\nPassed over: ", options: .backwards) else { return Substring(text) }
+        return text[..<start.lowerBound]
     }
 
     /// Agents often title options "A: Summary first", which would read

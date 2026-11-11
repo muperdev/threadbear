@@ -1,4 +1,4 @@
-// Review by another lab (experiment `labReview`, experiments.ts): when a
+// Review by another lab (Settings > General, runner.json `labReview`): when a
 // turn that changed code ends with nothing needed, a review thread starts
 // in the same folder on the other provider (Codex for a Claude thread,
 // Claude for a Codex one), told to try to break the change without
@@ -15,15 +15,19 @@
 // lab's login in it, the review runs on a fresh session of the same
 // provider, and the note says it isn't independent.
 //
+// A thread shut in a sandbox (ThreadRecord.confined) is reviewed in the
+// sandbox too, on a login that can run there (Claude; Codex can't), or
+// not at all, with a note saying why. Its review would otherwise run its
+// tests on the host with the same access (Daybreak, 10 Nov 2026).
+//
 // Part of the Runner (runner.ts); each method's `this` is the Runner.
 import path from 'node:path';
 import type { Runner, ThreadState } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
 import type { Account, Hunk, PermissionMode, Provider } from '../protocol.ts';
 import type { ThreadRecord } from '../store.ts';
-import { experimentOn } from '../experiments.ts';
 import { pickInPool, poolAccounts, poolForFolder } from '../pools.ts';
-import { providerName } from '../runner.ts';
+import { providerInfo, providerName } from '../providers.ts';
 import { cutSafely, safeEnd } from '../safe-cut.ts';
 
 export const LAB_REVIEW_ROUNDS = 2;
@@ -41,7 +45,8 @@ const TEXT_FILE = /\.(md|mdx|markdown|txt|rst)$/i;
 const LOOK_BACK = 4000;
 
 export type TurnChange = { files: { path: string; added: number; removed: number }[]; codeLines: number; diff: string; clipped: boolean };
-export type ReviewLogin = { account: Account; independent: boolean };
+// boxed: the other lab was passed over because it can't run in the sandbox.
+export type ReviewLogin = { account: Account; independent: boolean; boxed?: boolean };
 
 export const labReviewPart = {
   // Called once a turn has finished with nothing needed and nothing left
@@ -50,7 +55,7 @@ export const labReviewPart = {
   startLabReview(this: Runner, st: ThreadState, turnId: string, reply: string | undefined, upTo?: number): string | undefined {
     const { rec } = st;
     if (rec.reviewOf || rec.archivedAt) return undefined;
-    if (!experimentOn(this.cfg.home, 'labReview')) return undefined;
+    if (!this.cfg.labReview) return undefined;
     if ((rec.labReviews ?? 0) >= LAB_REVIEW_ROUNDS) return undefined;
     const change = this.turnChange(st, turnId, upTo);
     if (!change || change.codeLines < LAB_REVIEW_MIN_LINES) return undefined;
@@ -68,9 +73,14 @@ export const labReviewPart = {
       this.log.info('lab review owed to the next runner', { threadId: rec.id });
       return undefined;
     }
-    const login = this.reviewLogin(rec);
+    // Shut in a sandbox, or would be if it started now: the review is too.
+    const confined = Boolean(rec.confined) || (providerInfo(rec.provider).sandbox && this.sandboxed(rec.cwd));
+    const login = this.reviewLogin(rec, { confined });
     if (!login) {
-      this.emit(st, { type: 'system.note', text: 'Not reviewed: there is no other login on this runner to review the change with.' });
+      const text = confined
+        ? 'Not reviewed: this thread runs in a sandbox, and there is no other login on this runner that can review it there.'
+        : 'Not reviewed: there is no other login on this runner to review the change with.';
+      this.emit(st, { type: 'system.note', text });
       // Said once, until the next message from Mike.
       rec.labReviews = LAB_REVIEW_ROUNDS;
       this.markDirty(st);
@@ -92,6 +102,10 @@ export const labReviewPart = {
         // Full, as before; an Ask or Auto one asks or checks the same way.
         // Anything else (a record from before modes) gets Ask.
         permissionMode: reviewMode(rec.permissionMode),
+        // And never outside a sandbox the reviewed thread is shut in: the
+        // same mode on the host is far more than it has. Said both ways,
+        // so makeThread neither guesses nor lets it out.
+        ...(confined ? { confined: true } : {}),
         title: cutSafely(`Review: ${rec.title}`, 120),
         // The same checkout, as it is now, not a worktree of its own.
         worktree: false,
@@ -113,7 +127,9 @@ export const labReviewPart = {
     const who = `${providerName(login.account.provider)} (${login.account.title})`;
     const text = login.independent
       ? `Another lab is reviewing this change before it's done: ${who}, in thread ${threadId.slice(0, 8)}.`
-      : `A fresh ${who} session is reviewing this change before it's done, in thread ${threadId.slice(0, 8)}. It isn't another lab: none of this folder's logins are.`;
+      : login.boxed
+        ? `A fresh ${who} session is reviewing this change before it's done, in thread ${threadId.slice(0, 8)}, in the sandbox. It isn't another lab: this thread runs in a sandbox, and the other lab's logins can't.`
+        : `A fresh ${who} session is reviewing this change before it's done, in thread ${threadId.slice(0, 8)}. It isn't another lab: none of this folder's logins are.`;
     this.emit(st, { type: 'system.note', text });
     this.log.info('lab review started', { threadId: rec.id, reviewer: threadId, account: login.account.id, round });
     return threadId;
@@ -203,8 +219,9 @@ export const labReviewPart = {
   },
 
   // The login a review of this thread runs on: another provider's when the
-  // folder allows one, else a fresh session of the same provider.
-  reviewLogin(this: Runner, rec: ThreadRecord): ReviewLogin | undefined {
+  // folder allows one, else a fresh session of the same provider. For a
+  // thread in a sandbox, only a provider that runs in one.
+  reviewLogin(this: Runner, rec: ThreadRecord, o: { confined?: boolean } = {}): ReviewLogin | undefined {
     const accounts = this.usableAccounts();
     const pools = this.pools();
     const kept = poolForFolder(pools, rec.cwd);
@@ -223,10 +240,11 @@ export const labReviewPart = {
       if (kept) return undefined;
       return accounts.find((a) => a.provider === provider && !keptIds.has(a.id) && !pools.some((p) => poolAccounts(p, accounts).includes(a)));
     };
-    const lab = pick(other);
+    const fits = (provider: Provider) => !o.confined || providerInfo(provider).sandbox;
+    const lab = fits(other) ? pick(other) : undefined;
     if (lab) return { account: lab, independent: true };
-    const same = pick(rec.provider);
-    return same ? { account: same, independent: false } : undefined;
+    const same = fits(rec.provider) ? pick(rec.provider) : undefined;
+    return same ? { account: same, independent: false, ...(!fits(other) && pick(other) ? { boxed: true } : {}) } : undefined;
   },
 };
 

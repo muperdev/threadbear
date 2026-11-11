@@ -91,7 +91,11 @@ export function releaseExists(dir, id) {
 // Only boots since current was last activated count (deploy-runner.sh
 // records `activated`), so `--rollback --force` onto a release that crashed
 // a few minutes ago gives it fresh tries instead of going straight back.
-export function planBoot(state, now, exists, pid = process.pid) {
+//
+// `configBroken` (runnerJsonBroken below) holds back the rollback: a runner
+// that won't start on a broken runner.json isn't a broken release, and one
+// from before 9 Nov reads that file as {} and writes over it.
+export function planBoot(state, now, exists, pid = process.pid, configBroken = false) {
   const at = new Date(now).toISOString();
   const current = state.current;
   const activatedAt = state.activated && state.activated.release === current ? Date.parse(state.activated.at) : NaN;
@@ -100,7 +104,7 @@ export function planBoot(state, now, exists, pid = process.pid) {
   // This boot counts: the third start in the window is the one that
   // switches, so a broken release gets two tries.
   const crashLooping = Boolean(current) && current !== state.lastGood && earlier + 1 >= CRASH_BOOTS;
-  const canRollBack = crashLooping && exists(state.lastGood);
+  const canRollBack = crashLooping && !configBroken && exists(state.lastGood);
   const start = canRollBack ? state.lastGood : current;
   const next = { ...state, boots: [...state.boots, { release: start, at, pid }].slice(-KEEP_BOOTS) };
   let rolledBack = null;
@@ -110,7 +114,33 @@ export function planBoot(state, now, exists, pid = process.pid) {
     // try it again on purpose.
     Object.assign(next, { current: start, previous: current, rolledBack });
   }
-  return { state: next, start, rolledBack, stuck: crashLooping && !canRollBack };
+  return { state: next, start, rolledBack, stuck: crashLooping && !canRollBack && !configBroken, heldForConfig: crashLooping && configBroken };
+}
+
+// Whether <home>/runner.json is there but doesn't read as a JSON object
+// (the runner's config.ts, RunnerJsonError, has the reasons). Missing is a
+// first run, not broken.
+export function runnerJsonBroken(home) {
+  const file = path.join(home, 'runner.json');
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    if (e && e.code === 'ENOENT') {
+      try {
+        return fs.lstatSync(file).isSymbolicLink();
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  }
+  try {
+    const json = JSON.parse(text);
+    return !json || typeof json !== 'object' || Array.isArray(json);
+  } catch {
+    return true;
+  }
 }
 
 // Marks this process's boot as a clean stop: the runner listened and then
@@ -198,7 +228,8 @@ async function main() {
       log('ERROR', 'no release to start; build one with scripts/deploy-runner.sh or reinstall with scripts/install-runner.sh', { dir });
       return null;
     }
-    const plan = planBoot(state, Date.now(), (id) => releaseExists(dir, id), 0);
+    const plan = planBoot(state, Date.now(), (id) => releaseExists(dir, id), 0, runnerJsonBroken(path.dirname(dir)));
+    if (plan.heldForConfig) log('WARN', `release ${plan.start} keeps stopping at startup, but runner.json is broken, so not going back to an older release (it would write over the file); fix runner.json and it starts`);
     if (plan.rolledBack) {
       log('WARN', `release ${plan.rolledBack.from} failed to start ${CRASH_BOOTS} times in ${CRASH_WINDOW_MS / 60_000} minutes without being marked good; going back to ${plan.start}`);
       try {

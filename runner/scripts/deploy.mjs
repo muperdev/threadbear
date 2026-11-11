@@ -7,10 +7,11 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { pointCurrent, readCurrentLink, readState, releaseExists, writeState } from '../launch.mjs';
+import { pointCurrent, readCurrentLink, readState, releaseExists, runnerJsonBroken, writeState } from '../launch.mjs';
 import { connectRpc } from './rpc-client.mjs';
-import { Fail, smokeTimedOut, step, unitTests } from './deploy-steps.mjs';
+import { ChecksUnavailable, Fail, SLEPT_EXIT, SleptThrough, UNAVAILABLE_EXIT, checkHostsFrom, checkSlept, nodeBeforeLaunch, remoteChecks, sleepCount, smokeHello, smokeTimedOut, step, unitTests } from './deploy-steps.mjs';
 // THREADBARE_* was the old name for these variables (config.ts, adoptOldNames).
 for (const [k, v] of Object.entries(process.env)) {
   const name = k.startsWith('THREADBARE_') ? 'THREADBEAR_' + k.slice(11) : undefined;
@@ -70,7 +71,7 @@ const DEFAULT_HOME = path.join(os.homedir(), 'Library', 'Application Support', '
 // scripts is the same; systemd takes launchd's place (install-runner.sh).
 const LINUX = process.platform === 'linux';
 // What a release holds from runner/, besides node_modules and release.json.
-const RELEASE_PATHS = ['src', 'bin', 'package.json', 'package-lock.json'];
+const RELEASE_PATHS = ['src', 'bin', 'package.json', 'package-lock.json', '.npmrc'];
 const KEEP_RELEASES = 5;
 const HEALTH_MS = 30_000;
 // How long a release that came up has to stay up before the deploy says so
@@ -252,19 +253,83 @@ function runnerIsAncestor(home) {
 function installedAs(c) {
   if (!c.labelKnown) return fs.existsSync(path.join(c.dir, 'launch.mjs')) ? 'releases' : 'missing';
   if (!fs.existsSync(c.plist)) return 'missing';
-  let args = [];
-  if (c.linux) {
-    args = unitExecStart(fs.readFileSync(c.plist, 'utf8'));
-  } else {
-    const r = spawnSync('plutil', ['-convert', 'json', '-o', '-', c.plist], { encoding: 'utf8' });
-    try {
-      args = JSON.parse(r.stdout).ProgramArguments ?? [];
-    } catch {
-      // unreadable: treated as not running releases
-    }
-  }
   const launch = path.join(c.dir, 'launch.mjs');
-  return args.some((a) => typeof a === 'string' && sameDir(a, launch)) && fs.existsSync(launch) ? 'releases' : 'checkout';
+  return programArgs(c).some((a) => typeof a === 'string' && sameDir(a, launch)) && fs.existsSync(launch) ? 'releases' : 'checkout';
+}
+
+// What the LaunchAgent (or systemd unit) runs, as its arguments; [] when
+// there's none or it can't be read.
+function programArgs(c) {
+  if (!c.labelKnown || !fs.existsSync(c.plist)) return [];
+  if (c.linux) return unitExecStart(fs.readFileSync(c.plist, 'utf8'));
+  const r = spawnSync('plutil', ['-convert', 'json', '-o', '-', c.plist], { encoding: 'utf8' });
+  try {
+    return JSON.parse(r.stdout).ProgramArguments ?? [];
+  } catch {
+    return []; // unreadable: treated as not running releases
+  }
+}
+
+// The Node the installed runner starts launch.mjs with, there or not.
+function installedNode(c) {
+  return nodeBeforeLaunch(programArgs(c), path.join(c.dir, 'launch.mjs'), sameDir);
+}
+
+// deploy.mjs again on `node`, as a child this one waits for. A SIGINT or
+// SIGTERM here goes on to it and this one waits for it to finish its own
+// cleanup (the lock, a half-built release), killing it if it hasn't within
+// STOP_GRACE_MS; its exit is this one's, a signal as 128 + its number. This
+// one exiting any other way takes it too.
+const STOP_GRACE_MS = 20_000;
+function reRunOn(node, argv) {
+  const env = { ...process.env, THREADBEAR_DEPLOY_NODE_GIVEN: '1' };
+  return new Promise((resolve, reject) => {
+    const child = spawn(node, [fileURLToPath(import.meta.url), ...argv], { stdio: 'inherit', env });
+    const running = () => child.exitCode === null && child.signalCode === null;
+    const stop = () => {
+      if (running()) child.kill('SIGKILL');
+    };
+    cleanups.push(stop);
+    // While it runs, a signal is passed on rather than ending this one.
+    const own = { SIGINT: process.listeners('SIGINT'), SIGTERM: process.listeners('SIGTERM') };
+    let killer;
+    const pass = (sig) => () => {
+      if (!running()) return;
+      child.kill(sig);
+      killer ??= setTimeout(stop, STOP_GRACE_MS);
+    };
+    const passers = { SIGINT: pass('SIGINT'), SIGTERM: pass('SIGTERM') };
+    for (const sig of ['SIGINT', 'SIGTERM']) {
+      process.removeAllListeners(sig);
+      process.on(sig, passers[sig]);
+    }
+    const restore = () => {
+      clearTimeout(killer);
+      for (const sig of ['SIGINT', 'SIGTERM']) {
+        process.removeListener(sig, passers[sig]);
+        for (const fn of own[sig]) process.on(sig, fn);
+      }
+      const at = cleanups.indexOf(stop);
+      if (at >= 0) cleanups.splice(at, 1);
+    };
+    child.on('error', (e) => {
+      restore();
+      reject(new Fail(`Couldn't run ${node}: ${e.message}`));
+    });
+    child.on('exit', (code, signal) => {
+      restore();
+      resolve(signal ? 128 + (os.constants.signals[signal] ?? 0) : (code ?? 1));
+    });
+  });
+}
+
+// Same file, through links (nvm's current, Homebrew's bin/node).
+function sameFile(a, b) {
+  try {
+    return fs.realpathSync(a) === fs.realpathSync(b);
+  } catch {
+    return a === b;
+  }
 }
 
 // Refuses a deploy or rollback the LaunchAgent wouldn't pick up. For the
@@ -668,8 +733,9 @@ function deployBackend(c, g, v) {
   if (r.status !== 0) throw new Fail('The backend deploy failed, so the runner stays on its current release. Fix it and deploy again, or pass --skip-backend.');
 }
 
-function checks(c) {
+function checks(c, g) {
   const opts = { cwd: c.runnerDir, env: cleanEnv() };
+  if (remoteChecks(checkHostsFrom(readJson(path.join(c.home, 'runner.json'))), g.root, opts)) return;
   if (!fs.existsSync(path.join(c.runnerDir, 'node_modules'))) step('Installing the checkout\'s packages', c.npm, ['ci', '--no-audit', '--no-fund'], opts);
   step('Typecheck', c.npm, ['run', 'typecheck'], opts);
   unitTests(c, opts);
@@ -805,6 +871,7 @@ async function smoke(c, id) {
   const killNow = () => kill('SIGKILL');
   cleanups.push(killNow);
   const started = Date.now();
+  const sleepsBefore = sleepCount();
   let problem = null;
   try {
     let port = null;
@@ -817,8 +884,13 @@ async function smoke(c, id) {
       port = /listening on (\d+)/.exec(fs.readFileSync(out, 'utf8'))?.[1];
       if (!port) await sleep(100);
     }
-    const p = await probe(home);
-    if (p.state !== 'up') throw new Error(`hello on port ${port} got no answer`);
+    const p = await smokeHello({
+      probe: () => probe(home),
+      waited: () => Date.now() - started,
+      load: () => os.loadavg()[0] / os.cpus().length,
+      exited: () => exited,
+      sleep,
+    });
     if (releaseOf(p.version) !== id) throw new Error(`it says it is ${p.version || 'no version'}, not ${id}`);
   } catch (e) {
     problem = e.message;
@@ -832,6 +904,7 @@ async function smoke(c, id) {
     say('failed');
     console.error(`Output:\n${tail(out)}\nRunner log:\n${tail(path.join(tmp, 'runner.log'))}`);
     fs.rmSync(tmp, { recursive: true, force: true });
+    checkSlept(sleepsBefore, sleepCount(), `the smoke test (${problem}); current is unchanged`);
     throw new Fail(`The smoke test failed: ${problem}. current is unchanged.`);
   }
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -1075,6 +1148,12 @@ async function wentWrong(c, id, before, r, waitMs) {
   );
   const rolledBack = readState(c.dir).rolledBack;
   if (rolledBack?.from === id) console.error(`launch.mjs went back to ${rolledBack.to} after ${id} kept crashing at startup.`);
+  if (runnerJsonBroken(c.home)) {
+    // Broken since the deploy began: this release refused it, and the one
+    // before may be from before 9 Nov, which would write over it.
+    console.error(`${path.join(c.home, 'runner.json')} isn't valid JSON, which is why ${id} stopped. It stays current, not going back to ${before.current ?? 'the one before'} (which could write over the file): fix runner.json and the runner starts. Why is in ${c.log}.`);
+    return 1;
+  }
   if (before.current && before.current !== id && releaseExists(c.dir, before.current)) {
     restore(c, before, r.result === 'stopped' ? id : undefined);
     console.error(`current points at ${before.current} again.`);
@@ -1259,6 +1338,9 @@ function refuseWaiting(c, v, live) {
 }
 
 async function rollback(c, v, waitMs) {
+  // The release before may be from before 9 Nov, which writes over a
+  // broken runner.json; and no release starts on one anyway.
+  if (runnerJsonBroken(c.home)) throw new Fail(`${path.join(c.home, 'runner.json')} isn't valid JSON. Fix it first: going back to an older release could write over it.`);
   const state = readState(c.dir);
   const cur = currentId(c);
   const target = state.previous;
@@ -1309,6 +1391,9 @@ function warnStaleLaunch(c) {
 }
 
 async function deploy(c, v, waitMs) {
+  // The new release wouldn't start on it, and going back to an older one
+  // (wentWrong) would write over it.
+  if (runnerJsonBroken(c.home)) throw new Fail(`${path.join(c.home, 'runner.json')} isn't valid JSON. Fix it first: no runner starts on it, and one from before 9 Nov would write over it.`);
   // A LaunchAgent that still runs a checkout would never pick up the release.
   if (!v['no-restart']) requireReleases(c);
   const g = gitInfo(c);
@@ -1351,7 +1436,7 @@ async function deploy(c, v, waitMs) {
   warnStaleLaunch(c);
   if (off) say(`Note: ${off}`);
   if (v['skip-checks']) say('Skipping the checks.');
-  else checks(c);
+  else checks(c, g);
   const id = newReleaseId(c, g.short, dirty);
   build(c, id, g, dirty);
   try {
@@ -1434,6 +1519,31 @@ async function main(argv) {
     console.error(off);
     return 1;
   }
+  // Builds and tests run on the Node the installed runner starts releases
+  // with, so one that passes here also starts there: run by hand,
+  // deploy-runner.sh takes the node on PATH or nvm's newest (find-node.sh),
+  // and a thread's THREADBEAR_NODE is its own runner's, which a deploy to
+  // another one (--home, --label) needn't share. A release tested on Node 26
+  // and started on 24 could pass here and crash there (Codex's review, 9 Nov
+  // 2026). install-runner.sh says when the Node it passes is the one it's
+  // installing (THREADBEAR_DEPLOY_NODE_GIVEN), as the plist may still name
+  // the old one. A rollback builds and tests nothing.
+  if (process.env.THREADBEAR_DEPLOY_NODE_GIVEN !== '1' && !v.rollback) {
+    const target = installedNode(c);
+    if (target && !fs.existsSync(target)) {
+      throw new Fail(`The runner at ${c.home} is installed to start on ${target}, which isn't there any more, so no release would start. Reinstall it on a Node 24 or newer: ${path.join(c.runnerDir, 'scripts', 'install-runner.sh')} --node <path>${c.isDefaultHome ? '' : ` --home ${c.home} --label ${c.label}`}`);
+    }
+    if (target && !sameFile(target, process.execPath)) {
+      // SIGKILL at the deadline: a shim that ignores SIGTERM can't hold it.
+      const ver = spawnSync(target, ['--version'], { encoding: 'utf8', timeout: 30_000, killSignal: 'SIGKILL' });
+      const said = (ver.stdout ?? '').trim();
+      if (ver.status !== 0 || !/^v\d+\.\d+\.\d+/.test(said)) {
+        throw new Fail(`The runner at ${c.home} is installed to start on ${target}, which doesn't answer --version as Node does (${ver.error?.message ?? (said.slice(0, 80) || `exit ${ver.status}`)}). Reinstall it with install-runner.sh --node <path>.`);
+      }
+      say(`Using the Node the runner runs on, ${target} (${said}), not ${process.execPath}.`);
+      return reRunOn(target, argv);
+    }
+  }
   // Everything that can be refused is refused before anything is built.
   if (v.now && v['no-restart']) throw new Fail('--now and --no-restart contradict each other.');
   if (v.now && !c.labelKnown) throw new Fail(`--now restarts through launchd, and ${c.home} isn't the default data dir, so pass --label with its launchd label.`);
@@ -1455,6 +1565,6 @@ main(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (e) => {
     console.error(e instanceof Fail ? e.message : (e?.stack ?? String(e)));
-    process.exit(1);
+    process.exit(e instanceof SleptThrough ? SLEPT_EXIT : e instanceof ChecksUnavailable ? UNAVAILABLE_EXIT : 1);
   },
 );

@@ -145,6 +145,9 @@ npm run web:deploy`). For a site-only change,
 `npx static-hosting upload --build --build-command 'npm run web:build' --dist web/dist --prod`.
 A plain `npm run web:build` refuses to run without `VITE_CONVEX_URL`, which
 the static-hosting CLI sets: a build without it can't reach Convex.
+In a thread's worktree there's no `.env.local` (it isn't in git), and the
+upload says it "Could not reach component staticHosting": copy the main
+checkout's in for the upload and delete it after.
 
 ## Not done
 

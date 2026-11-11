@@ -37,7 +37,7 @@ test('the docker run mounts the folder, the login and the CLI at the same paths,
       command: '/home/mike/.local/bin/claude',
       args: ['--output-format', 'stream-json', '--settings', '/tmp/settings-abc.json', '--resume', 'abc'],
       cwd: '/home/mike/sandboxed/demo',
-      env: { PATH: '/usr/bin', HOME: '/home/mike', ANTHROPIC_MODEL: 'x', THREADBEAR_THREAD_ID: 't1', GONE: undefined },
+      env: { PATH: '/usr/bin', HOME: '/home/mike', ANTHROPIC_MODEL: 'x', THREADBEAR_THREAD_ID: 't1', THREADBEAR_NODE: '/Users/mike/.nvm/node', THREADBARE_NODE: '/Users/mike/.nvm/node', GONE: undefined },
     },
     { folders: ['/home/mike/sandboxed'], image: 'threadbear-sandbox', docker: 'docker' },
     {
@@ -58,7 +58,7 @@ test('the docker run mounts the folder, the login and the CLI at the same paths,
     '/tmp/settings-abc.json:/tmp/settings-abc.json:ro',
   ]);
   const envs = a.flatMap((x, i) => (x === '-e' ? [a[i + 1]] : []));
-  assert.deepEqual(envs.sort(), ['ANTHROPIC_MODEL', 'HOME=/home/mike', 'THREADBEAR_THREAD_ID'], "the container's own PATH, and nothing unset");
+  assert.deepEqual(envs.sort(), ['ANTHROPIC_MODEL', 'HOME=/home/mike', 'THREADBEAR_THREAD_ID'], "the container's own PATH and node, and nothing unset");
   assert.deepEqual(a.slice(a.indexOf('-w'), a.indexOf('-w') + 2), ['-w', '/home/mike/sandboxed/demo']);
   // The image, then the CLI's real file and its own arguments, untouched.
   const at = a.indexOf('threadbear-sandbox');

@@ -14,6 +14,11 @@
     // Anything that isn't a file gets 404.html, with a 404.
     "not_found_handling": "404-page"
   },
+  // The changelog's pictures and clips (worker.mjs serves them at /media/; scripts/media.mjs
+  // uploads them). Kept out of the repo so forks don't download them.
+  "r2_buckets": [
+    { "binding": "MEDIA", "bucket_name": "threadbear-site-media" }
+  ],
   "routes": [
     {
       "pattern": "threadbear.mikecann.app",

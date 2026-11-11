@@ -150,6 +150,7 @@ final class FilePreviewPressTests: XCTestCase {
         let click = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: middle, modifierFlags: [], timestamp: 0,
                                                      windowNumber: view.window!.windowNumber, context: nil,
                                                      eventNumber: 0, clickCount: 1, pressure: 1))
+        // Another Mac's copy: nothing in the Finder to show.
         let menu = try XCTUnwrap(view.menu(for: click))
         XCTAssertEqual(menu.items.map(\.title), ["Copy Image"])
 
@@ -190,6 +191,31 @@ final class FilePreviewPressTests: XCTestCase {
         XCTAssertTrue(view.pressTarget(at: middle) === view)
         view.mouseDown(with: down)
         XCTAssertEqual(pane.presses, 1)
+    }
+
+    /// Right-click, Show in Finder and Copy Path, as a file link in the
+    /// transcript has (Behrooz looked there for it, 9 Nov).
+    func testAPictureOnThisMacShowsInTheFinder() throws {
+        let image = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { rect in
+            NSColor.systemPink.setFill(); rect.fill(); return true
+        }
+        let png = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation))?.representation(using: .png, properties: [:]))
+        let view = try shown("shot.png", png)
+        var revealed: [URL] = []
+        view.reveal = { revealed.append($0) }
+        let click = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: middle, modifierFlags: [], timestamp: 0,
+                                                     windowNumber: view.window!.windowNumber, context: nil,
+                                                     eventNumber: 0, clickCount: 1, pressure: 1))
+        let menu = try XCTUnwrap(view.menu(for: click))
+        XCTAssertEqual(menu.items.map(\.title), ["Copy Image", "", "Show in Finder", "Copy Path"])
+        let finder = try XCTUnwrap(menu.items.first { $0.title == "Show in Finder" })
+        menu.performActionForItem(at: menu.index(of: finder))
+        XCTAssertEqual(revealed.map(\.lastPathComponent), ["shot.png"])
+
+        let board = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        addTeardownBlock { board.releaseGlobally() }
+        XCTAssertTrue(view.copyPath(to: board))
+        XCTAssertEqual(board.string(forType: .string), revealed.first?.path)
     }
 
     func testOtherFilesHaveNoCopyImage() throws {

@@ -168,6 +168,13 @@ final class TextFileController: NSObject, NSTextViewDelegate {
     /// doesn't. (Not just the view differing from the file: a cut-off
     /// file's view has a line saying so at the end.)
     @ObservationIgnored private var drafted = false
+    /// Markdown drawn (Preview): it reads as a page, with margins and lines
+    /// no longer than `pageWidth` however wide the panel is.
+    @ObservationIgnored private var drawnPage = false {
+        didSet { pageInset() }
+    }
+    @ObservationIgnored private var resized: Any?
+    static let pageWidth: CGFloat = 720
 
     /// The newest one, for the automation's `preview` command.
     nonisolated(unsafe) static weak var current: TextFileController?
@@ -253,6 +260,10 @@ final class TextFileController: NSObject, NSTextViewDelegate {
         document.watch(shown: { [weak self] in self?.shownText ?? "" }) { [weak self] change in
             self?.fileChanged(change)
         }
+        scroll.contentView.postsFrameChangedNotifications = true
+        resized = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scroll.contentView, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pageInset() }
+        }
         // Quitting mid-edit: write what's typed before the app goes.
         terminating = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { _ = self?.saveNow() }
@@ -264,6 +275,8 @@ final class TextFileController: NSObject, NSTextViewDelegate {
         document.stopWatching()
         if let terminating { NotificationCenter.default.removeObserver(terminating) }
         terminating = nil
+        if let resized { NotificationCenter.default.removeObserver(resized) }
+        resized = nil
     }
 
     /// Reads the file again (the same file opened again).
@@ -300,7 +313,7 @@ final class TextFileController: NSObject, NSTextViewDelegate {
         if !editing && isMarkdown {
             if text.utf8.count <= Self.renderInline {
                 storage.setAttributedString(MarkdownRenderer.withLocalPictures(localPictures) { MarkdownRenderer.render(text).string })
-                textView.textContainerInset = NSSize(width: 14, height: 12)
+                drawnPage = true
             } else {
                 setPlain(text)
                 let mine = generation
@@ -312,7 +325,7 @@ final class TextFileController: NSObject, NSTextViewDelegate {
                             guard mine == self.generation else { return }
                             let place = self.scroll.contentView.bounds.origin
                             self.textView.textStorage?.setAttributedString(rendered)
-                            self.textView.textContainerInset = NSSize(width: 14, height: 12)
+                            self.drawnPage = true
                             self.restore(place: place)
                         }
                     }
@@ -332,8 +345,22 @@ final class TextFileController: NSObject, NSTextViewDelegate {
 
     private func setPlain(_ text: String) {
         textView.textStorage?.setAttributedString(NSAttributedString(string: text, attributes: Self.plainAttributes))
-        textView.textContainerInset = NSSize(width: 10, height: 10)
+        drawnPage = false
         textView.typingAttributes = Self.plainAttributes
+    }
+
+    /// The page's margins for the panel's width now: the text sits in a
+    /// column `pageWidth` wide at most, in the middle. Plain and edited
+    /// text keeps the editor's narrow margin.
+    private func pageInset() {
+        let inset: NSSize
+        if drawnPage {
+            let width = scroll.contentView.bounds.width
+            inset = NSSize(width: max(24, ((width - Self.pageWidth) / 2).rounded(.down)), height: 20)
+        } else {
+            inset = NSSize(width: 10, height: 10)
+        }
+        if textView.textContainerInset != inset { textView.textContainerInset = inset }
     }
 
     static var plainAttributes: [NSAttributedString.Key: Any] { [.font: font, .foregroundColor: NSColor.labelColor] }

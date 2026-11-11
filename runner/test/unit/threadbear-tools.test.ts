@@ -1796,3 +1796,32 @@ test('a whole id whose lookup fails for another reason says so, not "No thread"'
   assert.equal(r.isError, true);
   assert.match(r.content[0].text, /try again in a moment/);
 });
+
+test('move_thread with a runner asks the main Mac to move the thread whole, and keeps its folder form', async () => {
+  const h = makeHarness();
+  const { thread: me } = start(h, 'Move me');
+  const asked: unknown[] = [];
+  const control: RemoteControl = {
+    list: async () => ({ runners: [], threads: [] }),
+    call: async () => undefined,
+    runners: async () => [
+      { id: 'm5runner0001', name: 'M5' },
+      { id: 'legitcloud01', name: 'Hetzner Cloud' },
+    ],
+    move: async (p) => {
+      asked.push(p);
+      return 'Moving it to Hetzner Cloud.';
+    },
+  };
+  const call = toolsWith(h, me.id, control);
+  const r = await call('move_thread', { runner: 'cloud', folder: '/home/mike/x' });
+  assert.equal(r.error, false, r.text);
+  assert.match(r.text, /Moving it to Hetzner Cloud/);
+  assert.deepEqual(asked, [{ threadId: me.id, runnerId: 'legitcloud01', runnerName: 'Hetzner Cloud', cwd: '/home/mike/x' }]);
+  // `then` is for folder moves; neither folder nor runner is an error.
+  assert.equal((await call('move_thread', { runner: 'cloud', then: 'go' })).error, true);
+  assert.equal((await call('move_thread', {})).error, true);
+  // Without the main Mac's mover, it says what's needed.
+  const none = toolsWith(h, me.id, undefined);
+  assert.match((await none('move_thread', { runner: 'cloud' })).text, /main Mac's runner/);
+});

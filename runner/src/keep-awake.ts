@@ -1,5 +1,6 @@
 // Keeps the Mac from going to sleep on its own while a thread is working
-// (experiment `keepAwake`, experiments.ts). Without it, a long turn on a
+// (on unless runner.json's `keepAwake` is false, Settings > General; an
+// experiment from 6 to 10 Nov 2026). Without it, a long turn on a
 // Mac left alone stopped when the Mac slept, and a thread steered from the
 // phone sat there until someone woke the Mac. Conductor, Synara, Zuse and
 // Autohand all do this (6 Nov 2026, thread d698c77d).
@@ -26,7 +27,7 @@ export type Power = { onBattery: boolean; percent?: number };
 
 export type KeepAwakeDeps = {
   busy: () => number; // threads working now
-  on: () => boolean; // the experiment, read each sweep
+  on: () => boolean; // the setting, read each sweep
   clock: Clock;
   log: Logger;
   // Starts caffeinate and returns a handle to stop it; replaced in tests.

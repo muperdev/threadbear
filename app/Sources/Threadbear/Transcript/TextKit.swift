@@ -10,6 +10,32 @@ final class BackgroundLayoutManager: NSLayoutManager {
     /// view).
     var hoveredRow: NSRange?
 
+    /// The icon of a ```bash box under the pointer (ShellBlockIcons), by
+    /// where the box's text starts.
+    var hoveredShellIcon: (location: Int, icon: ShellBlockIcons.Icon)?
+
+    /// The rounded box around a `.tbBlockBackground` run, in the text
+    /// container's coordinates.
+    func blockBox(_ effective: NSRange, in storage: NSTextStorage, width: CGFloat) -> NSRect? {
+        let glyphs = glyphRange(forCharacterRange: effective, actualCharacterRange: nil)
+        var box = NSRect.null
+        enumerateLineFragments(forGlyphRange: glyphs) { _, used, _, _, _ in
+            box = box.union(used)
+        }
+        guard !box.isNull else { return nil }
+        let style = storage.attribute(.paragraphStyle, at: effective.location, effectiveRange: nil) as? NSParagraphStyle
+        let pad = MarkdownRenderer.codePad
+        // From the first line's indent when it's further left: an
+        // answer row's circle sits left of its words.
+        let head = min(style?.headIndent ?? 0, style?.firstLineHeadIndent ?? 0) - pad
+        // A ```bash box's text stops short of its icons; the box doesn't.
+        let icons = storage.attribute(.tbShellBlock, at: effective.location, effectiveRange: nil) == nil ? 0 : ShellBlockIcons.reserve
+        let tail = width + (style?.tailIndent ?? 0) + pad + icons
+        var rect = NSRect(x: head, y: box.minY - pad, width: max(0, tail - head), height: box.height + pad * 2)
+        rect.origin.y = max(0, rect.origin.y)
+        return rect
+    }
+
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
         guard let storage = textStorage, let container = textContainers.first, storage.length > 0 else { return }
@@ -27,20 +53,7 @@ final class BackgroundLayoutManager: NSLayoutManager {
             var effective = NSRange()
             _ = storage.attribute(.tbBlockBackground, at: range.location, longestEffectiveRange: &effective, in: whole)
             guard drawnBlocks.insert(effective.location).inserted else { return }
-            let glyphs = glyphRange(forCharacterRange: effective, actualCharacterRange: nil)
-            var box = NSRect.null
-            enumerateLineFragments(forGlyphRange: glyphs) { _, used, _, _, _ in
-                box = box.union(used)
-            }
-            guard !box.isNull else { return }
-            let style = storage.attribute(.paragraphStyle, at: effective.location, effectiveRange: nil) as? NSParagraphStyle
-            let pad = MarkdownRenderer.codePad
-            // From the first line's indent when it's further left: an
-            // answer row's circle sits left of its words.
-            let head = min(style?.headIndent ?? 0, style?.firstLineHeadIndent ?? 0) - pad
-            let tail = width + (style?.tailIndent ?? 0) + pad
-            var rect = NSRect(x: head, y: box.minY - pad, width: max(0, tail - head), height: box.height + pad * 2)
-            rect.origin.y = max(0, rect.origin.y)
+            guard var rect = self.blockBox(effective, in: storage, width: width) else { return }
             rect = rect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: 0.25, dy: 0.25)
             let path = NSBezierPath(roundedRect: rect, xRadius: zoomed(8), yRadius: zoomed(8))
             color.setFill()
@@ -48,6 +61,15 @@ final class BackgroundLayoutManager: NSLayoutManager {
             Theme.cardBorder.setStroke()
             path.lineWidth = 0.5
             path.stroke()
+            if let command = storage.attribute(.tbShellBlock, at: effective.location, effectiveRange: nil) as? String {
+                let hovered = self.hoveredShellIcon?.location == effective.location ? self.hoveredShellIcon?.icon : nil
+                MainActor.assumeIsolated {
+                    // Drawn for the thread whose transcript this is, never
+                    // the selection's (ShellBlockIcons.shown(in:)).
+                    let threadId = self.textContainers.first?.textView.flatMap { TranscriptTextView.threadId(around: $0) }
+                    ShellBlockIcons.draw(command: command, box: rect, hovered: hovered, threadId: threadId)
+                }
+            }
             // The lines between answer rows, across the box.
             storage.enumerateAttribute(.tbRowRule, in: effective) { rule, ruleRange, _ in
                 guard rule != nil else { return }
@@ -528,6 +550,12 @@ final class TranscriptTextView: NSTextView {
             DispatchQueue.main.asyncAfter(deadline: .now() + DraftBlockCell.copiedFor + 0.05) { [weak self] in self?.setNeedsDisplay(frame) }
             return
         }
+        // A ```bash box's play and copy icons (ShellBlockIcons).
+        if let hit = shellIcon(at: point) {
+            closeChipCard()
+            press(hit)
+            return
+        }
         // A press on a link (a file, a web page, an asks card's link
         // button) that moves drags it out (FileDrag); let go first and
         // it's a click as before.
@@ -639,6 +667,68 @@ final class TranscriptTextView: NSTextView {
         return frame.insetBy(dx: 0, dy: -3).contains(point) ? (cell, frame) : nil
     }
 
+    struct ShellIconHit {
+        let command: String
+        let icon: ShellBlockIcons.Icon
+        /// In this view's coordinates.
+        let rect: NSRect
+        /// Where the box's text starts.
+        let location: Int
+    }
+
+    /// The icon of a ```bash box at `point`, if it's on one.
+    func shellIcon(at point: NSPoint) -> ShellIconHit? {
+        guard let manager = layoutManager as? BackgroundLayoutManager, let textContainer, let storage = textStorage, storage.length > 0 else { return nil }
+        let origin = textContainerOrigin
+        let local = NSPoint(x: point.x - origin.x, y: point.y - origin.y)
+        let glyph = manager.glyphIndex(for: local, in: textContainer)
+        var index = manager.characterIndexForGlyph(at: glyph)
+        // Past the end of the line, the nearest glyph can be the newline
+        // after the command, which isn't part of the box.
+        if index >= storage.length || storage.attribute(.tbShellBlock, at: index, effectiveRange: nil) == nil { index -= 1 }
+        guard index >= 0, index < storage.length else { return nil }
+        var effective = NSRange()
+        guard let command = storage.attribute(.tbShellBlock, at: index, longestEffectiveRange: &effective, in: NSRange(location: 0, length: storage.length)) as? String,
+              let box = manager.blockBox(effective, in: storage, width: textContainer.size.width) else { return nil }
+        for icon in ShellBlockIcons.shown(in: transcriptThreadId) {
+            let rect = ShellBlockIcons.rect(icon, in: box)
+            if rect.contains(local) { return ShellIconHit(command: command, icon: icon, rect: rect.offsetBy(dx: origin.x, dy: origin.y), location: effective.location) }
+        }
+        return nil
+    }
+
+    func press(_ hit: ShellIconHit) {
+        ShellBlockIcons.markPressed(hit.icon, hit.command)
+        setNeedsDisplay(hit.rect)
+        DispatchQueue.main.asyncAfter(deadline: .now() + ShellBlockIcons.tickFor + 0.05) { [weak self] in self?.setNeedsDisplay(hit.rect) }
+        switch hit.icon {
+        case .copy:
+            ShellBlockIcons.copy(hit.command)
+            CopiedBubble.show(above: hit.rect, in: self)
+        case .put:
+            // The thread this transcript is, so the command only ever goes to
+            // that thread's own shell (AppModel.putInTerminal(_:from:)).
+            AppModel.shared.putInTerminal(ShellBlock(command: hit.command), from: transcriptThreadId) { [weak self] outcome in
+                guard outcome == .busy, let self else { return }
+                // Nothing typed over a running program or someone's own
+                // half-typed line, and the command isn't lost.
+                ShellBlockIcons.clearPressed(.put, hit.command)
+                ShellBlockIcons.copy(hit.command)
+                self.setNeedsDisplay(hit.rect)
+                CopiedBubble.show(above: hit.rect, in: self, text: "Terminal's in use, so it's copied")
+            }
+        }
+    }
+
+    /// Lights up the ```bash icon under the pointer, or none.
+    private func hoverShell(_ hit: ShellIconHit?) {
+        guard let manager = layoutManager as? BackgroundLayoutManager else { return }
+        let was = manager.hoveredShellIcon
+        guard was?.location != hit?.location || was?.icon != hit?.icon else { return }
+        manager.hoveredShellIcon = hit.map { ($0.location, $0.icon) }
+        needsDisplay = true
+    }
+
     private func richFrame(glyph: Int) -> NSRect {
         guard let layoutManager, let textContainer else { return .zero }
         let box = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer)
@@ -670,6 +760,7 @@ final class TranscriptTextView: NSTextView {
     /// text or the width changes.
     private func placeRichTips() {
         subviews.filter { $0 is RichTipAnchor }.forEach { $0.removeFromSuperview() }
+        placeShellTips()
         guard let layoutManager, let textContainer, let storage = textStorage, storage.length > 0,
               storage.string.utf16.contains(0xFFFC) else { return }
         layoutManager.ensureLayout(for: textContainer)
@@ -688,6 +779,26 @@ final class TranscriptTextView: NSTextView {
                 guard let rect = layout.buttons[action] else { continue }
                 let anchor = RichTipAnchor(frame: rect)
                 anchor.text = action.tip(cell.block)
+                addSubview(anchor)
+            }
+        }
+    }
+
+    private func placeShellTips() {
+        guard let manager = layoutManager as? BackgroundLayoutManager, let textContainer, let storage = textStorage, storage.length > 0 else { return }
+        let whole = NSRange(location: 0, length: storage.length)
+        var boxes: [NSRange] = []
+        storage.enumerateAttribute(.tbShellBlock, in: whole) { value, range, _ in
+            if value != nil { boxes.append(range) }
+        }
+        guard !boxes.isEmpty else { return }
+        manager.ensureLayout(for: textContainer)
+        let origin = textContainerOrigin
+        for range in boxes {
+            guard let box = manager.blockBox(range, in: storage, width: textContainer.size.width) else { continue }
+            for icon in ShellBlockIcons.shown(in: transcriptThreadId) {
+                let anchor = RichTipAnchor(frame: ShellBlockIcons.rect(icon, in: box).offsetBy(dx: origin.x, dy: origin.y))
+                anchor.text = icon.tip
                 addSubview(anchor)
             }
         }
@@ -835,6 +946,7 @@ final class TranscriptTextView: NSTextView {
             // either, and NSTextView doesn't get to set its I-beam.
             hoverRow(nil)
             hoverChip(nil)
+            hoverShell(nil)
             NSCursor.pointingHand.set()
             return
         }
@@ -842,8 +954,10 @@ final class TranscriptTextView: NSTextView {
         let point = convert(event.locationInWindow, from: nil)
         let chip = chip(at: point)
         let row = onAction == nil ? nil : row(at: point)
+        let shell = shellIcon(at: point)
         hoverRow(row?.range)
-        if chip != nil || row != nil || isAction(at: point) || pictureChip(at: point) != nil || isRichButton(at: point) { NSCursor.pointingHand.set() }
+        hoverShell(shell)
+        if chip != nil || row != nil || shell != nil || isAction(at: point) || pictureChip(at: point) != nil || isRichButton(at: point) { NSCursor.pointingHand.set() }
         if let chip { hoverChip(chip) } else { hoverPeek(peek(at: point)) }
     }
 
@@ -889,6 +1003,7 @@ final class TranscriptTextView: NSTextView {
         super.mouseExited(with: event)
         hoverChip(nil)
         hoverRow(nil)
+        hoverShell(nil)
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {

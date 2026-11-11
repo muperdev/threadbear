@@ -33,6 +33,24 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(settings, RunnerSettings(), "an older runner's key field is ignored")
     }
 
+    func testExperimentsDecodeAndAnUpdateSendsOnlyTheSwitch() throws {
+        let json = #"{"experiments":[{"id":"keepAwake","name":"Keep the Mac awake","does":"Stops `caffeinate`  idle sleep.","on":true},{"name":"no id"},{"id":"x"}]}"#
+        let settings = try JSONDecoder().decode(RunnerSettings.self, from: Data(json.utf8))
+        XCTAssertEqual(settings.experiments.map(\.id), ["keepAwake", "x"], "one with no id is skipped")
+        XCTAssertTrue(settings.experiments[0].on)
+        XCTAssertEqual(settings.experiments[1].name, "x", "a missing name falls back to the id")
+        XCTAssertFalse(settings.experiments[1].on)
+        XCTAssertEqual(SettingsText.experimentAbout(settings.experiments[0].does), "Stops caffeinate idle sleep.")
+        XCTAssertEqual(SettingsUpdate(experiments: ["keepAwake": false]).params, ["experiments": .object(["keepAwake": .bool(false)])])
+        XCTAssertEqual(try JSONDecoder().decode(RunnerSettings.self, from: Data("{}".utf8)).experiments, [], "an older runner sends none")
+    }
+
+    func testKeepAwakeShowsOnlyWhenTheRunnerSendsIt() throws {
+        XCTAssertNil(try JSONDecoder().decode(RunnerSettings.self, from: Data("{}".utf8)).keepAwake, "not a Mac, or an older runner: no switch")
+        XCTAssertEqual(try JSONDecoder().decode(RunnerSettings.self, from: Data(#"{"keepAwake":true}"#.utf8)).keepAwake, true)
+        XCTAssertEqual(SettingsUpdate(keepAwake: false).params, ["keepAwake": .bool(false)])
+    }
+
     func testUpdateSendsOnlyWhatChanged() {
         XCTAssertEqual(SettingsUpdate(idleMinutes: 20).params, ["idleMinutes": .number(20)])
         XCTAssertEqual(SettingsUpdate(followMain: false, pool: "claude").params,
@@ -55,6 +73,15 @@ final class SettingsTests: XCTestCase {
         XCTAssertFalse(try decode("{}").bringInSupported, "an older runner sends none")
         XCTAssertEqual(SettingsUpdate(bringIn: .every(7)).params, ["bringIn": .number(7)])
         XCTAssertEqual(SettingsUpdate(bringIn: .off).params, ["bringIn": .string("off")])
+    }
+
+    func testLabReviewIsOnUnlessTheRunnerSaysOff() throws {
+        func decode(_ json: String) throws -> RunnerSettings { try JSONDecoder().decode(RunnerSettings.self, from: Data(json.utf8)) }
+        XCTAssertTrue(try decode(#"{"labReview":true}"#).labReview)
+        XCTAssertFalse(try decode(#"{"labReview":false}"#).labReview)
+        XCTAssertTrue(try decode(#"{"labReview":true}"#).labReviewSupported)
+        XCTAssertFalse(try decode("{}").labReviewSupported, "an older runner sends none, so no switch")
+        XCTAssertEqual(SettingsUpdate(labReview: false).params, ["labReview": .bool(false)])
     }
 
     func testBringInChoicesKeepACustomNumber() {

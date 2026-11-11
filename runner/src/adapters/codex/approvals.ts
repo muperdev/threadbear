@@ -605,7 +605,10 @@ export class CodexApprovals {
       this.deps.reply(id, { decision: 'approved' });
       return;
     }
-    const input: Record<string, unknown> = { paths };
+    // Where a rename goes is part of what Allow allows, as the newer
+    // fileChange's paths already are (adapter.ts itemPaths): a rename names
+    // two files, so the phone can't show it all (Codex review, 9 Nov 2026).
+    const input: Record<string, unknown> = { paths: [...paths, ...moves] };
     if (p.reason) input.reason = p.reason;
     const title = editTitle(paths, this.deps.cwd());
     this.ask(

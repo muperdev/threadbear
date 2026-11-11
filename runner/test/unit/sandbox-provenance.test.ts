@@ -15,6 +15,7 @@ import path from 'node:path';
 import { FakeAccounts, makeHarness, tick, tmpDir, withCodex } from '../helpers/fakes.ts';
 import { TRUST_ALL } from '../../src/patch-trust.ts';
 import { buildThreadbearTools } from '../../src/threadbear-mcp.ts';
+import { CallerGate } from '../../src/rpc-gate.ts';
 import { Scheduler } from '../../src/schedules.ts';
 import { nullLogger } from '../../src/log.ts';
 import { dockerRun } from '../../src/sandbox.ts';
@@ -230,4 +231,46 @@ test('from a sandboxed thread, changing the login of a schedule or a thread outs
   const pools = await s.withCard('deny', 'update_thread', { threadId: s.host.id, pool: 'pin' });
   assert.match(pools.card.title, /^Change the logins of "Host work"/);
   s.sched.stop();
+});
+
+// Daybreak, 10 Nov 2026 ("Default-on reviews drop sandbox confinement"): a
+// lab review left `confined` out and started a Full Codex thread on the
+// host from a sandboxed one. makeThread now shuts in anything started from
+// a sandboxed thread unless the caller says the user allowed otherwise, so
+// the next caller to forget can't do the same.
+test('a thread started from a sandboxed one is shut in too, even when the caller leaves confined out', () => {
+  const s = setup();
+  const from = { kind: 'thread' as const, label: 'Review', threadId: s.me.id };
+  // In a sandbox folder: shut in.
+  const inBox = s.h.runner.create({ text: 'x', title: 'Inside', accountId: 'claude-3', cwd: s.demo, startedBy: from }).thread;
+  assert.equal(s.rec(inBox.id).confined, true);
+  // A Codex login, or a folder outside: refused, nothing made.
+  assert.throws(() => s.h.runner.create({ text: 'x', title: 'Codex', accountId: 'codex-main', cwd: s.demo, permissionMode: 'full', startedBy: from }), /Codex doesn't run in the sandbox/);
+  assert.throws(() => s.h.runner.create({ text: 'x', title: 'Out', accountId: 'claude-3', cwd: s.outside, startedBy: from }), /isn't in a sandbox folder/);
+  assert.equal(s.byTitle('Codex'), undefined);
+  assert.equal(s.byTitle('Out'), undefined);
+  assert.equal(s.h.codex.sessions.length, 0);
+  // With the user's yes it may start outside, as before.
+  const ok = s.h.runner.create({ text: 'x', title: 'Allowed out', accountId: 'claude-3', cwd: s.outside, startedBy: from, unconfine: true }).thread;
+  assert.equal(s.rec(ok.id).confined, undefined);
+  // From a thread outside any sandbox nothing changes.
+  const host = s.h.runner.create({ text: 'x', title: 'From host', accountId: 'codex-main', cwd: s.outside, startedBy: { kind: 'thread', label: 'Agent', threadId: s.host.id } }).thread;
+  assert.equal(s.rec(host.id).confined, undefined);
+});
+
+test("a button a sandboxed thread made, once allowed and pressed, still starts outside; a thread's own RPC can't say unconfine", () => {
+  const s = setup();
+  // As add_button saves one after its card's yes.
+  const st = s.h.runner.threads.get(s.me.id)!;
+  st.rec.buttons = [{ id: 'b1', title: 'Do it', start: { text: 'host work', cwd: s.outside, permissionMode: 'full' } } as never];
+  const pressed = s.h.runner.pressButton(s.me.id, 'b1').button as { pressed?: { threadId: string } };
+  assert.ok(pressed.pressed?.threadId);
+  assert.equal(s.rec(pressed.pressed!.threadId).confined, undefined);
+  assert.equal(s.rec(pressed.pressed!.threadId).cwd, s.outside);
+  // The caller gate: a restricted thread's threads.create loses unconfine.
+  const ask = s.h.runner.create({ text: 'x', title: 'Ask', accountId: 'claude-3', cwd: s.outside, permissionMode: 'ask' }).thread;
+  const gate = new CallerGate({ runner: s.h.runner });
+  const out = gate.check(ask.id, 'threads.create', { text: 'x', permissionMode: 'ask', unconfine: true, startedBy: { kind: 'thread', label: 'Agent', threadId: s.me.id } });
+  assert.equal(out.unconfine, undefined);
+  assert.equal((out.startedBy as { threadId: string }).threadId, ask.id, 'and it is started by the caller, not who it names');
 });

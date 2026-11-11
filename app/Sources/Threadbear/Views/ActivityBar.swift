@@ -31,14 +31,17 @@ struct ActivityBar: View {
             VStack(spacing: zoomed(4)) {
             // How many threads are in the Inbox section, so Mike can see
             // how far off inbox zero he is from any view (29 Oct).
+            // A view's icon brings the Threads panel back if ⌘/ folded it away.
             ActivityButton(symbol: "bubble.left.and.bubble.right", title: "Threads", shortcut: AppShortcuts.shared.display(.showInbox),
                            badge: app.sections.inbox.count, active: app.sidebarMode == .inbox, slides: true) {
+                app.threadsCollapsed = false
                 app.sidebarMode = .inbox
             }
             // Only once the runner has said it knows about schedules.
             if app.schedulesSupported {
                 ActivityButton(symbol: "clock", title: "Scheduled", shortcut: AppShortcuts.shared.display(.showScheduled),
                                badge: app.activeScheduleCount, active: app.sidebarMode == .scheduled, slides: true) {
+                    app.threadsCollapsed = false
                     app.showSchedules()
                 }
             }
@@ -46,12 +49,14 @@ struct ActivityBar: View {
             if app.projectsSupported {
                 ActivityButton(symbol: "square.stack.3d.up", title: "Projects", shortcut: AppShortcuts.shared.display(.showProjects),
                                active: app.sidebarMode == .projects, slides: true) {
+                    app.threadsCollapsed = false
                     app.showProjects()
                 }
                 // A count while it's looking at a thread or has some
                 // waiting: what it's doing and about to do.
                 ActivityButton(symbol: "books.vertical", title: "Librarian", shortcut: AppShortcuts.shared.display(.showLibrarian),
                                badge: app.librarian?.pendingCount, active: app.sidebarMode == .librarian, slides: true) {
+                    app.threadsCollapsed = false
                     app.showLibrarian()
                 }
             }
@@ -84,8 +89,15 @@ struct ActivityBar: View {
         .padding(.bottom, zoomed(10))
         .frame(width: Self.width)
         .frame(maxHeight: .infinity)
+        // Opaque, as the rail on the right is: a dock wider than its room
+        // in a narrow window runs under both.
+        .background(Color(nsColor: .windowBackgroundColor))
         .overlay(alignment: .trailing) {
+            // Starts under the title bar strip: the traffic lights are wider
+            // than the bar, so a full-height line cut between the yellow and
+            // green dots (Mike, 9 Nov).
             Rectangle().fill(.separator).frame(width: 0.5)
+                .padding(.top, RootView.options.headerHeight)
         }
     }
 }

@@ -36,6 +36,19 @@ struct AppDump: Encodable {
         var subagents: [SubagentInfo] = []
         /// "On bruce" for another runner's thread ("On bruce, offline").
         var runner: String? = nil
+        /// The sidebar row as it's drawn (ThreadRowView), for the specs: the
+        /// line under the title, whether the title's bold, the mark in the
+        /// gutter ("dot" or "tick"), the words on the right and the tile.
+        var place: String = ""
+        var bold: Bool = false
+        var mark: String? = nil
+        var trailing: String = ""
+        var tile: String = ""
+        /// Who started it, when it wasn't Mike: the mark before the place line
+        /// (`ThreadByline`), as an SF Symbol name.
+        var origin: String? = nil
+        /// The hover buttons' tips, while the row's hovered.
+        var hoverButtons: [String]? = nil
     }
 
     struct SubagentInfo: Encodable {
@@ -52,6 +65,10 @@ struct AppDump: Encodable {
         var threads: [Thread]
         /// Inbox and Scheduled sections only: folded away under their heading.
         var collapsed: Bool? = nil
+        /// The number drawn on the heading while it's folded.
+        var count: Int? = nil
+        /// How many rows it draws, for the Archived section (`ArchiveRows`).
+        var shown: Int? = nil
     }
 
     struct Sidebar: Encodable {
@@ -59,6 +76,10 @@ struct AppDump: Encodable {
         var sections: [Section]
         var snoozed: Int
         var archived: Int
+        /// How the Inbox is sorted ("needsYou", "newest", "oldest").
+        var sort: String = ""
+        /// Before the runner's first list: the grey loading rows are showing.
+        var loading: Bool = false
     }
 
     struct Composer: Encodable {
@@ -84,8 +105,113 @@ struct AppDump: Encodable {
         var pool: String? = nil
         /// The model chip as it reads ("Claude · Opus 5.5 · High").
         var chip: String = ""
+        /// After its title: "Limit reached", or "· 12%" running low.
+        var chipBadge: String? = nil
         /// The other runner it runs on ("bruce"); nil for this Mac.
         var runner: String? = nil
+        /// The open card in the box, for the behaviour specs: "Done" with
+        /// its follow-ups, or "Needs you" with each ask.
+        var card: [String]? = nil
+        /// The recap box's lines, while it's up.
+        var recap: [String]? = nil
+        /// A new thread from this box is on its way: its words stay, greyed
+        /// and locked, until the runner has made it (`composer.starting`).
+        var creating: Bool = false
+    }
+
+    /// The new-thread page, for the behaviour specs (`thread.newpage`),
+    /// while it's what's showing: what the heading and note say, the project
+    /// chip, and each login's room card.
+    struct NewThreadInfo: Encodable {
+        var heading: String
+        var note: String
+        var project: String?
+        var rooms: [RoomInfo]
+    }
+
+    struct RoomInfo: Encodable {
+        var label: String
+        var line: String
+        var selected: Bool
+        var note: String?
+    }
+
+    /// The slash palette over the composer while it's open (`composer.slash`).
+    struct PaletteInfo: Encodable {
+        var query: String
+        var category: String
+        var categories: [PaletteCategory]
+        var commands: [String]
+        var picked: String?
+        var detail: PaletteDetail?
+        /// What the list says when it has nothing to show.
+        var note: String?
+    }
+
+    struct PaletteCategory: Encodable {
+        var title: String
+        var count: Int
+    }
+
+    struct PaletteDetail: Encodable {
+        var title: String
+        var usage: String
+        var description: String?
+        var now: String?
+        var also: String?
+        var origin: String
+        var path: String?
+        var buttons: [String]
+    }
+
+    /// The Move sheet while it's up (MoveSheet), for the behaviour specs.
+    struct MoveSheetInfo: Encodable {
+        var title: String
+        var subtitle: String
+        var folder: String
+        var login: String
+        var problems: [String]
+        var leftBehind: [String]
+        var clone: String?
+        var asking: Bool
+        var canMove: Bool
+    }
+
+    /// Set by the sheet as it draws, so `dump` can say what it shows.
+    @MainActor static var moveSheetNow: MoveSheetInfo?
+
+    /// Set where the palette is drawn (ComposerView.paletteContent), so
+    /// `dump` can say what it shows; nil while it's closed.
+    @MainActor static var slashPalette: PaletteInfo?
+
+    /// What a palette shows, in the words `dump` gives them.
+    @MainActor
+    static func paletteInfo(commands: [SlashCommand]?, query: String, provider: String, recent: [String], state: PaletteState, current: [String: String], canOpenFile: Bool) -> PaletteInfo {
+        let all = commands ?? []
+        let matches = SlashPalette.matches(all, query: query, category: state.category, recent: recent)
+        let picked = matches.first { $0.name == state.selected } ?? matches.first
+        let categories = SlashPalette.counts(all, query: query, recent: recent).map { PaletteCategory(title: $0.0.title(provider: provider), count: $0.1) }
+        let note: String?
+        if commands == nil {
+            note = "Getting this thread's commands…"
+        } else if matches.isEmpty {
+            note = query.isEmpty ? "Nothing here yet." : "No command matches /\(query). Send it and it goes to the agent as words."
+        } else {
+            note = nil
+        }
+        let detail = picked.map { command in
+            PaletteDetail(
+                title: "/\(command.name)",
+                usage: command.usage,
+                description: command.description.flatMap { $0.isEmpty ? nil : $0 },
+                now: current[command.name],
+                also: (command.aliases ?? []).isEmpty ? nil : "Also " + (command.aliases ?? []).map { "/\($0)" }.joined(separator: ", "),
+                origin: SlashPalette.origin(of: command, provider: provider),
+                path: command.path.map { SlashPalette.shortPath($0) },
+                buttons: ["Run", "Add details"] + (command.path != nil && canOpenFile ? ["Open file"] : [])
+            )
+        }
+        return PaletteInfo(query: query, category: state.category.title(provider: provider), categories: categories, commands: matches.map { "/\($0.name)" }, picked: picked.map { "/\($0.name)" }, detail: detail, note: note)
     }
 
     struct Settings {
@@ -116,6 +242,7 @@ struct AppDump: Encodable {
         case .auto: "auto"
         case .plan: "plan first"
         case .full: "full access"
+        case .unknown: "unknown"
         }
     }
 
@@ -153,6 +280,11 @@ struct AppDump: Encodable {
         var buttons: [String]? = nil
     }
 
+    struct LimitInfo: Encodable {
+        var text: String
+        var button: String?
+    }
+
     struct Transcript: Encodable {
         var threadId: String
         var state: String
@@ -166,6 +298,9 @@ struct AppDump: Encodable {
     var connection: String
     var runnerVersion: String
     var banner: BannerInfo?
+    /// The line under the bar when the open thread can't go on where it is
+    /// (LimitBanner): what it says and its button.
+    var limit: LimitInfo?
     /// The Archived note with Undo at the top of the thread panel: its thread.
     var archivedNote: String?
     /// The milestone note at the top of the thread panel: its first line.
@@ -181,6 +316,12 @@ struct AppDump: Encodable {
     /// Its action chips (ActionChips).
     var actions: [ActionInfo] = []
     var composer: Composer
+    /// The new-thread page while it's showing: nil with a thread open.
+    var newThread: NewThreadInfo? = nil
+    /// The slash palette over the composer while it's open.
+    var palette: PaletteInfo? = nil
+    /// The Move sheet while it's up.
+    var moveSheet: MoveSheetInfo? = nil
     /// The open card of asks and what's picked on it, as lines; nil when
     /// there's none.
     var decisions: [String]? = nil
@@ -189,6 +330,11 @@ struct AppDump: Encodable {
     var usage: Usage? = nil
     /// The project page showing in place of the thread, if one is.
     var project: ProjectInfo? = nil
+    /// The open project page's decisions (the projectDecisions experiment),
+    /// one line a thread: "Title: first ask | second ask", "(sending)" at
+    /// the end while an answer's on its way. Nil with the experiment off or
+    /// no project page open.
+    var projectDecisions: [String]? = nil
     /// The Projects page's cards, while it's showing: "Title: 1 needs
     /// you · 2 working" (or "Title: quiet").
     var projectCards: [String]? = nil
@@ -199,6 +345,72 @@ struct AppDump: Encodable {
     var pools: [PoolInfo] = []
     /// The window's panels and where they are (WindowDock), in one line.
     var dock: String = ""
+    /// The window's zoom, in percent (TextZoom).
+    var zoom: Int = 100
+    /// "end" or "empty" while the end-of-inbox note is up (InboxEndToast).
+    var inboxEndNote: String? = nil
+    /// The activity bar and the right rail, as drawn (ActivityBar, PanelRail).
+    var rails: Rails = Rails()
+    /// The panel bar's title line and its buttons' tips (ThreadHeader).
+    var header: Header? = nil
+
+    struct RailButton: Encodable {
+        var title: String
+        var badge: Int? = nil
+        var dot: Bool = false
+        var active: Bool
+    }
+
+    struct Rails: Encodable {
+        var activity: [RailButton] = []
+        var right: [RailButton] = []
+    }
+
+    struct Header: Encodable {
+        var title: String
+        var renaming: Bool
+        var backTip: String
+        var forwardTip: String
+        var shared: Bool
+    }
+
+    /// The activity bar's and right rail's buttons, as those views draw them.
+    @MainActor
+    static func rails(_ app: AppModel) -> Rails {
+        var activity = [RailButton(title: "Threads", badge: app.sections.inbox.count, active: app.sidebarMode == .inbox)]
+        if app.schedulesSupported {
+            activity.append(RailButton(title: "Scheduled", badge: app.activeScheduleCount, active: app.sidebarMode == .scheduled))
+        }
+        if app.projectsSupported {
+            activity.append(RailButton(title: "Projects", active: app.sidebarMode == .projects))
+            activity.append(RailButton(title: "Librarian", badge: app.librarian?.pendingCount, active: app.sidebarMode == .librarian))
+        }
+        var right: [RailButton] = []
+        if let thread = app.paneThread {
+            if app.openProject == nil {
+                right.append(RailButton(title: "Highlights", dot: thread.firstOpenAsk != nil, active: app.dock.isShowing(PaneSection.highlightsId)))
+            }
+            for panel in thread.panels {
+                right.append(RailButton(title: panel.title, badge: panel.badge, active: app.dock.isShowing(panel.id)))
+            }
+            if app.openProject == nil {
+                right.append(RailButton(title: "Files", active: app.dock.isShowing(BuiltinPanels.files)))
+            }
+            if !thread.patches.isEmpty {
+                right.append(RailButton(title: "Patches", badge: thread.patches.count, active: app.dock.isShowing(PaneSection.patchesId)))
+            }
+        }
+        return Rails(activity: activity, right: right)
+    }
+
+    @MainActor
+    static func header(_ app: AppModel) -> Header? {
+        guard let thread = app.selectedThread, !app.showsHomePage, app.openProject == nil else { return nil }
+        return Header(title: thread.title.isEmpty ? "Untitled" : thread.title, renaming: app.renamingThread == thread.id,
+                      backTip: HistoryText.tip(back: true, to: app.canGoBack ? app.destination(back: true) : nil, shortcut: AppShortcuts.shared.display(.back)),
+                      forwardTip: HistoryText.tip(back: false, to: app.canGoForward ? app.destination(back: false) : nil, shortcut: AppShortcuts.shared.display(.forward)),
+                      shared: thread.share?.isOn == true)
+    }
 
     struct ProjectInfo: Encodable {
         var id: String
@@ -237,6 +449,66 @@ struct AppDump: Encodable {
         var preview: String?
         /// What the Highlights section has: "3 pinned, 2 files, ..." or why not.
         var highlights: String?
+        /// What the pane shows, as drawn: scripts and the specs read this.
+        var pane: Pane?
+    }
+
+    /// The pane as drawn (`panels.pane`): Highlights' headings and rows, a
+    /// patches list, a list panel, or the file open in it.
+    struct Pane: Codable {
+        struct Row: Codable {
+            var title: String
+            /// A commit's short sha, before the title.
+            var lead: String?
+            var trailing: String?
+            var note: String?
+            var detail: String?
+            var symbol: String?
+            /// Needs you's tick box.
+            var ticked: Bool?
+        }
+        struct Section: Codable {
+            var key: String
+            var title: String
+            /// What the heading counts, shown when it's folded.
+            var count: Int
+            var folded: Bool
+            /// Left out while folded.
+            var rows: [Row]
+        }
+        struct Patch: Codable {
+            var id: String
+            var source: String
+            /// The orange line and its Trust button, while it's waiting.
+            var waiting: String?
+            var trusting: Bool?
+            var gives: String?
+            var error: String?
+            var file: String?
+        }
+        /// Which section shows (a panel's id, or threadbear.highlights).
+        var section: String
+        /// The one line it has in place of rows ("Nothing here yet...").
+        var empty: String?
+        var brief: [String]?
+        /// Tool patches' cards at the top of Highlights, by title.
+        var cards: [String]?
+        var sections: [Section]?
+        /// The Patches section's rows.
+        var patches: [Patch]?
+        /// A list panel's rows under their headings, in order.
+        var list: [Section]?
+        /// An image panel: its size, or the note it shows.
+        var image: String?
+        /// What's open over the section (a file, folder or page): its kind
+        /// ("markdown", "code", "text", "picture", "video", "quickLook", "web",
+        /// "folder", "page", "fetching", "note") and what it shows, from the
+        /// start (a picture's size, the words).
+        var previewKind: String?
+        var previewText: String?
+        /// The folder browser's summary (as `dump`'s preview line), when one
+        /// is showing, the Files panel's too.
+        var folder: String?
     }
 
     static func connectionName(_ state: ConnectionState) -> String {
@@ -260,19 +532,25 @@ struct AppDump: Encodable {
                 SubagentInfo(id: $0.id, depth: $0.depth, status: $0.subagent.status.rawValue, title: SubagentRows.title($0.subagent),
                              detail: SubagentRows.detail($0.subagent), selected: $0.id == selectedSub)
             }
+            let shown = rowShows(summary, section: section, app: app)
             return Thread(id: summary.id, title: summary.title, status: summary.status.rawValue, needsYou: summary.needsYou,
                           unread: look.unread, hovered: app.hoverOverride == summary.id,
                           background: look.status == .background ? BackgroundWork.short(summary.background) : nil,
                           waiting: summary.waitingForRoom.map { Pools.waitingLine($0, now: app.now) } ?? (summary.waitingForNetwork != nil ? "Waiting for connection" : nil),
-                          subagents: subagents, runner: app.runnerPlace(of: summary))
+                          subagents: subagents, runner: app.runnerPlace(of: summary), place: shown.place, bold: shown.bold, mark: shown.mark,
+                          trailing: shown.trailing, tile: shown.tile, origin: ThreadByline.line(summary)?.symbol, hoverButtons: shown.buttons)
         }
         let sections: [Section]
         switch app.sidebarMode {
         case .inbox:
-            let built = app.sections
+            // The search box applies, as it does to what's on screen.
+            let built = app.sections.matching(app.searchQuery)
             sections = InboxSection.allCases.map { section in
-                Section(name: section.title, threads: built[section].map { thread($0, section: section) },
-                        collapsed: app.collapsedSections.contains(section))
+                let collapsed = app.collapsedSections.contains(section)
+                let searching = !app.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                let shown = section == .archived ? ArchiveRows.shown(built[section], limit: app.archiveLimit, searching: searching, selection: app.selection).rows.count : nil
+                return Section(name: section.title, threads: built[section].map { thread($0, section: section) }, collapsed: collapsed,
+                               count: collapsed && !built[section].isEmpty ? built[section].count : nil, shown: shown)
             }
         case .projects:
             // A section per project, then the threads in none.
@@ -329,12 +607,14 @@ struct AppDump: Encodable {
             connection: connectionName(app.connection),
             runnerVersion: app.runnerVersion,
             banner: app.banner.map { BannerInfo(style: $0.style.rawValue, text: $0.text, detail: $0.detail) },
+            limit: app.selectedThread.flatMap { limitInfo(app, thread: $0) },
             archivedNote: app.archivedNote?.threadId,
             milestoneNote: app.milestoneNote.map { ThreadMilestones.title($0.tier) },
             error: app.errorMessage,
             window: window.map { Window(width: Int(contentSize($0).width), height: Int(contentSize($0).height), appearance: appearance) },
             sidebar: Sidebar(mode: String(describing: app.sidebarMode), sections: sections,
-                             snoozed: ThreadSections.snoozed(app.threads.values, now: now).count, archived: app.archivedCount),
+                             snoozed: ThreadSections.snoozed(app.threads.values, now: now).count, archived: app.archivedCount,
+                             sort: app.inboxOrder.rawValue, loading: !app.threadsLoaded),
             selection: app.selectedThread.map { thread($0) },
             subagent: app.subagentSelection?.subagentId,
             panels: app.selectedThread.flatMap { panels($0, app: app) },
@@ -342,6 +622,9 @@ struct AppDump: Encodable {
                 thread.actions.map { ActionInfo(id: $0.id, title: $0.title, kind: $0.kind.rawValue, running: app.isRunning(action: $0, in: thread.id)) }
             } ?? [],
             composer: composer(app, key: key),
+            newThread: newThreadPageDump(app),
+            palette: slashPalette,
+            moveSheet: app.moveRequest == nil ? nil : moveSheetNow,
             decisions: app.selectedThread.flatMap { decisions($0, app: app) },
             transcript: transcript,
             usage: Usage(shown: app.usageShown, lines: usageLines(app)),
@@ -350,6 +633,7 @@ struct AppDump: Encodable {
                 return ProjectInfo(id: project.id, title: project.title, folders: project.folders, threads: threads.map(\.id),
                                    patches: PatchGroups.patches(of: project, in: threads).map(\.patch.id), archived: project.archived)
             },
+            projectDecisions: app.openProject.flatMap { projectDecisionLines($0, app: app) },
             projectCards: app.openProject == nil && app.showsProjectsHome ? app.projectCards.map { card in
                 card.project.title + ": " + (card.status.isQuiet ? "quiet" : card.status.parts.map(\.text).joined(separator: " · "))
             } : nil,
@@ -358,8 +642,73 @@ struct AppDump: Encodable {
                 PoolInfo(id: pool.id, title: pool.title, logins: pool.accountIds, folders: pool.folders,
                          rail: Pools.railSubtitle(pool, accounts: app.accounts), status: Pools.statusLine(pool, accounts: app.accounts, now: app.now))
             } : [],
-            dock: app.dock.layout.summary.replacingOccurrences(of: "threadbear.", with: "")
+            dock: app.dock.layout.summary.replacingOccurrences(of: "threadbear.", with: ""),
+            zoom: TextZoom.shared.percent,
+            inboxEndNote: app.inboxEndNote.map { $0.empty ? "empty" : "end" },
+            rails: rails(app),
+            header: header(app)
         )
+    }
+
+    /// What ThreadRowView draws for a row, as data: the same rules as its
+    /// body and `trailing(_:)`, for the specs (features/sidebar-rows.feature).
+    @MainActor
+    private static func rowShows(_ summary: ThreadSummary, section: InboxSection?, app: AppModel) -> (place: String, bold: Bool, mark: String?, trailing: String, tile: String, buttons: [String]?) {
+        let mode = section.map { RowMode($0, thread: summary, now: app.now) } ?? .inbox
+        let look = mode == .inbox || mode == .projects ? ThreadRowLook(summary, section: section) : ThreadRowLook(status: .time, unread: false, emphasised: false)
+        let mark: String? = look.done ? "tick" : look.unread ? "dot" : nil
+        let tile: String
+        if let first = ProjectMark.shown(summary).first {
+            tile = ProjectMark.letter(first.title)
+        } else {
+            tile = summary.isRemote ? "runner" : "folder"
+        }
+        var buttons: [String]? = nil
+        if app.hoverOverride == summary.id {
+            buttons = mode.rowActions.map { action in
+                switch action {
+                case .star: return summary.isStarred ? "Remove star" : "Star: keep at the top"
+                case .snooze: return "Hibernate"
+                case .archive: return AppShortcuts.shared.tip("Archive", .archive)
+                case .unsnooze: return "Wake"
+                case .delete: return "Delete chat…"
+                case .unarchive: return "Unarchive"
+                }
+            }
+        }
+        return (ProjectMark.place(summary), look.emphasised, mark, rowTrailing(summary, look: look, mode: mode, section: section, app: app), tile, buttons)
+    }
+
+    /// The words at the right of a row, as `ThreadRowView.trailing` has them.
+    @MainActor
+    private static func rowTrailing(_ thread: ThreadSummary, look: ThreadRowLook, mode: RowMode, section: InboxSection?, app: AppModel) -> String {
+        if let moving = thread.moving {
+            if moving.ended { return moving.state == "cancelled" ? "Move cancelled" : "Couldn't move" }
+            return "Moving to \(moving.toName)"
+        }
+        if mode != .hibernating, let waiting = thread.waitingForRoom, !thread.isArchived { return Pools.waitingLine(waiting, now: app.now) }
+        if mode != .hibernating, thread.waitingForNetwork != nil, !thread.isArchived { return "Waiting for connection" }
+        let time = RelativeTime.short(mode == .archive ? thread.archivedAt ?? thread.lastActivityAt : thread.lastActivityAt, now: app.now)
+        switch look.status {
+        case .time:
+            if mode == .hibernating {
+                if let words = WakeWords.row(thread, now: app.now) { return words.text }
+                if thread.snoozedUntilRelease { return "Back on update" }
+                if thread.snoozedUntilRestart { return "Back on restart" }
+                if let until = thread.snoozedUntil { return "Back \(RelativeTime.until(until, now: app.now))" }
+                return ""
+            }
+            if look.woke, thread.woke != nil { return "Woke up" }
+            if section == .hibernating, let next = app.wakes[thread.id]?.nextRunAt { return RelativeTime.until(next, now: app.now) }
+            return time
+        case .working:
+            let elapsed = ThreadRowLook.workingLabel(since: thread.lastActivityAt, now: Date())
+            return look.labelled ? "Working " + elapsed : elapsed
+        case .background: return BackgroundWork.short(thread.background)
+        case .needsYou: return time
+        case .failed: return "Failed"
+        case .stopped: return "Stopped"
+        }
     }
 
     @MainActor
@@ -387,7 +736,191 @@ struct AppDump: Encodable {
             }
         }
         return Panels(shown: app.showsPanels(for: thread), width: Int(app.dock.frame(of: section.id)?.width ?? 0), items: items, preview: preview,
-                      highlights: highlightsLine(app, thread.id))
+                      highlights: highlightsLine(app, thread.id), pane: pane(thread, section: section, app: app))
+    }
+
+    /// The pane as drawn: mirrors DockPane, PreviewBody and HighlightsView's
+    /// content so a script can read what a person would.
+    @MainActor
+    private static func pane(_ thread: ThreadSummary, section chosen: PaneSection, app: AppModel) -> Pane {
+        // The rail's Files panel isn't one of the sections `paneSection`
+        // chooses between, but it's what's showing once it was picked.
+        let section = app.panelChoice[thread.id] == BuiltinPanels.files && app.dock.isShowing(BuiltinPanels.files) ? PaneSection(id: BuiltinPanels.files) : chosen
+        var pane = Pane(section: section.id)
+        pane.folder = FolderPaneView.current?.summary
+        if let preview = app.panePreview[thread.id], preview.from == section {
+            fillPreview(&pane, preview, thread: thread, app: app)
+            return pane
+        }
+        switch section {
+        case .highlights:
+            fillHighlights(&pane, thread, app: app)
+        case .patches:
+            pane.patches = thread.patches.map { patch in
+                Pane.Patch(id: patch.id, source: PatchesList.sourceName(patch.source),
+                           waiting: patch.untrusted.map { PatchesList.waitingText(patch, untrusted: $0) },
+                           trusting: patch.untrusted != nil ? app.isTrusting(patch) : nil,
+                           gives: patch.untrusted == nil && patch.error == nil ? PatchesList.gives(patch.id, in: thread) : nil,
+                           error: patch.error ?? patch.liveError, file: patch.file)
+            }
+        case .panel(let id):
+            guard id != BuiltinPanels.files, let panel = thread.panels.first(where: { $0.id == id }) else { break }
+            switch panel.kind {
+            case .list:
+                guard let render = PanelDebug.renders[panel.id] else { pane.empty = "Loading…"; break }
+                guard let items = render.items, !items.isEmpty else { pane.empty = render.note ?? "Nothing in this list."; break }
+                var sections: [Pane.Section] = []
+                let headings = PanelItem.headings(items)
+                for (index, item) in items.enumerated() {
+                    if let heading = headings[index] ?? (sections.isEmpty ? "" : nil) {
+                        sections.append(Pane.Section(key: heading, title: heading, count: 0, folded: false, rows: []))
+                    }
+                    let symbol = item.icon.flatMap { $0.isEmpty ? nil : $0 } ?? item.tone.map(\.rawValue)
+                    sections[sections.count - 1].rows.append(Pane.Row(title: item.title, trailing: item.trailing, detail: item.detail, symbol: symbol))
+                    sections[sections.count - 1].count += 1
+                }
+                pane.list = sections
+            case .image:
+                let image = PanelDebug.images[panel.id]
+                pane.image = image.map { "picture \(Int($0.size.width))x\(Int($0.size.height))" } ?? PanelDebug.renders[panel.id]?.note ?? "Taking a screenshot…"
+            case .url:
+                break
+            }
+        }
+        return pane
+    }
+
+    @MainActor
+    private static func fillPreview(_ pane: inout Pane, _ preview: PanePreview, thread: ThreadSummary, app: AppModel) {
+        switch preview.target {
+        case .page(let url):
+            pane.previewKind = url.isFileURL ? "web" : "page"
+            pane.previewText = url.absoluteString
+        case .remote(_, let failed):
+            pane.previewKind = failed == nil ? "fetching" : "note"
+            pane.previewText = failed.map { _ in "Couldn't get it from \(preview.away ?? "that Mac")" }
+        case .explain:
+            pane.previewKind = "note"
+        case .folder(let path):
+            pane.previewKind = "folder"
+            pane.previewText = path
+        case .file(let path):
+            if !FileManager.default.fileExists(atPath: path) {
+                pane.previewKind = "note"
+                pane.previewText = "This file isn't there any more."
+            } else if PreviewRules.viewer(forPath: path) == .web {
+                pane.previewKind = "web"
+                pane.previewText = path
+            } else if TextFileView.shows(path) {
+                // The rendered text, once its controller is up for this file.
+                pane.previewKind = PreviewRules.isMarkdown(path) ? (preview.editing ? "text" : "markdown") : (PreviewRules.codeLanguage(forPath: path) != nil ? "code" : "text")
+                if let controller = TextFileController.current, controller.url.path == path {
+                    pane.previewText = String(controller.textView.string.prefix(4000))
+                }
+            } else {
+                let shows = FilePreviewView.current?.debugShows ?? "quickLook"
+                if shows.hasPrefix("picture") {
+                    pane.previewKind = "picture"
+                    pane.previewText = String(shows.dropFirst("picture ".count))
+                } else {
+                    pane.previewKind = shows
+                }
+            }
+        }
+    }
+
+    /// HighlightsView's content, as rows.
+    @MainActor
+    private static func fillHighlights(_ pane: inout Pane, _ thread: ThreadSummary, app: AppModel) {
+        if app.highlightsUnsupported { pane.empty = "This runner doesn't keep highlights yet."; return }
+        guard let fetched = app.highlights[thread.id] else { return }
+        let sections = HighlightSections.build(fetched)
+        let projects = HighlightProjects.build(thread: thread, project: app.project)
+        let tools = Set(thread.patches.filter { !($0.matched ?? []).isEmpty }.map(\.id))
+        let toolPanels = thread.panels.filter { tools.contains($0.patch) }
+        let scheduled = ScheduleRows.rows(for: thread, in: app.schedules, now: app.now, target: app.scheduleTarget)
+        let started = StartedThreadRows.rows(for: thread, in: app.threads, now: app.now)
+        let asks = thread.asks
+        if sections.isEmpty && asks.isEmpty && projects.isEmpty && toolPanels.isEmpty && scheduled.isEmpty && thread.subagents.isEmpty && started.isEmpty {
+            pane.empty = "Nothing here yet. Files, links and commits from this thread show up here as it works."
+            return
+        }
+        let flags = HighlightsFlags.current
+        var out: [Pane.Section] = []
+        func add(_ key: String, _ title: String, count: Int, rows: @autoclosure () -> [Pane.Row]) {
+            let folded = app.collapsedHighlights.contains(key)
+            out.append(Pane.Section(key: key, title: title, count: count, folded: folded, rows: folded ? [] : rows()))
+        }
+        if !toolPanels.isEmpty { pane.cards = toolPanels.map { [$0.title, $0.summary ?? $0.note].compactMap { $0 }.joined(separator: ": ") } }
+        if let brief = sections.brief { pane.brief = HighlightSections.points(brief) }
+        if !asks.isEmpty {
+            add(HighlightFold.needsYou, "Needs you", count: asks.filter { !$0.ticked }.count,
+                rows: asks.map { Pane.Row(title: $0.plainAction, detail: $0.plainWhere, symbol: $0.ticked ? "checkmark.square.fill" : "square", ticked: $0.ticked) })
+        }
+        for row in projects {
+            let tasks = row.project.tasks.flatMap { $0.loading ? nil : $0 }
+            let key = HighlightFold.project(row.project.id)
+            let count = row.project.links.count + (tasks?.openCount ?? 0)
+            add(key, row.project.title, count: count, rows: row.project.links.map {
+                let address = HighlightText.address($0.url)
+                return Pane.Row(title: $0.title, detail: address == $0.title ? nil : address, symbol: "globe")
+            })
+        }
+        if !scheduled.isEmpty {
+            add(HighlightFold.scheduled, "Scheduled", count: scheduled.count,
+                rows: scheduled.map { Pane.Row(title: $0.title, trailing: $0.when, detail: $0.detail, symbol: $0.paused ? "pause.circle" : "clock") })
+        }
+        if !thread.subagents.isEmpty {
+            let all = SubagentRows.highlights(thread)
+            let shown = HighlightSections.capped(all, limit: HighlightSections.subagentLimit, showAll: flags?.allSubagents ?? false)
+            add(HighlightFold.subagents, "Sub-agents", count: all.count, rows: shown.shown.map { subagent in
+                let icon: String = switch subagent.status {
+                case .running: "circle.dashed"
+                case .completed: "checkmark"
+                case .failed: "xmark"
+                case .stopped: "minus"
+                }
+                return Pane.Row(title: SubagentRows.title(subagent), trailing: SubagentRows.duration(subagent, now: app.now), detail: SubagentRows.detail(subagent), symbol: icon)
+            } + (shown.more > 0 ? [Pane.Row(title: "Show all \(all.count)", symbol: "ellipsis")] : []))
+        }
+        if !started.isEmpty {
+            let shown = HighlightSections.capped(started, limit: HighlightSections.subagentLimit, showAll: flags?.allStarted ?? false)
+            add(HighlightFold.startedThreads, "Threads it started", count: started.count, rows: shown.shown.map {
+                Pane.Row(title: $0.thread.title, detail: StartedThreadRows.detail($0, now: app.now), symbol: StartedThreadRows.icon($0.state))
+            } + (shown.more > 0 ? [Pane.Row(title: "Show all \(started.count)", symbol: "ellipsis")] : []))
+        }
+        func item(_ h: Highlight) -> Pane.Row {
+            let isCommit = h.kind == .commit
+            let detail: String? = if let path = h.path {
+                HighlightText.folder(of: path, cwd: thread.cwd)
+            } else if isCommit {
+                HighlightText.commitLine(h)
+            } else {
+                h.url.map(HighlightText.address).flatMap { $0 == h.title ? nil : $0 }
+            }
+            let how = h.isPinned || isCommit ? nil : h.how.word
+            return Pane.Row(title: h.title, lead: isCommit ? h.sha : nil, trailing: how.flatMap { $0.isEmpty ? nil : $0 }, note: h.note, detail: detail, symbol: FileIcon.symbol(for: h))
+        }
+        if !sections.pinned.isEmpty { add(HighlightFold.pinned, "Pinned", count: sections.pinned.count, rows: sections.pinned.map(item)) }
+        if !sections.files.isEmpty { add(HighlightFold.files, "Files", count: sections.files.count, rows: sections.files.map(item)) }
+        if !sections.links.isEmpty {
+            let links = HighlightSections.capped(sections.links, limit: HighlightSections.linkLimit, showAll: flags?.allLinks ?? false)
+            add(HighlightFold.links, "Links", count: sections.links.count, rows: links.shown.map(item) + (links.more > 0 ? [Pane.Row(title: "Show all \(sections.links.count)", symbol: "ellipsis")] : []))
+        }
+        if !sections.commits.isEmpty || !sections.edited.isEmpty {
+            let commits = HighlightSections.capped(sections.commits, limit: HighlightSections.commitLimit, showAll: flags?.allCommits ?? false)
+            var rows = commits.shown.map(item)
+            if commits.more > 0 { rows.append(Pane.Row(title: "Show all \(sections.commits.count)", symbol: "ellipsis")) }
+            if !sections.edited.isEmpty {
+                let open = flags?.editedOpen ?? false
+                rows.append(Pane.Row(title: HighlightText.editedCount(sections.edited.count), symbol: open ? "chevron.down" : "chevron.right"))
+                if open {
+                    rows += sections.edited.map { Pane.Row(title: ($0 as NSString).lastPathComponent, detail: HighlightText.folder(of: $0, cwd: thread.cwd), symbol: FileIcon.symbol(forPath: $0)) }
+                }
+            }
+            add(HighlightFold.changes, "Changes", count: sections.commits.count + sections.edited.count, rows: rows)
+        }
+        pane.sections = out
     }
 
     @MainActor
@@ -463,6 +996,22 @@ struct AppDump: Encodable {
         return "\"\(note.text)\"" + pictures
     }
 
+    /// The threads with decisions on a project's page, as it lists them.
+    @MainActor
+    static func projectDecisionThreads(_ project: Project, app: AppModel) -> [ThreadSummary] {
+        ProjectDecisions.threads(app.projectSections.sections.first { $0.id == project.id }?.threads ?? [])
+    }
+
+    @MainActor
+    static func projectDecisionLines(_ project: Project, app: AppModel) -> [String]? {
+        guard app.projectDecisionsOn else { return nil }
+        return projectDecisionThreads(project, app: app).map { thread in
+            let asks = thread.asks.filter { !$0.ticked }.map(\.plainAction).joined(separator: " | ")
+            let sending = ProjectDecisions.isSending(thread, sentFor: app.decisionSends[thread.id]?.asksSeq)
+            return "\(thread.title): \(asks)" + (sending ? " (sending)" : "")
+        }
+    }
+
     /// "2 picked", then each ask with its choices, "*" on the agent's
     /// pick, its links and the answer picked.
     @MainActor
@@ -473,7 +1022,11 @@ struct AppDump: Encodable {
         var lines = ["\(picks.count) picked"]
         for (i, ask) in thread.asks.enumerated() {
             let options = Decisions.choices(for: ask)
-            let choices = options.enumerated().map { $0.offset == ask.suggested ? "*\($0.element)" : $0.element }
+            // Each with what it does in brackets, when the agent said (optionNotes).
+            let choices = options.enumerated().map { i, label in
+                let note = ask.optionNotes.indices.contains(i) && ask.optionNotes.count == ask.options.count ? ask.optionNotes[i].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+                return (i == ask.suggested ? "*" : "") + label + (note.isEmpty ? "" : " (\(note))")
+            }
             let links = ask.links.isEmpty ? "" : " links: " + ask.links.map(\.title).joined(separator: ", ")
             let answer = picks[i] == Decisions.ownAnswer ? "something else: " + ownAnswer(notes[i]) : picks[i].flatMap { options.indices.contains($0) ? options[$0] : nil } ?? "no answer"
             lines.append("  \(i + 1). \(ask.action) [\(choices.joined(separator: " | "))]\(links) -> \(answer)")
@@ -499,7 +1052,61 @@ struct AppDump: Encodable {
                         editing: app.editing[key]?.seq,
                         cwd: settings.cwd, account: settings.account, model: settings.model, ask: settings.ask, mode: settings.mode, effort: settings.effort,
                         pool: settings.pool, chip: ThreadSettings(app: app, thread: app.selectedThread).modelChipTitle,
-                        runner: app.selectedThread.flatMap(app.runnerName(of:)) ?? (app.selectedThread == nil ? app.newThreadRunner?.name : nil))
+                        chipBadge: badgeWords(ThreadSettings(app: app, thread: app.selectedThread).modelChipBadge),
+                        runner: app.selectedThread.flatMap(app.runnerName(of:)) ?? (app.selectedThread == nil ? app.newThreadRunner?.name : nil),
+                        card: cardLines(app, key: key), recap: recapLines(app), creating: key == "new" && app.creatingThread)
+    }
+
+    /// LimitBanner's words and button, as it draws them.
+    @MainActor private static func limitInfo(_ app: AppModel, thread: ThreadSummary) -> LimitInfo? {
+        guard let advice = app.limitAdvice(for: thread) else { return nil }
+        let waiting = thread.waitingForRoom != nil && app.usesPools
+        let button = advice.target.map { target -> String in
+            let title = AccountUsageText.switchTitle(target, accounts: app.accounts)
+            return waiting ? title.replacingOccurrences(of: "Switch to", with: "Pin to") : title
+        }
+        return LimitInfo(text: advice.text, button: button)
+    }
+
+    /// A chip's badge as it reads after the title.
+    private static func badgeWords(_ badge: AccountUsageText.ChipBadge?) -> String? {
+        switch badge {
+        case .low(let percent)?: return "· " + percent
+        case .blocked?: return "Limit reached"
+        case nil: return nil
+        }
+    }
+
+    /// The recap box as lines (`composer.recap`), nil unless it's up.
+    @MainActor private static func recapLines(_ app: AppModel) -> [String]? {
+        guard let thread = app.selectedThread, Recap.isDue(thread, dismissedAt: app.dismissedRecaps[thread.id]), let recap = thread.recap else { return nil }
+        let parts = Recap.parts(recap)
+        return (parts.purpose.map { [$0] } ?? []) + parts.points
+    }
+
+    /// The open card as lines (`composer.card`): "Done" with a "[x]" or
+    /// "[ ]" line per follow-up, "(?)" on one asked about; or "Needs you"
+    /// ("(collapsed)" when folded) with a line per ask, and under an ask
+    /// with a command to run, "    $ <command>" (a line of its own, so a
+    /// spec matching an ask's line by its end still finds it).
+    @MainActor
+    private static func cardLines(_ app: AppModel, key: String) -> [String]? {
+        guard let row = app.sessions[key]?.openCard, case .asks(let card) = row.content else { return nil }
+        return cardLines(card, collapsed: app.collapsedCards[key] == row.seq)
+    }
+
+    static func cardLines(_ card: AsksCard, collapsed: Bool) -> [String] {
+        if card.isDone {
+            return ["Done"] + card.next.enumerated().map { i, text in
+                (card.pickedNext.contains(i) ? "[x] " : "[ ] ") + text + (card.explainNext.contains(i) ? " (?)" : "")
+            }
+        }
+        var lines = [collapsed ? "Needs you (collapsed)" : "Needs you"]
+        for (i, ask) in card.asks.enumerated() {
+            lines.append((card.picks[i] != nil ? "[x] " : "[ ] ") + "\(i + 1). \(ask.action)")
+            if let run = ask.run { lines.append("    $ " + run.command) }
+        }
+        return lines
     }
 
     /// Rows a click opens: work lines, groups and settled approvals that
@@ -587,6 +1194,9 @@ struct AppDump: Encodable {
             lines += usage.lines.map { "  " + $0 }
         }
         if let decisions { lines.append("decisions: " + decisions[0]); lines += decisions.dropFirst().map { "  " + $0 } }
+        // The open card as it reads in the box, the done card's follow-ups too.
+        if let recap = composer.recap { lines.append("recap: " + recap.joined(separator: " | ")) }
+        if let card = composer.card, let first = card.first { lines.append("card: " + first); lines += card.dropFirst().map { "  " + $0 } }
         lines.append("composer (\(composer.draft)): \"\(composer.text)\"" + (composer.images > 0 ? " and \(composer.images) image(s)" : "")
             + (composer.editing.map { ", editing the message at seq \($0)" } ?? ""))
         let on = composer.pool.map { "pool \($0) (now \(composer.account))" } ?? (pools.isEmpty || composer.runner != nil ? composer.account : "\(composer.account), pinned")

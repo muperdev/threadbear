@@ -1,0 +1,141 @@
+# The runner's typecheck and unit tests, the Convex functions' and the
+# website's typechecks and the website's tests, on GitHub's Ubuntu and macOS
+# machines, with Node 24 and the newest Node. Mike's own checks (./check.sh
+# on Tinker Desk or the cloud box) only ever run on his Node 24.22.1 and his
+# Macs, while the README promises "Node 24 or newer" and INSTALL.md offers a
+# runner on Linux. On 9 Nov 2026 someone ran main on these machines and it
+# failed on both, over a test that took GitHub's user name, `runner`, for a
+# private one (PR #34); nothing here would have said.
+#
+# Nothing needs a secret or a login: check.sh turns off the Convex mirror and
+# CLI updates for every test, and no test spawns a real claude or codex. It
+# runs on contributors' PRs too, so it only reads the repo.
+#
+# It costs nothing, and must stay that way (Mike, 9 Nov): GitHub's standard
+# hosted runners (ubuntu-24.04, macos-26) are free for a public repo, while
+# larger ones (anything -large, -xlarge or with more cores) are billed. So:
+# standard runners only, no schedule or cron, a newer push cancels the run
+# before it, and it only runs when something it checks changed (the paths
+# below: the runner, Convex, the website, the relay and scripts/ that the
+# runner's tests cover, check.sh that runs them, the root packages, and
+# this file).
+name: Runner, Convex and website tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'runner/**'
+      - 'convex/**'
+      - 'web/**'
+      - 'relay/**'
+      - 'scripts/**'
+      - 'check.sh'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/runner.yml'
+  pull_request:
+    # The same list as push's, kept in step by hand.
+    paths:
+      - 'runner/**'
+      - 'convex/**'
+      - 'web/**'
+      - 'relay/**'
+      - 'scripts/**'
+      - 'check.sh'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/runner.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}, Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26]
+        # 24 is the oldest the README and setup accept (scripts/setup.mjs);
+        # "current" is the newest release, which Homebrew's plain `node`
+        # installs, so a stranger may well be on it.
+        node: ['24', current]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Pick the Node
+        id: node
+        # setup-node's own "current" took v27.0.0-alpha on 9 Nov, as Node's
+        # alphas are first in its release list now. This is the newest
+        # release that isn't a pre-release (no "-" in its version).
+        run: |
+          if [ "${{ matrix.node }}" = current ]; then
+            v=$(curl -fsSL https://nodejs.org/dist/index.json | jq -r '[.[] | select(.version | test("-") | not)][0].version')
+            [ -n "$v" ] && [ "$v" != null ] || { echo "Couldn't read Node's newest release"; exit 1; }
+            v="${v#v}"
+          else
+            v="${{ matrix.node }}"
+          fi
+          echo "Node $v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ steps.node.outputs.version }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            runner/package-lock.json
+
+      - name: Image tools (Linux)
+        if: runner.os == 'Linux'
+        # What INSTALL.md section 6 has a Linux runner install: ImageMagick
+        # and rsvg-convert stand in for macOS's sips and Quick Look when
+        # pictures are converted, and the image tests use them.
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q imagemagick librsvg2-bin
+
+      - name: Packages
+        run: |
+          node --version
+          npm ci --no-audit --no-fund
+          (cd runner && npm ci --no-audit --no-fund)
+
+      - name: Convex typecheck
+        run: npm run convex:typecheck
+
+      - name: Website typecheck
+        run: npm run web:typecheck
+
+      - name: Website tests
+        run: npm run web:test
+
+      - name: Runner typecheck and unit tests
+        # Through check.sh, as `tb land` and the runner's self-update run
+        # them: its environment for tests (no Convex, no CLI updates, no
+        # THREADBEAR_* from outside) and its second run of a few files that
+        # failed, for tests with real timeouts on a slow machine. --local
+        # keeps it here; THREADBEAR_NODE is the Node set up above.
+        run: THREADBEAR_NODE="$(command -v node)" ./check.sh --runner --local
+
+      - name: Keep check.sh's logs
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/check-logs"
+          cp -R "${TMPDIR:-/tmp}"/threadbear-check.* "$RUNNER_TEMP/check-logs/" 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: check-logs-${{ matrix.os }}-node-${{ matrix.node }}
+          path: ${{ runner.temp }}/check-logs
+          if-no-files-found: ignore

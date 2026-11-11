@@ -241,6 +241,8 @@ public struct CliStatus: Sendable, Hashable, Decodable, Identifiable {
     public var inUse: [InUse]
     /// Codex: the kept version "Go back" returns to.
     public var previousVersion: String?
+    /// An agent with no version feed: Update is offered at any time.
+    public var canUpdateNow: Bool = false
     public var checkedAt: Date?
     public var hold: Hold?
     public var update: Update?
@@ -275,13 +277,14 @@ public struct CliStatus: Sendable, Hashable, Decodable, Identifiable {
         policy = (try? c.decodeIfPresent(String.self, forKey: .policy)) ?? "auto"
         inUse = c.lossyArray(InUse.self, forKey: .inUse)
         previousVersion = try? c.decodeIfPresent(String.self, forKey: .previousVersion)
+        canUpdateNow = ((try? c.decodeIfPresent(Bool.self, forKey: .canUpdateNow)) ?? nil) ?? false
         checkedAt = ((try? c.decodeIfPresent(String.self, forKey: .checkedAt)) ?? nil).flatMap(ISO8601.parse)
         hold = try? c.decodeIfPresent(Hold.self, forKey: .hold)
         update = try? c.decodeIfPresent(Update.self, forKey: .update)
     }
 
     enum CodingKeys: String, CodingKey {
-        case provider, path, managedBy, installedVersion, latestVersion, status, policy, inUse, previousVersion, checkedAt, hold, update
+        case provider, path, managedBy, installedVersion, latestVersion, status, policy, inUse, previousVersion, canUpdateNow, checkedAt, hold, update
     }
 }
 
@@ -337,11 +340,21 @@ public enum PermissionMode: String, Sendable, Hashable, Codable {
     /// plan is "Plan first": the agent reads and plans but changes nothing
     /// until Mike approves its plan (docs/protocol.md, "Plan first").
     case full, ask, auto, plan
+    /// A mode from a newer runner that this app doesn't know. It used to be
+    /// read as Full access, the least safe reading, and a schedule made
+    /// from such a thread then asked for full access (9 Nov review). Now
+    /// it shows as unknown, and anything this app sends for it says Ask
+    /// before edits (`sent`), the strictest mode that still runs turns.
+    case unknown
 
     public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
-        self = PermissionMode(rawValue: raw) ?? .full
+        self = PermissionMode(rawValue: raw) ?? .unknown
     }
+
+    /// What to send the runner for this mode: never `unknown`, which no
+    /// runner takes, and never anything looser than Ask in its place.
+    public var sent: PermissionMode { self == .unknown ? .ask : self }
 }
 
 public struct ImageRef: Sendable, Hashable, Codable {
@@ -1140,6 +1153,9 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
     /// Every login in its pool is out of room: it carries on by itself at
     /// `until`.
     public var waitingForRoom: WaitingForRoom?
+    /// Whether a turn that hits its login's limit waits for room and
+    /// carries on by itself. On unless Mike turned it off on the limit box.
+    public var carryOnAtReset = true
     /// Its last turn couldn't reach the API (the internet went): it carries
     /// on by itself once the runner reaches it again. Since when.
     public var waitingForNetwork: Date?
@@ -1170,6 +1186,9 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
     /// Mike's last message to it, one line, for the sidebar's "You: ...".
     /// Nil until he's sent one, and from runners before it (3 Nov).
     public var asked: String?
+    /// The librarian's recap, for the box above the message box
+    /// (`Recap`, docs/protocol.md "The recap box"). Nil from an older runner.
+    public var recap: String?
     /// A panel the agent asked to show Mike, waiting for him to look at the
     /// thread. Nil when there's none, and from a runner older than this.
     public var panelRequest: PanelRequest?
@@ -1180,6 +1199,11 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
     /// it wasn't checked: the experiment's off, the last turn needs Mike,
     /// or a runner older than this.
     public var looseEnds: LooseEnds?
+    /// A move to another runner under way, or one that failed in the last
+    /// minute, with its note (docs/protocol.md, "Moving a thread to another
+    /// runner"). On another runner's thread, from what the main Mac's runner
+    /// knows of it. Nil otherwise, and from a runner older than moves.
+    public var moving: ThreadMoving?
     /// Set by the app for another runner's thread (docs/protocol.md,
     /// "Other runners' threads"): which runner it lives on, so its rows can
     /// say so and its requests go there. Nil for this Mac's own. Never on
@@ -1203,10 +1227,11 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
         highlightsAt: Date? = nil,
         schedule: ThreadSchedule? = nil, poolId: String? = nil, waitingForRoom: WaitingForRoom? = nil,
         panelRequest: PanelRequest? = nil, share: ThreadShare? = nil, startedBy: ThreadStartedBy? = nil,
-        looseEnds: LooseEnds? = nil
+        looseEnds: LooseEnds? = nil, moving: ThreadMoving? = nil
     ) {
         self.id = id
         self.looseEnds = looseEnds
+        self.moving = moving
         self.title = title
         self.cwd = cwd
         self.accountId = accountId
@@ -1310,6 +1335,7 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
         projects = c.lossyArray(ThreadProject.self, forKey: .projects)
         poolId = ((try? c.decodeIfPresent(String.self, forKey: .poolId)) ?? nil).flatMap { $0.isEmpty ? nil : $0 }
         waitingForRoom = (try? c.decodeIfPresent(WaitingForRoom.self, forKey: .waitingForRoom)) ?? nil
+        carryOnAtReset = ((try? c.decodeIfPresent(Bool.self, forKey: .carryOnAtReset)) ?? nil) ?? true
         waitingForNetwork = (try? c.nestedContainer(keyedBy: NetworkWaitKeys.self, forKey: .waitingForNetwork))
             .flatMap { try? $0.decode(String.self, forKey: .since) }
             .flatMap(ISO8601.parse)
@@ -1323,9 +1349,11 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
         schedule = (try? c.decodeIfPresent(ThreadSchedule.self, forKey: .schedule)) ?? nil
         startedBy = (try? c.decodeIfPresent(ThreadStartedBy.self, forKey: .startedBy)) ?? nil
         asked = (try? c.decodeIfPresent(String.self, forKey: .asked)) ?? nil
+        recap = (try? c.decodeIfPresent(String.self, forKey: .recap)) ?? nil
         panelRequest = (try? c.decodeIfPresent(PanelRequest.self, forKey: .panelRequest)) ?? nil
         share = (try? c.decodeIfPresent(ThreadShare.self, forKey: .share)) ?? nil
         looseEnds = (try? c.decodeIfPresent(LooseEnds.self, forKey: .looseEnds)) ?? nil
+        moving = (try? c.decodeIfPresent(ThreadMoving.self, forKey: .moving)) ?? nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1373,6 +1401,7 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
         if !projects.isEmpty { try c.encode(projects, forKey: .projects) }
         try c.encodeIfPresent(poolId, forKey: .poolId)
         try c.encodeIfPresent(waitingForRoom, forKey: .waitingForRoom)
+        if !carryOnAtReset { try c.encode(false, forKey: .carryOnAtReset) }
         if let since = waitingForNetwork {
             var w = c.nestedContainer(keyedBy: NetworkWaitKeys.self, forKey: .waitingForNetwork)
             try w.encode(ISO8601.format(since), forKey: .since)
@@ -1386,16 +1415,18 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
         try c.encodeIfPresent(schedule, forKey: .schedule)
         try c.encodeIfPresent(startedBy, forKey: .startedBy)
         try c.encodeIfPresent(asked, forKey: .asked)
+        try c.encodeIfPresent(recap, forKey: .recap)
         try c.encodeIfPresent(panelRequest, forKey: .panelRequest)
         try c.encodeIfPresent(share, forKey: .share)
         try c.encodeIfPresent(looseEnds, forKey: .looseEnds)
+        try c.encodeIfPresent(moving, forKey: .moving)
     }
 
     enum CodingKeys: String, CodingKey {
         case id, title, cwd, accountId, provider, model, effort, fastMode, modelInUse, effortInUse, permissionMode, status, live, needsYou, pendingReviews
         case createdAt, updatedAt, lastActivityAt, snoozedUntil, snoozedUntilRestart, snoozedUntilRelease, wakeWhen, waitingOn, woke, archivedAt, starredAt, onOldRunner, preview
         case lastSeq, lastSeenSeq, nativeSessionId, contextTokens, contextWindow, costUsd, panels, actions, hooks, patches, background, subagents
-        case projects, worktree, needs, asks, asksSeq, highlightsAt, schedule, startedBy, asked, poolId, waitingForRoom, waitingForNetwork, panelRequest, share, sample, looseEnds
+        case projects, worktree, needs, asks, asksSeq, highlightsAt, schedule, startedBy, asked, recap, poolId, waitingForRoom, carryOnAtReset, waitingForNetwork, panelRequest, share, sample, looseEnds, moving
     }
 
     enum NetworkWaitKeys: String, CodingKey { case since }
@@ -1443,6 +1474,95 @@ public struct ThreadSummary: Sendable, Hashable, Codable, Identifiable {
     public func isSnoozed(at now: Date) -> Bool {
         guard let snoozedUntil else { return false }
         return snoozedUntil > now
+    }
+}
+
+/// `threads.movePreview`'s answer: the target runner's guess for the
+/// folder and login, its logins to pick from, what won't come, and what
+/// stops the move (empty when it can go). Read leniently.
+public struct MovePreview: Sendable, Hashable, Decodable {
+    public struct Login: Sendable, Hashable, Decodable, Identifiable {
+        public var id: String
+        public var title: String
+        public var email: String?
+
+        public init(id: String, title: String, email: String? = nil) {
+            self.id = id
+            self.title = title
+            self.email = email
+        }
+    }
+
+    public var cwd: String?
+    public var accountId: String?
+    public var accounts: [Login]
+    public var leftBehind: [String]
+    public var problems: [String]
+    /// It gets a new worktree of its own in `cwd`'s repo.
+    public var worktree: Bool
+    /// That repo is cloned there first.
+    public var clone: String?
+
+    /// The thread's own runner said what it would leave behind. An older
+    /// one says nothing, and an empty `leftBehind` from it means nothing.
+    public var sourceChecked: Bool
+
+    /// Nothing to decide or be told: Move to goes without showing the sheet.
+    public var canGoAsIs: Bool { sourceChecked && problems.isEmpty && leftBehind.isEmpty && cwd != nil && accountId != nil }
+
+    public init(cwd: String? = nil, accountId: String? = nil, accounts: [Login] = [], leftBehind: [String] = [], problems: [String] = [], worktree: Bool = false, clone: String? = nil, sourceChecked: Bool = false) {
+        self.sourceChecked = sourceChecked
+        self.cwd = cwd
+        self.accountId = accountId
+        self.accounts = accounts
+        self.leftBehind = leftBehind
+        self.problems = problems
+        self.worktree = worktree
+        self.clone = clone
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        cwd = (try? c.decodeIfPresent(String.self, forKey: .cwd)) ?? nil
+        accountId = (try? c.decodeIfPresent(String.self, forKey: .accountId)) ?? nil
+        accounts = c.lossyArray(Login.self, forKey: .accounts)
+        leftBehind = ((try? c.decodeIfPresent([String].self, forKey: .leftBehind)) ?? nil) ?? []
+        problems = ((try? c.decodeIfPresent([String].self, forKey: .problems)) ?? nil) ?? []
+        worktree = ((try? c.decodeIfPresent(Bool.self, forKey: .worktree)) ?? nil) ?? false
+        clone = (try? c.decodeIfPresent(String.self, forKey: .clone)) ?? nil
+        sourceChecked = ((try? c.decodeIfPresent(Bool.self, forKey: .sourceChecked)) ?? nil) ?? false
+    }
+
+    enum CodingKeys: String, CodingKey { case cwd, accountId, accounts, leftBehind, problems, worktree, clone, sourceChecked }
+}
+
+/// `ThreadSummary.moving`: the move a thread is in, from the runner that
+/// has it. `state` is the move's own (asking, ready, packing, unpacking,
+/// claimed, failed, cancelled), kept as text so a new one still shows.
+public struct ThreadMoving: Sendable, Hashable, Codable {
+    public var moveId: String
+    public var to: String
+    public var toName: String
+    public var state: String
+    public var note: String?
+
+    public init(moveId: String, to: String, toName: String, state: String, note: String? = nil) {
+        self.moveId = moveId
+        self.to = to
+        self.toName = toName
+        self.state = state
+        self.note = note
+    }
+
+    /// It went wrong or was called off; the note says why.
+    public var ended: Bool { state == "failed" || state == "cancelled" }
+
+    /// The row's line: "Moving to Cloud", or what stopped it.
+    public var line: String {
+        if state == "cancelled" { return "Move to \(toName) cancelled" }
+        if state == "failed" { return "Couldn't move to \(toName)" + (note.map { ": \($0)" } ?? "") }
+        if state == "ready" { return "Moving to \(toName) once this turn ends" }
+        return "Moving to \(toName)"
     }
 }
 
@@ -1568,14 +1688,19 @@ public struct RunnerDefaults: Sendable, Hashable, Codable {
     /// at folders: the app applies those itself (`Pools.forFolder`). Nil
     /// from a runner older than pools.
     public var poolId: String?
+    /// The mode a new thread starts on when it names none (runner.json's
+    /// `defaults.permissionMode`), which the composer starts on. Nil from a
+    /// runner that has none or predates it: Full access.
+    public var permissionMode: PermissionMode?
 
-    public init(cwd: String, accountId: String, model: String? = nil, models: [String: String] = [:], efforts: [String: String] = [:], poolId: String? = nil) {
+    public init(cwd: String, accountId: String, model: String? = nil, models: [String: String] = [:], efforts: [String: String] = [:], poolId: String? = nil, permissionMode: PermissionMode? = nil) {
         self.cwd = cwd
         self.accountId = accountId
         self.model = model
         self.models = models
         self.efforts = efforts
         self.poolId = poolId
+        self.permissionMode = permissionMode
     }
 
     public init(from decoder: Decoder) throws {
@@ -1586,6 +1711,11 @@ public struct RunnerDefaults: Sendable, Hashable, Codable {
         models = Self.strings(c, .models)
         efforts = Self.strings(c, .efforts)
         poolId = ((try? c.decodeIfPresent(String.self, forKey: .poolId)) ?? nil).flatMap { $0.isEmpty ? nil : $0 }
+        // A mode this app doesn't know stays `.unknown`: read as none, the
+        // composer fell back to Full access and asked for it. Plan first is
+        // never a default (the runner ignores it too).
+        permissionMode = ((try? c.decodeIfPresent(String.self, forKey: .permissionMode)) ?? nil)
+            .map { PermissionMode(rawValue: $0) ?? .unknown }.flatMap { $0 == .plan ? nil : $0 }
     }
 
     /// The model a new thread on `provider` gets when it names none.
@@ -1600,7 +1730,7 @@ public struct RunnerDefaults: Sendable, Hashable, Codable {
         return raw.compactMapValues(\.stringValue)
     }
 
-    enum CodingKeys: String, CodingKey { case cwd, accountId, model, models, efforts, poolId }
+    enum CodingKeys: String, CodingKey { case cwd, accountId, model, models, efforts, poolId, permissionMode }
 }
 
 public struct HelloResult: Sendable, Hashable, Decodable {
@@ -1616,28 +1746,48 @@ public struct HelloResult: Sendable, Hashable, Decodable {
     /// Nil from a runner older than pools: the app then works as before,
     /// with providers in the picker's rail and an account chip.
     public var pools: [Pool]?
+    /// What each provider is called and can do; empty from an older runner.
+    public var providers: [ProviderInfo]
+    /// The experiments on for the runner (docs/experiments.md); empty from
+    /// a runner older than this.
+    public var experiments: Set<String>
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        runnerVersion = try c.decodeIfPresent(String.self, forKey: .runnerVersion) ?? "?"
-        `protocol` = try c.decodeIfPresent(Int.self, forKey: .protocol) ?? 1
-        accounts = try c.decodeIfPresent([Account].self, forKey: .accounts) ?? []
+        // Each read leniently, as accounts.updated reads its list: one odd
+        // field or account here made hello throw, and the app reconnected
+        // forever without ever connecting (9 Nov review).
+        runnerVersion = ((try? c.decodeIfPresent(String.self, forKey: .runnerVersion)) ?? nil) ?? "?"
+        `protocol` = c.lenientInt(forKey: .protocol) ?? 1
+        accounts = c.lossyArray(Account.self, forKey: .accounts)
         defaults = (try? c.decodeIfPresent(RunnerDefaults.self, forKey: .defaults))
             ?? RunnerDefaults(cwd: "", accountId: accounts.first?.id ?? "claude-main")
         if defaults.accountId.isEmpty { defaults.accountId = accounts.first?.id ?? "claude-main" }
         clis = c.lossyArray(CliStatus.self, forKey: .clis)
         updates = try? c.decodeIfPresent(RunnerUpdates.self, forKey: .updates)
         pools = c.contains(.pools) ? c.lossyArray(Pool.self, forKey: .pools) : nil
+        providers = c.lossyArray(ProviderInfo.self, forKey: .providers)
+        experiments = Set(((try? c.decodeIfPresent([String].self, forKey: .experiments)) ?? nil) ?? [])
     }
 
     enum CodingKeys: String, CodingKey {
-        case runnerVersion, `protocol`, accounts, defaults, clis, updates, pools
+        case runnerVersion, `protocol`, accounts, defaults, clis, updates, pools, experiments, providers
     }
 }
 
 /// What the runner's own update is doing (protocol "Runner updates"): hello's
 /// `updates` and `runner.updates`. Read leniently.
 public struct RunnerUpdates: Sendable, Hashable, Decodable {
+    public struct BehindRunner: Sendable, Hashable, Decodable {
+        public var name: String
+        public var problem: String
+
+        public init(name: String, problem: String) {
+            self.name = name
+            self.problem = problem
+        }
+    }
+
     public struct OldRunner: Sendable, Hashable, Decodable {
         public var version: String
         public var threads: [String]
@@ -1749,8 +1899,13 @@ public struct RunnerUpdates: Sendable, Hashable, Decodable {
     public var launcherReason: String?
     /// Left out by runners before 30 Oct 2026, and while it's off.
     public var upstream: Upstream?
+    /// This machine can't follow GitHub's main properly (a commit made only
+    /// here, GitHub out of reach, hours behind). Nil while it's fine.
+    public var followProblem: String?
+    /// The other runners saying that of themselves (the main Mac's runner).
+    public var behindRunners: [BehindRunner]
 
-    public init(state: String = "idle", commit: String? = nil, subject: String? = nil, reason: String? = nil, oldRunners: [OldRunner] = [], launcherChanged: Bool = false, launcherReason: String? = nil, upstream: Upstream? = nil) {
+    public init(state: String = "idle", commit: String? = nil, subject: String? = nil, reason: String? = nil, oldRunners: [OldRunner] = [], launcherChanged: Bool = false, launcherReason: String? = nil, upstream: Upstream? = nil, followProblem: String? = nil, behindRunners: [BehindRunner] = []) {
         self.state = state
         self.commit = commit
         self.subject = subject
@@ -1759,6 +1914,8 @@ public struct RunnerUpdates: Sendable, Hashable, Decodable {
         self.launcherChanged = launcherChanged
         self.launcherReason = launcherReason
         self.upstream = upstream
+        self.followProblem = followProblem
+        self.behindRunners = behindRunners
     }
 
     public init(from decoder: Decoder) throws {
@@ -1771,9 +1928,11 @@ public struct RunnerUpdates: Sendable, Hashable, Decodable {
         launcherChanged = ((try? c.decodeIfPresent(Bool.self, forKey: .launcherChanged)) ?? nil) ?? false
         launcherReason = (try? c.decodeIfPresent(String.self, forKey: .launcherReason)) ?? nil
         upstream = (try? c.decodeIfPresent(Upstream.self, forKey: .upstream)) ?? nil
+        followProblem = (try? c.decodeIfPresent(String.self, forKey: .followProblem)) ?? nil
+        behindRunners = c.lossyArray(BehindRunner.self, forKey: .behindRunners)
     }
 
-    enum CodingKeys: String, CodingKey { case state, commit, subject, reason, oldRunners, launcherChanged, launcherReason, upstream }
+    enum CodingKeys: String, CodingKey { case state, commit, subject, reason, oldRunners, launcherChanged, launcherReason, upstream, followProblem, behindRunners }
 
     /// Something's on its way: a release being built or about to start, an
     /// old runner still finishing turns, or a LaunchAgent to reinstall.
@@ -1876,6 +2035,25 @@ public enum ISO8601 {
 /// you"): the action, where he does it, and the words to send back. With
 /// options it's a decision: a line of why, the likely answers, and the
 /// agent's own pick (an index into options).
+/// An ask's command, with the id of the button that runs it once the
+/// runner has made the card. `running` and `failed` are the runner's own
+/// copy of the button's state, for a client that only has the card.
+public struct AskRun: Sendable, Hashable, Codable {
+    public var command: String
+    public var buttonId: String?
+    public var cwd: String?
+    public var running: Bool?
+    public var failed: String?
+
+    public init(command: String, buttonId: String? = nil, cwd: String? = nil, running: Bool? = nil, failed: String? = nil) {
+        self.command = command
+        self.buttonId = buttonId
+        self.cwd = cwd
+        self.running = running
+        self.failed = failed
+    }
+}
+
 public struct Ask: Sendable, Hashable, Codable {
     public var action: String
     public var where_: String?
@@ -1889,6 +2067,8 @@ public struct Ask: Sendable, Hashable, Codable {
     public var suggested: Int?
     /// Where to go to do it or judge it, shown as buttons on the card.
     public var links: [AskLink]
+    /// A command the card offers to run (docs/protocol.md, "Run on the card").
+    public var run: AskRun?
     /// Ticked on the open card (only in a summary's `asks`).
     public var ticked: Bool
 
@@ -1925,6 +2105,7 @@ public struct Ask: Sendable, Hashable, Codable {
         let pick = (try? c.decodeIfPresent(Int.self, forKey: .suggested)) ?? nil
         suggested = pick.flatMap { options.indices.contains($0) ? $0 : nil }
         links = c.lossyArray(AskLink.self, forKey: .links)
+        run = (try? c.decodeIfPresent(AskRun.self, forKey: .run)) ?? nil
         ticked = ((try? c.decodeIfPresent(Bool.self, forKey: .ticked)) ?? nil) ?? false
     }
 
@@ -1938,11 +2119,12 @@ public struct Ask: Sendable, Hashable, Codable {
         if !optionNotes.isEmpty { try c.encode(optionNotes, forKey: .optionNotes) }
         try c.encodeIfPresent(suggested, forKey: .suggested)
         if !links.isEmpty { try c.encode(links, forKey: .links) }
+        try c.encodeIfPresent(run, forKey: .run)
         if ticked { try c.encode(true, forKey: .ticked) }
     }
 
     enum CodingKeys: String, CodingKey {
-        case action, reply, ticked, why, options, optionNotes, suggested, links
+        case action, reply, ticked, why, options, optionNotes, suggested, links, run
         case where_ = "where"
     }
 }

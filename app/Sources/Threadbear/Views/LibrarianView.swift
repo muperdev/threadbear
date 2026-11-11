@@ -183,7 +183,13 @@ private struct EntryRow: View {
         }
         .padding(EdgeInsets(top: zoomed(7), leading: SidebarMetrics.leading, bottom: zoomed(7), trailing: SidebarMetrics.trailing))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .tip(EntryRow.help(entry))
+        .tip(help)
+    }
+
+    /// Why it filed the thread, then what prompted the look.
+    private var help: String {
+        let why = LibrarianText.filingReasons(entry) { app.project($0)?.title }
+        return (why + [EntryRow.help(entry)]).joined(separator: "\n")
     }
 
     static func outcomeWords(_ outcome: LibrarianEntry.Outcome) -> String {

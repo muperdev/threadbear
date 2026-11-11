@@ -211,14 +211,26 @@ export function parseDialogCount(text: string): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
-// The 4-by-2 windows UserNotificationCenter makes for a dialog queued behind
-// another aren't dialogs yet, so the width leaves them out. Its last line is
-// what osascript prints.
+// Which of UserNotificationCenter's windows are dialogs. It keeps windows
+// that aren't shown: a strip about 30 high across the top it makes on waking,
+// and a dismissed alert's own window, full size. Both stay for hours, and
+// each one counted as a dialog left waiting (Davids-MacBook-Pro, 8 Nov 2026:
+// one of these threads after nearly every wake). So it has to be on screen.
+// Except on a locked screen, where a prompt waiting behind the lock may not
+// read as on screen, and too many threads beats missing one. The 4-by-2
+// windows it makes for a dialog queued behind another aren't dialogs yet, so
+// the width leaves them out, and the height leaves out the strip there too.
+// Plain JavaScript, as osascript runs it too.
+export const IS_DIALOG = `(w, locked) => w.kCGWindowOwnerName === 'UserNotificationCenter' && w.kCGWindowLayer > 0 && w.kCGWindowBounds.Width >= 100 && w.kCGWindowBounds.Height >= 60 && (locked || w.kCGWindowIsOnscreen === true)`;
+
+// Its last line is what osascript prints.
 const COUNT_DIALOGS = `
 ObjC.import('CoreGraphics');
 ObjC.import('Foundation');
 const all = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(0, 0))) || [];
-all.filter((w) => w.kCGWindowOwnerName === 'UserNotificationCenter' && w.kCGWindowLayer > 0 && w.kCGWindowBounds.Width >= 100).length;
+const session = ObjC.deepUnwrap(ObjC.castRefToObject($.CGSessionCopyCurrentDictionary())) || {};
+const locked = session.CGSSessionScreenIsLocked === true;
+all.filter((w) => (${IS_DIALOG})(w, locked)).length;
 `;
 
 export function realProbe(home: string = os.homedir()): ScreenProbe {

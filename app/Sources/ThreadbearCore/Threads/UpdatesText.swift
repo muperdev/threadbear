@@ -26,7 +26,7 @@ public enum UpdatesText {
     /// the runner: the icon's grey dot. The icon itself is always there
     /// since the CLIs' versions moved into its panel (28 Oct).
     public static func shown(app: AppSide, runner: RunnerUpdates?) -> Bool {
-        app.isPending || app.failed || runner?.isPending == true || runner?.failed == true || fromMike(runner)
+        app.isPending || app.failed || runner?.isPending == true || runner?.failed == true || fromMike(runner) || notFollowing(runner)
     }
 
     /// A release of Mike's this copy's main doesn't have yet (protocol
@@ -48,6 +48,7 @@ public enum UpdatesText {
         var lines: [String] = []
         if app.isPending || app.failed || runner?.isPending == true || runner?.failed == true { lines.append(tooltip(app: app, runner: runner)) }
         if let line = upstreamTooltip(runner?.upstream) { lines.append(line) }
+        if notFollowing(runner) { lines.append("A runner isn't following GitHub's main") }
         for cli in clis where cliPending(cli) {
             lines.append(CliText.bannerText(cli) ?? CliText.statusLine(cli))
         }
@@ -63,7 +64,19 @@ public enum UpdatesText {
     /// New changes from Mike want him too: they only come in when he says
     /// (docs/setup-and-updates.md 2.3, "Ask by default", 29 Oct).
     public static func needsYou(app: AppSide, runner: RunnerUpdates?) -> Bool {
-        runner?.launcherChanged == true || fromMike(runner)
+        runner?.launcherChanged == true || fromMike(runner) || notFollowing(runner)
+    }
+
+    /// A machine that isn't following GitHub's main: nothing fixes that by
+    /// itself, and bruce sat three days behind unnoticed (9 Nov).
+    static func notFollowing(_ u: RunnerUpdates?) -> Bool {
+        u?.followProblem != nil || u?.behindRunners.isEmpty == false
+    }
+
+    /// One line for each machine that isn't following GitHub's main.
+    public static func followLines(_ u: RunnerUpdates) -> [String] {
+        (u.followProblem.map { ["This runner isn't following GitHub's main properly: \($0)"] } ?? [])
+            + u.behindRunners.map { "\($0.name) isn't following GitHub's main properly: \($0.problem)" }
     }
 
     /// "12 new changes from Mike", for the icon's tooltip.
@@ -211,7 +224,7 @@ public enum UpdatesText {
     /// Every runner line in order, or the one that says there's nothing.
     public static func runnerLines(_ u: RunnerUpdates?) -> [String] {
         guard let u else { return ["This runner doesn't say how its updates are going."] }
-        let out = [buildLine(u), oldRunnersLine(u), launcherLine(u)].compactMap { $0 }
+        let out = [buildLine(u), oldRunnersLine(u), launcherLine(u)].compactMap { $0 } + followLines(u)
         return out.isEmpty ? ["The runner is up to date."] : out
     }
 

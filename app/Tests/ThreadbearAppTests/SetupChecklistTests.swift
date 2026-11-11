@@ -24,6 +24,13 @@ final class SetupChecklistTests: XCTestCase {
         XCTAssertFalse(list.noLogin)
     }
 
+    /// setup --self-hosted --local: no phone can reach the backend, so
+    /// pairing one isn't on the list, rather than left there undoable.
+    func testABackendOnThisMacOnlyLeavesThePhoneOff() {
+        let list = SetupChecklist.build(threads: [], accounts: [account], devices: [], canPair: true, localOnly: true)
+        XCTAssertEqual(list.items.map(\.item), [.firstThread, .website])
+    }
+
     func testEachTicksItselfOff() {
         let devices = [Device(id: "1", kind: .phone, name: "iPhone"), Device(id: "2", kind: .browser, name: "Chrome")]
         let list = SetupChecklist.build(threads: [thread("t", ran: true)], accounts: [account], devices: devices,

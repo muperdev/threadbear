@@ -31,7 +31,7 @@ test('config: the step 4 settings default safely', () => {
   assert.deepEqual(cfg.codexArgs, []);
   assert.ok(cfg.codexMainDir.endsWith('/.codex'));
   assert.ok(cfg.tokenStatsLimitsFile.endsWith('/Token Stats/limits.json'));
-  assert.deepEqual(cfg.cliUpdates, { claude: 'auto', codex: 'auto', checkMinutes: 60, keepCodexVersions: 2 });
+  assert.deepEqual(cfg.cliUpdates, { claude: 'auto', codex: 'auto', checkMinutes: 60, keepCodexVersions: 2, extra: [] });
   // Nobody's notes or pool folders by default: Mike's are in his runner.json.
   assert.deepEqual(cfg.accountNotes, {});
   assert.deepEqual(cfg.poolFolders, {});
@@ -53,7 +53,7 @@ test('config: runner.json and env set the step 4 settings', () => {
       },
       codexPath: '~/bin/codex',
       codexArgs: ['-c', 'features.memories=false', 3],
-      cliUpdates: { codex: 'notify', claude: 'sometimes', checkMinutes: 15, keepCodexVersions: 1 },
+      cliUpdates: { codex: 'notify', claude: 'sometimes', checkMinutes: 15, keepCodexVersions: 1, extra: [{ name: 'grok', command: ['grok', 'update'] }, { name: 'bad', command: 'grok update' }] },
       accountNotes: { 'claude-3': 'Tests', 'claude-1': 4 },
     }),
   );
@@ -63,7 +63,7 @@ test('config: runner.json and env set the step 4 settings', () => {
   assert.deepEqual(cfg.defaults.efforts, { codex: 'low' });
   assert.ok(cfg.codexPath?.endsWith('/bin/codex') && !cfg.codexPath.startsWith('~'));
   assert.deepEqual(cfg.codexArgs, ['-c', 'features.memories=false']);
-  assert.deepEqual(cfg.cliUpdates, { claude: 'auto', codex: 'notify', checkMinutes: 15, keepCodexVersions: 2 });
+  assert.deepEqual(cfg.cliUpdates, { claude: 'auto', codex: 'notify', checkMinutes: 15, keepCodexVersions: 2, extra: [{ name: 'grok', command: ['grok', 'update'] }] });
   assert.deepEqual(cfg.accountNotes, { 'claude-3': 'Tests' }, "runner.json's notes replace the default ones");
 
   const env = loadConfig({

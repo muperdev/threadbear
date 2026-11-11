@@ -13,7 +13,13 @@
 // commit goes to it as a message; the same failure again says nothing.
 // Archiving it (it does that itself when it's done) lets the next failure
 // start a fresh one.
+//
+// On a machine that follows GitHub's main (follow-origin.ts) nothing can land:
+// bruce's and the Pixel's fix threads committed on their own main on 6 and 9
+// Nov, and each machine stopped following for days. There the thread hands
+// the fix to the main Mac instead (and tb land refuses).
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type { Logger } from './log.ts';
 
@@ -39,6 +45,10 @@ export type UpdateFixerDeps = {
   open: (threadId: string) => boolean;
   // Queues a message to it.
   send: (threadId: string, text: string) => void;
+  // followOrigin in runner.json: main here is GitHub's, so nothing lands here.
+  followsOrigin?: () => boolean;
+  // The checkout it follows, to name in the thread's instructions.
+  checkout?: string;
 };
 
 export class UpdateFixer {
@@ -72,15 +82,21 @@ export class UpdateFixer {
     const s = this.read();
     if (s && this.deps.open(s.threadId)) {
       if (s.commit === f.commit && s.kind === f.kind) return 'already';
-      this.deps.send(s.threadId, followUp(f));
+      this.deps.send(s.threadId, followUp(f, this.follows()));
       this.write({ threadId: s.threadId, kind: f.kind, commit: f.commit });
       this.deps.log.info('told the fix-update thread about a newer failure', { threadId: s.threadId, commit: f.short });
       return 'sent';
     }
-    const threadId = this.deps.start({ text: firstMessage(f, this.deps.home), title: title(f), why: 'an update to main that failed' });
+    const follows = this.follows();
+    const text = follows ? handOverMessage(f, this.deps.home, this.deps.checkout) : firstMessage(f, this.deps.home);
+    const threadId = this.deps.start({ text, title: title(f), why: 'an update to main that failed' });
     this.write({ threadId, kind: f.kind, commit: f.commit });
     this.deps.log.info('started a thread to fix a failed update', { threadId, commit: f.short, kind: f.kind });
     return 'started';
+  }
+
+  private follows(): boolean {
+    return this.deps.followsOrigin?.() ?? false;
   }
 }
 
@@ -100,14 +116,32 @@ function firstMessage(f: UpdateFailure, home: string): string {
     : `The runner builds main again within seconds of it moving. If nothing needed landing (it was a one-off), remove "${path.join(home, 'runner', 'update.json')}" and it tries again within 5 minutes.`;
   return `${what(f)}. The whole output is in ${f.logFile}.
 
-Threadbear started this thread in the background in place of a banner. Fix it without me if you can:
+Threadbear started this thread in the background in place of a banner, on this install's default mode. Fix it without me if you can. If that mode asks before some steps (Ask before edits, or Auto's check stopping one), those wait on a card for me: carry on with what you can meanwhile.
 
 1. Read the output and work out why. Fetch main first: if a commit since ${f.short} already fixes it, or another thread is on it, don't do it twice.
 2. Fix the cause. A test that failed because the Mac was busy, or that flakes, gets made to hold up under load rather than just run again. Land the fix on main the usual way (AGENTS.md).
 3. ${retry} Watch \`tb status\` until its "Following main" line no longer says failed (a release built and waiting to start, or up to date).
-4. Once it's through, call end_turn with needs "nothing" and archive: true, so this never reaches my inbox. Only leave it for me if it needs a decision only I can make, you can't push from this machine, or it still fails after a real attempt. Then tell me in a few lines what's wrong and what you tried.`;
+4. Once it's through, call end_turn with needs "nothing" and archive: true, so this never reaches my inbox. Only leave it for me if it needs a decision only I can make, a step is waiting on my yes, you can't push from this machine, or it still fails after a real attempt. Then tell me in a few lines what's wrong and what you tried.`;
 }
 
-function followUp(f: UpdateFailure): string {
+// The same job on a machine that doesn't land. The folder for the main Mac's
+// thread is written as ~/... because its home folder differs from this one's.
+function handOverMessage(f: UpdateFailure, home: string, checkout: string | undefined): string {
+  const here = checkout ?? 'this checkout';
+  const there = checkout?.startsWith(os.homedir()) ? `~${checkout.slice(os.homedir().length)}` : (checkout ?? 'the Threadbear repo');
+  return `${what(f)}. The whole output is in ${f.logFile}.
+
+Threadbear started this thread in the background in place of a banner, on this install's default mode. Sort it out without me if you can.
+
+This machine follows GitHub's main (followOrigin in runner.json), and nothing lands here. Never commit on main in ${here}, and tb land refuses in this repo: a commit on a following machine's main leaves it days behind GitHub, as it can no longer fast-forward.
+
+1. Read the output and work out why. Fetch GitHub's main first (git fetch origin): if a commit since ${f.short} already fixes it, or another thread is on it, don't do it twice.
+2. If it was a one-off with nothing to fix (this machine was busy, say), remove "${path.join(home, 'runner', 'update.json')}" and the runner tries again within 5 minutes.
+3. Otherwise get the fix to the main Mac, which lands it. A test that failed because this machine is slow gets made to hold up under load rather than just run again. Make the fix on a branch of your own. Then start a thread with create_thread, runner: "main", folder "${there}", with the failure and your reasoning, and ask it to land the fix: pushing alone lands nothing. If this machine can push a branch of its own (git push origin HEAD:<branch>, with a name the repo's rules let this machine push), name that branch in the brief; if it can't, put the whole diff in the brief, as the main Mac can't see this machine's branches.
+4. Watch \`tb status\`: the fix reaches this machine by itself once it's on GitHub's main. While you wait, call end_turn with needs "nothing" and snooze "1d" (a newer failure wakes you). Once its "Following GitHub's main" line no longer says failed, call end_turn with needs "nothing" and archive: true. Only leave it for me if it needs a decision only I can make, a step is waiting on my yes, or it still fails after a real attempt.`;
+}
+
+function followUp(f: UpdateFailure, follows: boolean): string {
+  if (follows) return `It failed again at a newer commit. ${what(f)}. The whole output is in ${f.logFile}. Carry on the same way: Never commit on main on this machine, and hand any fix to the main Mac. Archive this thread once the runner gets through.`;
   return `It failed again at a newer commit. ${what(f)}. The whole output is in ${f.logFile}. Carry on the same way, and archive this thread once main goes through.`;
 }

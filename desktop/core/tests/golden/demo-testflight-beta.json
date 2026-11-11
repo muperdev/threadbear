@@ -1,0 +1,97 @@
+{
+  "closed" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Get build 42 of the iPhone app out to the beta testers.",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "g:t:turn_1_t",
+      "inGroup" : false,
+      "kind" : "group",
+      "seq" : 3,
+      "text" : "Worked for 18s",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 5,
+      "text" : "Build 42 is archived and signed, with the release notes written from this week's commits. The uploa…",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 6,
+      "text" : "18s, $0.05",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "ak:6",
+      "inGroup" : false,
+      "kind" : "asks",
+      "seq" : 6,
+      "text" : "open, 0 of 2 ticked: Accept the new agreement in App Store Connect; Check who gets the beta",
+      "turn" : "turn_1"
+    }
+  ],
+  "open" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Get build 42 of the iPhone app out to the beta testers.",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : true,
+      "id" : "g:t:turn_1_t",
+      "inGroup" : false,
+      "kind" : "group",
+      "seq" : 3,
+      "text" : "Worked for 18s",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:turn_1_t",
+      "inGroup" : true,
+      "kind" : "tool",
+      "seq" : 3,
+      "text" : "xcodebuild archive",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 5,
+      "text" : "Build 42 is archived and signed, with the release notes written from this week's commits. The uploa…",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 6,
+      "text" : "18s, $0.05",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "ak:6",
+      "inGroup" : false,
+      "kind" : "asks",
+      "seq" : 6,
+      "text" : "open, 0 of 2 ticked: Accept the new agreement in App Store Connect; Check who gets the beta",
+      "turn" : "turn_1"
+    }
+  ]
+}

@@ -14,7 +14,7 @@ import path from 'node:path';
 import os from 'node:os';
 import type { Config } from './config.ts';
 import { CONVEX_BIN } from './convex-keys.ts';
-import { convexEnv, readConvexAdmin, SELF_HOSTED_ENV_FILE, type ConvexAdmin } from './convex-admin.ts';
+import { convexEnv, localOnly, readConvexAdmin, SELF_HOSTED_ENV_FILE, type ConvexAdmin } from './convex-admin.ts';
 import { convexPoster, forbiddenText, readSyncKey, type Post } from './sync.ts';
 
 type Run = { ok: boolean; out: string; err: string };
@@ -282,6 +282,8 @@ export async function runnerKeysCommand(cfg: Pick<Config, 'home' | 'sync'>, args
       print(`Took out everything runner ${id} wrote: its threads with their messages and pictures, sidebar rows, Pocket cards, schedules, projects and accounts.`);
       return 0;
     }
+    // Another Mac can't reach a backend on this Mac's 127.0.0.1, whatever key it has.
+    if (sub === 'add' && localOnly(url)) return fail(`This Mac's backend is on this Mac only (${url}, from setup --self-hosted --local), so another Mac can't reach it. To add one, put it on your tailnet first: ./threadbear setup --self-hosted --tailnet (docs/self-hosting.md).`);
     if (sub === 'add') return await add(rest[0], f, call, deps.ssh ?? realSsh, print, fail, url, cfg.sync.runnerId, cfg.sync.site);
     if (sub === 'logins') return await logins(rest, f, call, print, fail);
     // After a rotation, what the old key could have left (auditCommand).
@@ -292,7 +294,7 @@ export async function runnerKeysCommand(cfg: Pick<Config, 'home' | 'sync'>, args
 }
 
 async function add(name: string | undefined, f: Flags, call: (kind: 'query' | 'mutation', fn: string, a: Record<string, unknown>) => Promise<unknown>, ssh: Ssh, print: (s: string) => void, fail: (s: string) => number, url: string, ownId: string | undefined, site?: string): Promise<number> {
-  if (!name?.trim()) return fail('tb runner add <name>: what to call the runner ("bruce").');
+  if (!name?.trim()) return fail('tb runner add <name>: what to call the runner ("mac-mini").');
   if (Boolean(f.ssh) === Boolean(f.out)) return fail('Say where the key goes: --ssh <host> writes it into that Mac\'s secrets/convex-key, --out <file> into a file of your own. It is never printed.');
   if (!ownId) return fail("This Mac has no sync.runnerId in runner.json yet (its runner makes one when it starts), so it can't tell its own id from another Mac's. Start it, then run this again.");
   const asked = f.id?.trim();
@@ -307,8 +309,12 @@ async function add(name: string | undefined, f: Flags, call: (kind: 'query' | 'm
     try {
       json = JSON.parse(r.out);
     } catch {
-      return fail(`${f.ssh}'s runner.json isn't JSON.`);
+      return fail(`${f.ssh}'s runner.json isn't JSON. Fix it there first; this won't write over it.`);
     }
+    // Valid JSON that isn't an object ([] or "x") is as broken as a typo:
+    // spread into the file written back, it became one with nothing in it
+    // but a new runner id (config.ts, RunnerJsonError).
+    if (!json || typeof json !== 'object' || Array.isArray(json)) return fail(`${f.ssh}'s runner.json holds JSON, but not an object in { }. Fix it there first; this won't write over it.`);
     if (json.sync?.url && json.sync.url.replace(/\/+$/, '') !== url.replace(/\/+$/, '')) return fail(`${f.ssh} mirrors to ${clean(json.sync.url, 120)}, not this Mac's ${url}, so a key from here is no use to it.`);
     // What that Mac says it is, which this Mac decides whether to believe:
     // a Mac that's been tampered with could name this one, or any runner

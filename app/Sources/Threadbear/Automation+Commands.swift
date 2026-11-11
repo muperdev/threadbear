@@ -9,6 +9,119 @@ import ThreadbearCore
 extension Automation {
     // MARK: Commands
 
+    /// Highlights' rows and heads-up parts, as their clicks do (app/README.md,
+    /// `highlight`): `tick` (an ask's index), `edited` (its disclosure, true or
+    /// false), `showAll` (`links`, `commits`, `subagents` or `started`), `open`
+    /// (a row's title: a click), `menu` (a row's title: its right-click menu,
+    /// " | " between items, "---" for a separator), `choose` (an item of it,
+    /// with `row`).
+    static func highlightCommand(_ c: [String: Any], app: AppModel) async -> String {
+        guard let thread = app.selectedThread else { return "error no thread selected" }
+        if let index = c["tick"] as? Int {
+            guard let seq = thread.asksSeq, thread.asks.indices.contains(index) else { return "error no ask \(index)" }
+            let ticked = !thread.asks[index].ticked
+            app.session(for: thread.id).tickAsk(asksSeq: seq, index: index, ticked: ticked)
+            return "ok \(ticked ? "ticked" : "unticked")"
+        }
+        if let open = c["edited"] as? Bool {
+            guard let flags = HighlightsFlags.current else { return "error Highlights isn't showing" }
+            flags.editedOpen = open
+            return "ok"
+        }
+        if let show = c["showAll"] as? String {
+            guard let flags = HighlightsFlags.current else { return "error Highlights isn't showing" }
+            switch show {
+            case "links": flags.allLinks = true
+            case "commits": flags.allCommits = true
+            case "subagents": flags.allSubagents = true
+            case "started": flags.allStarted = true
+            default: return "error showAll is links, commits, subagents or started"
+            }
+            return "ok"
+        }
+        guard let fetched = app.highlights[thread.id] else { return "error highlights not fetched" }
+        let sections = HighlightSections.build(fetched)
+        func find(_ title: String) -> Highlight? {
+            (sections.pinned + sections.files + sections.links + sections.commits).first { $0.title == title }
+        }
+        if let title = c["open"] as? String {
+            guard let item = find(title) else { return "error no row \(title)" }
+            guard item.kind != .commit else { return "error a commit doesn't open" }
+            app.open(item, in: thread, external: false)
+            try? await Task.sleep(for: .milliseconds(300))
+            return "ok \(app.panePreview[thread.id].map { "showing \($0.title)" } ?? "no preview")"
+        }
+        if let title = c["menu"] as? String {
+            guard let item = find(title) else { return "error no row \(title)" }
+            return "ok " + highlightMenu(item, in: thread).map(\.title).joined(separator: " | ")
+        }
+        if let chosen = c["choose"] as? String, let title = c["row"] as? String {
+            guard let item = find(title), let entry = highlightMenu(item, in: thread).first(where: { $0.title == chosen }) else { return "error no menu item \(chosen)" }
+            entry.action?(app, item, thread)
+            try? await Task.sleep(for: .milliseconds(200))
+            return "ok " + (NSPasteboard.general.string(forType: .string) ?? "")
+        }
+        return "error highlight needs tick, edited, showAll, open, menu or choose"
+    }
+
+    /// What the last tile click would have opened, kept so `viewer` can say
+    /// (the real Quick Look comes in front of whatever's on the desktop).
+    nonisolated(unsafe) private static var viewerShown: (paths: [String], index: Int)?
+
+    /// `tile`: presses a picture tile on the last row of pictures, as a click
+    /// does, with Quick Look's panel swapped for a note of what it would show.
+    static func tile(_ c: [String: Any], app: AppModel) -> String {
+        let least = max((c["count"] as? Int) ?? 1, 1)
+        let grids = all(ImageGridView.self, in: app.transcript.tableView).filter { $0.debugPaths.count >= least }
+        guard let grid = grids.last else { return "error no row of \(least) pictures on screen" }
+        QuickLookCoordinator.shared.debugOpened = { viewerShown = ($0, $1) }
+        guard grid.open((c["index"] as? Int) ?? 0) else { return "error that tile doesn't open" }
+        return viewer([:])
+    }
+
+    /// `viewer`: says what a tile's click would be showing.
+    static func viewer(_ c: [String: Any]) -> String {
+        if c["close"] as? Bool == true { viewerShown = nil }
+        guard let shown = viewerShown else { return "ok closed" }
+        return "ok showing \(shown.index + 1) of \(shown.paths.count) \(shown.paths[shown.index])"
+    }
+
+    /// A row's menu, as HighlightsView builds it (FileMenu, LinkMenu, Copy
+    /// sha, Divider, Remove), with what each item does.
+    private static func highlightMenu(_ item: Highlight, in thread: ThreadSummary) -> [(title: String, action: ((AppModel, Highlight, ThreadSummary) -> Void)?)] {
+        var items: [(title: String, action: ((AppModel, Highlight, ThreadSummary) -> Void)?)] = []
+        if let path = item.path {
+            items.append(("Preview here", { app, item, thread in app.preview(path: path, title: item.title, in: thread) }))
+            if thread.isRemote {
+                items.append(("Open", { app, item, thread in app.openRemoteFile(URL(fileURLWithPath: path), .app, in: thread, title: item.title) }))
+            } else {
+                items.append(("Open", { app, _, _ in app.openExternally(URL(fileURLWithPath: path)) }))
+                items.append(("Reveal in Finder", { app, _, _ in app.revealInFinder(path) }))
+            }
+            items.append(("Copy path", { app, _, _ in app.copyToPasteboard(path) }))
+        } else if let url = item.link {
+            if url.isFileURL {
+                items.append(("Preview here", { app, item, thread in app.preview(path: url.path, title: item.title, in: thread) }))
+                items.append(("Open", { app, item, thread in app.openLink(url, title: item.title, in: thread, external: true) }))
+            } else {
+                items.append((WebLinkAction.browser.title, { app, _, _ in app.openExternally(url) }))
+                if PreviewRules.isWebPage(url) {
+                    items.append((WebLinkAction.panel.title, { app, item, thread in app.preview(page: url, title: item.title, in: thread) }))
+                }
+            }
+            items.append(("Copy link", { app, _, _ in app.copyToPasteboard(url.absoluteString) }))
+            if PreviewRules.isWebPage(url) {
+                items.append(("---", nil))
+                items.append(("Default", nil))
+            }
+        } else if let sha = item.sha {
+            items.append(("Copy sha", { app, _, _ in app.copyToPasteboard(sha) }))
+        }
+        items.append(("---", nil))
+        items.append(("Remove", { app, item, thread in app.removeHighlight(item, in: thread.id) }))
+        return items
+    }
+
     /// Settings > Keyboard from a script: `record` starts listening for a
     /// command, `press` is a key through the recorder ("cmd+e"), `answer` is
     /// `use` or `cancel`, `reset` is a command or `all`. `post` is a real key
@@ -342,14 +455,14 @@ extension Automation {
         let dx = number(c["dx"]) ?? 0
         let steps = max(1, Int(number(c["steps"]) ?? 8))
         let fresh = row.swipe.phase == .idle
-        if fresh { post(RowSwipeEvents.event(dx: 0, phase: .began)) }
+        if fresh { post(RowSwipeEvents.event(dx: 0, phase: .began, content: true)) }
         for _ in 0..<steps {
-            post(RowSwipeEvents.event(dx: dx / Double(steps), phase: .changed))
+            post(RowSwipeEvents.event(dx: dx / Double(steps), phase: .changed, content: true))
             try? await Task.sleep(for: .milliseconds(16))
         }
         let along = "offset \(Int(row.offset)) armed \(row.swipe.armed)"
         guard c["lift"] as? Bool ?? true else { return "ok \(along)" }
-        post(RowSwipeEvents.event(dx: 0, phase: .ended))
+        post(RowSwipeEvents.event(dx: 0, phase: .ended, content: true))
         try? await Task.sleep(for: .milliseconds(500))
         app.hoverOverride = nil
         return "ok \(along), let go: \(app.threads[id]?.isArchived == true ? "archived" : "not archived")"
@@ -522,7 +635,15 @@ extension Automation {
             // The context ring's popover; only on a thread that has one.
             guard let thread = app.selectedThread, let meter = ContextMeter(thread) else { return "error no context meter on this thread" }
             if c["show"] as? Bool == true { return show { app.contextMeterRequest += 1 } }
-            return "ok " + json([meter.amount, "\(meter.percent)%"])
+            // Then the popover's breakdown, once the runner has answered
+            // (opening the popover asks): "Messages 610k 61%".
+            var lines = [meter.amount, "\(meter.percent)%"]
+            if let b = ContextBreakdown(app.contextUsage[thread.id]?.usage) {
+                lines.append("\(b.headline) \(b.amount)")
+                lines += b.rows.map { [$0.name, $0.tokenText, $0.percentText].compactMap { $0 }.joined(separator: " ") }
+                if let at = b.at { lines.append("Breakdown from \(ContextBreakdown.age(at, now: Date()))") }
+            }
+            return "ok " + json(lines)
         case "account":
             // An account by its email (as the picker shows it) or its id.
             if let title = c["click"] as? String {
@@ -549,6 +670,16 @@ extension Automation {
         case "runner":
             // Runs on, on the new-thread composer only.
             guard app.selectedThread == nil else { return "error runner is for a new thread" }
+            // The Default submenu, by a runner's name.
+            if let name = c["setDefault"] as? String {
+                if name == "This Mac" {
+                    app.setDefaultRunner(nil)
+                    return "ok"
+                }
+                guard let runner = app.remoteRunners.first(where: { $0.name == name }) else { return "error no runner \(name)" }
+                app.setDefaultRunner(runner.id)
+                return "ok"
+            }
             menu = settings.runnerMenu()
         default: return "error menu is model, account, pin, permission, folder or runner"
         }
@@ -606,9 +737,19 @@ extension Automation {
             menu.update()
             menu.popUp(positioning: nil, at: NSPoint(x: view.bounds.midX, y: view.bounds.midY), in: view)
         } else {
-            guard let x = c["x"] as? Double, let y = c["y"] as? Double else { return "error realMenu needs x and y, or main" }
             let right = c["right"] as? Bool == true
-            let point = NSPoint(x: x, y: view.bounds.height - y)
+            // `tipPrefix` opens it at the control with that tooltip (a sidebar
+            // row's starts with its title), for what has no fixed position.
+            let point: NSPoint
+            if let prefix = c["tipPrefix"] as? String {
+                guard let content = window.contentView, let anchor = all(TipAnchorView.self, in: content).last(where: { $0.text.hasPrefix(prefix) && !$0.isHiddenOrHasHiddenAncestor }) else {
+                    return "error no control with the tip \(prefix)"
+                }
+                point = anchor.convert(NSPoint(x: anchor.bounds.midX, y: anchor.bounds.midY), to: nil)
+            } else {
+                guard let x = c["x"] as? Double, let y = c["y"] as? Double else { return "error realMenu needs x and y, or main" }
+                point = NSPoint(x: x, y: view.bounds.height - y)
+            }
             func event(_ type: NSEvent.EventType, _ number: Int) -> NSEvent? {
                 NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                    windowNumber: window.windowNumber, context: nil, eventNumber: number, clickCount: 1, pressure: 1)
@@ -765,7 +906,7 @@ extension Automation {
             if item.isSeparatorItem { return [indent + "---"] }
             if item.isSectionHeader { return [indent + "# " + item.title] }
             var line = indent + (item.state == .on ? "[x] " : "[ ] ") + item.title
-            if item.image?.accessibilityDescription == "Default" { line += " *" }
+            if item.image?.accessibilityDescription == "Default" || item.badge?.stringValue == "★" { line += " *" }
             if let subtitle = item.subtitle, !subtitle.isEmpty { line += " - " + subtitle }
             return [line] + (item.submenu.map { describe($0, indent: indent + "    ") } ?? [])
         }

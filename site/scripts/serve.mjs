@@ -33,12 +33,14 @@ export function byteRange(header, size) {
   return [start, Math.min(end, size - 1)];
 }
 
-export function createSiteServer(folder = fileURLToPath(new URL("../dist/", import.meta.url))) {
+export function createSiteServer(folder = fileURLToPath(new URL("../dist/", import.meta.url)), mediaFolder = fileURLToPath(new URL("../.media/", import.meta.url))) {
   // Ending in a slash, so `../dist-other/x` can't pass for being inside it.
   const dist = resolve(folder) + sep;
+  // The changelog's pictures and clips before they go up to R2 (prod serves /media/ from there).
+  const media = resolve(mediaFolder) + sep;
   // Inside dist once symlinks are followed too. (Worked out per request: dist may not be built yet.)
-  const isFile = (file) => file.startsWith(dist) && existsSync(file) && statSync(file).isFile()
-    && realpathSync(file).startsWith(realpathSync(dist) + sep);
+  const isFile = (file, root = dist) => file.startsWith(root) && existsSync(file) && statSync(file).isFile()
+    && realpathSync(file).startsWith(realpathSync(root) + sep);
 
   function send(req, res, status, file, pathname) {
     const type = types[extname(file)] ?? "application/octet-stream";
@@ -75,6 +77,20 @@ export function createSiteServer(folder = fileURLToPath(new URL("../dist/", impo
     if (pathname.endsWith(".html")) {
       const clean = pathname === "/index.html" ? "/" : pathname.slice(0, -5);
       res.writeHead(307, { Location: clean }).end();
+      return;
+    }
+    if (pathname.startsWith("/media/")) {
+      const local = normalize(join(media, pathname.slice("/media/".length)));
+      if (isFile(local, media)) return send(req, res, 200, local, pathname);
+      // Not here: it's probably already up, so pass prod's through (a redirect to it would be
+      // blocked by the CSP's 'self').
+      fetch(`https://threadbear.mikecann.app${pathname}`, { method: req.method, headers: req.headers.range ? { Range: req.headers.range } : {} })
+        .then(async (r) => {
+          const head = { "Content-Type": r.headers.get("content-type") ?? "application/octet-stream", ...headersFor(pathname, r.headers.get("content-type") ?? "") };
+          for (const h of ["content-range", "accept-ranges"]) if (r.headers.has(h)) head[h] = r.headers.get(h);
+          res.writeHead(r.status, head).end(Buffer.from(await r.arrayBuffer()));
+        })
+        .catch(() => res.writeHead(502).end("Couldn't reach prod for that"));
       return;
     }
     const file = normalize(join(dist, pathname === "/" ? "index.html" : pathname));

@@ -9,6 +9,7 @@
 //   - one that can't work here: answered with a note saying what does.
 // A path ("/Users/mike") isn't a command; a command neither CLI knows goes
 // to the model as words, as it did before.
+import { providerName } from './providers.ts';
 import type { Provider } from './protocol.ts';
 
 export type SlashCommandSource = 'cli' | 'skill' | 'threadbear';
@@ -25,6 +26,10 @@ export type SlashCommand = {
   scope?: string;
   plugin?: string;
   path?: string; // its file on this machine, when found
+  // Its frontmatter has `disable-model-invocation: true`: it runs only as
+  // the start of a message, as the agent can't run it when it's named
+  // partway through one. Absent: unknown, or the agent can.
+  userOnly?: boolean;
 };
 
 export type ParsedCommand = { name: string; args: string };
@@ -121,7 +126,7 @@ export function planCommand(provider: Provider, cmd: ParsedCommand, skills: Read
   const name = cmd.name.toLowerCase();
   if (name === 'model') return { kind: 'model', args: cmd.args };
   if (name === 'effort') return { kind: 'effort', args: cmd.args };
-  if (name === 'fast') return provider === 'claude' ? { kind: 'fast', args: cmd.args } : { kind: 'note', text: `${provider === 'grok' ? 'Grok' : 'Codex'} threads don't have fast mode.` };
+  if (name === 'fast') return provider === 'claude' ? { kind: 'fast', args: cmd.args } : { kind: 'note', text: `${providerName(provider)} threads don't have fast mode.` };
   if (provider === 'claude') {
     // Claude's CLI runs the rest itself, and answers any others it can't
     // ("/x isn't available in this environment").
@@ -137,7 +142,7 @@ export function planCommand(provider: Provider, cmd: ParsedCommand, skills: Read
   if (skills.has(cmd.name)) return { kind: 'cli' };
   if (name in ELSEWHERE) {
     const said = ELSEWHERE[name];
-    return { kind: 'note', text: `/${name} is part of Codex's terminal app and doesn't run in Threadbear.${said ? ` ${said}` : ''}` };
+    return { kind: 'note', text: `/${name} is part of ${providerName(provider)}'s terminal app and doesn't run in Threadbear.${said ? ` ${said}` : ''}` };
   }
   // Its adapter adds the skill when one has this name (the runner may not
   // have its list yet), else Codex gets it as words.
@@ -146,7 +151,11 @@ export function planCommand(provider: Provider, cmd: ParsedCommand, skills: Read
 
 // The picker's list for a thread: Threadbear's own first, then the CLI's.
 export function commandList(provider: Provider, cli: SlashCommand[]): SlashCommand[] {
-  const own = provider === 'codex' ? [...THREADBEAR_COMMANDS, ...CODEX_COMMANDS] : provider === 'grok' ? [...THREADBEAR_COMMANDS, ...GROK_COMMANDS] : [...THREADBEAR_COMMANDS, FAST_COMMAND];
+  const own =
+    provider === 'codex' ? [...THREADBEAR_COMMANDS, ...CODEX_COMMANDS]
+    : provider === 'grok' ? [...THREADBEAR_COMMANDS, ...GROK_COMMANDS]
+    : provider === 'claude' ? [...THREADBEAR_COMMANDS, FAST_COMMAND]
+    : THREADBEAR_COMMANDS;
   const seen = new Set(own.map((c) => c.name));
   const rest = cli.filter((c) => {
     if (seen.has(c.name) || (provider === 'claude' && CLAUDE_HIDDEN.has(c.name))) return false;

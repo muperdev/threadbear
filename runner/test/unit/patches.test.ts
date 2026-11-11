@@ -396,7 +396,8 @@ test('a panel with an items function is a list panel, filled by renderListPanel 
   const ctx = {
     cwd: app,
     threadId: 't1',
-    timeoutMs: 10_000,
+    // Not the runner's 10 s: see liveRepo in patch-hash-binding.test.ts.
+    timeoutMs: 120_000,
     run: async (command: string, cwd: string) => {
       commands.push({ command, cwd });
       return runCommand(command, { cwd, env: process.env });
@@ -474,7 +475,7 @@ test('live state: when hides, badge counts, label retitles, a shared command run
   const base = await loadPatchSet(app, home);
   assert.equal(hasLive(base), true);
   const commands: string[] = [];
-  const ctx = { cwd: app, threadId: 't1', run: async (command: string, cwd: string) => { commands.push(command); return runCommand(command, { cwd, env: process.env }); } };
+  const ctx = { cwd: app, threadId: 't1', timeoutMs: 120_000, run: async (command: string, cwd: string) => { commands.push(command); return runCommand(command, { cwd, env: process.env }); } };
   const set = await applyLive(base, ctx);
   assert.deepEqual(set.actions.map((a) => [a.title, a.badge]), [['Your turn', 3], ['Plain', undefined], ['Zero', undefined], ['Merge #3', undefined], ['Blank', undefined], ['a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a', undefined]]);
   assert.deepEqual(set.actions.map((a) => a.id).slice(-3), ['review.merge', 'review.blank', 'review.lines']);

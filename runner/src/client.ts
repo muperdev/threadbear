@@ -32,6 +32,10 @@ export type RunnerClientOptions = {
   // An already connected socket to speak over (handover.ts checks whose
   // the other end is before the bearer header goes out on it).
   socket?: import('node:net').Socket;
+  // The thread whose key `token` is (tb inside a thread, tb-connect.ts). The
+  // runner works the key out from this and treats the connection as that
+  // thread (docs/protocol.md, "A thread's own key").
+  threadId?: string;
 };
 
 export class RunnerClient {
@@ -76,7 +80,7 @@ export class RunnerClient {
         if (!check) {
           let answer: ReturnType<typeof answerChallenge>;
           try {
-            answer = answerChallenge(token, msg, { id: AUTH_ID, port: loopbackPort(url), server: opts.server });
+            answer = answerChallenge(token, msg, { id: AUTH_ID, port: loopbackPort(url), server: opts.server, threadId: opts.threadId });
           } catch (e) {
             return fail(e as Error);
           }

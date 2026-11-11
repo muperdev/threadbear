@@ -473,6 +473,10 @@ export default {
   const ctx = {
     cwd: thread,
     threadId: 't1',
+    // Not the runner's 10 s: a login shell for `echo 3` took longer than
+    // that with the whole suite running on a busy Mac (jwsandeman's fork,
+    // 7 Nov). Tests of the timeout itself pass their own.
+    timeoutMs: 120_000,
     run: (command: string, cwd: string) => {
       ran.push({ command, cwd });
       return runCommand(command, { cwd, env: process.env });

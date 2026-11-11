@@ -57,12 +57,7 @@ public enum UsageGroups {
     }
 
     static func providerTitle(_ provider: String) -> String {
-        switch provider {
-        case "claude": return "Claude"
-        case "codex": return "Codex"
-        case "grok": return "Grok"
-        default: return provider.prefix(1).uppercased() + provider.dropFirst()
-        }
+        Providers.info(provider).name
     }
 
     // MARK: The icon's tooltip

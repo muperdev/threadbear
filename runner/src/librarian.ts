@@ -52,7 +52,7 @@ export type LibrarianHost = {
   publish(n: Notification): void;
   // Keeps the look's line on where the thread is up to, shown at the top
   // of its Highlights (docs/protocol.md).
-  setBrief?(threadId: string, text: string): void;
+  setBrief?(threadId: string, text: string, purpose?: string): void;
   // Renames a thread whose title no longer says what it's about; returns
   // the title it took, or nothing when it kept the old one.
   retitleFromLibrarian?(threadId: string, title: string, from: string): string | undefined;
@@ -117,7 +117,9 @@ const RANK: Record<LibrarianReason, number> = { asked: 0, 'waited-on': 1, moved:
 
 // `early`: the look was from the first message alone, so the first turn's
 // end still gets a look of its own.
-type Look = { at: string; seq: number; early?: boolean };
+// `refused`: projects the second opinion said this thread isn't working on
+// (confirmPick), so later looks don't ask again or get to re-roll the answer.
+type Look = { at: string; seq: number; early?: boolean; refused?: string[] };
 
 // A Pocket card the librarian added.
 type PocketAdded = { at: string; threadId: string };
@@ -148,6 +150,7 @@ type Answer = {
   addFolders?: unknown;
   links?: unknown;
   thread?: unknown;
+  purpose?: unknown;
   title?: unknown;
   // New names for projects the thread is in, by id.
   retitle?: unknown;
@@ -155,7 +158,13 @@ type Answer = {
   met?: unknown;
   pocket?: unknown;
   why?: unknown;
+  // From the second opinion on a pick (CHECK_SYSTEM).
+  belongs?: unknown;
 };
+
+// How many picks one look may ask a second opinion on. Haiku has listed nine
+// projects for one thread; the rest of such a list wait for a later look.
+export const PICK_CHECKS_PER_LOOK = 3;
 
 export class Librarian {
   private host: LibrarianHost;
@@ -526,9 +535,94 @@ export class Librarian {
       this.note(job, 'failed', "The model's answer wasn't JSON");
       return;
     }
-    this.apply(job, rec, answer, prompt, title);
+    const checked = await this.checkPicks(job, rec, answer);
+    // As after the first call: the thread or this librarian may have gone.
+    if (this.stopped || !this.host.threadRecords().some((t) => t.id === rec.id)) {
+      this.log.info('librarian dropped a look at a thread that has gone', { threadId: rec.id, stopped: this.stopped });
+      return;
+    }
+    this.apply(job, rec, checked.answer, prompt, title);
     if (cards) await this.applyPocket(job, rec, answer, cards, prompt);
-    this.markLooked(rec, job);
+    this.markLooked(rec, job, checked.refused);
+  }
+
+  // Picks of a project the thread shows no folder evidence for go to a
+  // second opinion, one project at a time. A shared subject was enough to
+  // put a thread about a Vue client for Convex in Lets Build It, an Expo app
+  // whose state mentions a Convex video (9 Nov 2026). Stronger wording in
+  // SYSTEM made no difference on real filings and lost good ones, and
+  // requiring the project's name lost most Sentry and schedule threads;
+  // asked about one project on its own, Opus got them right.
+  private async checkPicks(job: LibrarianJob, rec: ThreadRecord, a: Answer): Promise<{ answer: Answer; refused?: string[] }> {
+    const had = this.looks[rec.id]?.refused;
+    if (selfFiled(rec) || !this.models) return { answer: a, refused: had };
+    const live = new Map(this.projects.list().map((p) => [p.id, p]));
+    const inAlready = new Set((rec.projects ?? []).map((m) => m.id));
+    const unproven = picksOf(a, live, rec).wanted.filter((pid) => !inAlready.has(pid) && !rec.projectsLeft?.includes(pid) && !this.showsFolderWork(rec, live.get(pid)!.folders));
+    if (!unproven.length) return { answer: a, refused: had };
+    const refused = new Set(had ?? []);
+    const dropped = new Set<string>();
+    let asked = 0;
+    for (const pid of unproven) {
+      // Asked for by name: Mike wants a fresh answer.
+      if (refused.has(pid) && job.reason !== 'asked') {
+        dropped.add(pid);
+        continue;
+      }
+      // Gone mid-check: threadGist would throw, and look's guard drops it.
+      if (this.stopped || !this.host.threadRecords().some((t) => t.id === rec.id)) return { answer: a, refused: had };
+      if (asked++ >= PICK_CHECKS_PER_LOOK) {
+        dropped.add(pid);
+        continue;
+      }
+      const belongs = await this.confirmPick(rec, live.get(pid)!);
+      if (belongs) {
+        refused.delete(pid);
+        continue;
+      }
+      dropped.add(pid);
+      // No answer (no room, junk) isn't a no: a later look can ask again.
+      if (belongs === false) refused.add(pid);
+      this.log.info('librarian dropped a pick the check refused', { threadId: rec.id, projectId: pid, belongs: belongs ?? null, why: typeof a.why === 'string' ? a.why : undefined });
+    }
+    const keep = (Array.isArray(a.projects) ? a.projects : []).filter((x) => !dropped.has(x as string));
+    // An empty list, not undefined, so the last refusal can be cleared
+    // (markLooked keeps the old ones when given none). And no new project
+    // on the back of a pick that was turned down: it'd be a copy of it.
+    return { answer: { ...a, projects: keep, ...(dropped.size ? { new: null } : {}) }, refused: [...refused] };
+  }
+
+  // The thread runs in one of these folders or has edited files there.
+  // Ran-commands doesn't count: a thread may only be looking at a repo.
+  private showsFolderWork(rec: ThreadRecord, folders: string[]): boolean {
+    const where = [rec.cwd, this.repoOfDir(rec.cwd), ...(this.edited.get(rec.id) ?? [])];
+    return where.some((w) => folders.some((f) => isInside(w, f)));
+  }
+
+  // Whether this thread is really working on this project, or undefined
+  // when that couldn't be found out. Shown one project and not the first
+  // answer's reason, so it judges afresh. The folder is given unlabelled:
+  // told "catch-all", the model read that as a reason to say no.
+  private async confirmPick(rec: ThreadRecord, p: { title: string; folders: string[]; goals: string; state: string }): Promise<boolean | undefined> {
+    const gist = this.host.threadGist(rec.id);
+    const worked = [...(this.workedIn.get(rec.id) ?? [])].map((r) => this.tilde(r));
+    const lines = [
+      `Project "${p.title}"`,
+      `Folders: ${p.folders.map((f) => this.tilde(f)).join(', ') || 'none'}`,
+      `Goals: ${p.goals.slice(0, 400)}`,
+      `State: ${(p.state.split('\n')[0] ?? '').slice(0, 300)}`,
+      '',
+      `Thread "${rec.title}", in ${this.tilde(rec.cwd)}`,
+      ...(worked.length ? [`Ran commands in: ${worked.join(', ')}`] : []),
+      ...(gist.first ? ['', `First message${attached(gist.firstImages)}: ${gist.first}`] : []),
+      ...(gist.recent.length ? ['', 'Latest messages:', ...gist.recent.map((m) => `${m.who === 'user' ? 'User' : 'Agent'}${attached(m.images)}: ${m.text}`)] : []),
+    ];
+    const res = await this.models!.generate({ feature: 'projects', cwd: rec.cwd, system: CHECK_SYSTEM, prompt: lines.join('\n'), maxTokens: 300, strong: true });
+    if (!res.ok) return undefined;
+    this.rollDay();
+    this.used(res);
+    const belongs = parseAnswer(res.value)?.belongs;
+    return typeof belongs === 'boolean' ? belongs : undefined;
   }
 
   // A catch-up whose turns edited nothing, gave no link and said little
@@ -645,19 +739,14 @@ export class Librarian {
     if (self) {
       a = { ...a, projects: [], new: null };
     }
-    const reasons = byProject(a.reasons);
-    // A project it isn't in yet needs a reason that says it fits. Haiku,
-    // given seventy-odd projects and a thread that fits none, sometimes
-    // lists one anyway, with no reason or one like "Not that; ignore",
-    // while its `why` says nothing fits: that's how a Qantas booking
-    // check ended up in Walkies (30 Oct 2026). Ones it's in already stay.
-    const inAlready = new Set((rec.projects ?? []).map((m) => m.id));
-    const listed = Array.isArray(a.projects) ? a.projects.filter((x): x is string => typeof x === 'string' && live.has(x)) : [];
-    const wanted = listed.filter((pid) => inAlready.has(pid) || (reasons[pid] !== undefined && !saysNoFit(reasons[pid])));
+    const { reasons, listed, wanted } = picksOf(a, live, rec);
     const unexplained = listed.filter((pid) => !wanted.includes(pid));
     if (unexplained.length) this.log.info('librarian dropped a pick it gave no reason for', { threadId: rec.id, projects: unexplained, reasons: unexplained.map((pid) => reasons[pid] ?? null), why: typeof a.why === 'string' ? a.why : undefined });
     const said: string[] = [];
     const ids = new Set<string>();
+    // Why it joined each, for the Librarian view: the membership's own
+    // reason goes when the thread is taken out, which is when it's wanted.
+    const joinedWhy: Record<string, string> = {};
     let outcome: LibrarianOutcome = 'nothing';
     const bump = (o: LibrarianOutcome) => {
       const order: LibrarianOutcome[] = ['nothing', 'updated', 'left', 'joined', 'created'];
@@ -671,6 +760,7 @@ export class Librarian {
         const p = this.projects.create({ title: fresh.title, folders, goals: fresh.goals, state: fresh.state, by: 'librarian', byThread: rec.id });
         this.projects.changeMembership(rec.id, { add: [p.id], by: 'librarian', why: fresh.why ? { [p.id]: fresh.why } : undefined });
         said.push(`Made ${p.title} and put it there`);
+        if (fresh.why) joinedWhy[p.id] = fresh.why;
         ids.add(p.id);
         bump('created');
       } catch (e) {
@@ -684,7 +774,10 @@ export class Librarian {
         // working out a wrong guess later.
         this.log.info('librarian joined', { threadId: rec.id, reasons: Object.fromEntries(r.joined.map((p) => [p, reasons[p]])), why: typeof a.why === 'string' ? a.why : undefined });
         said.push(`Put it in ${r.joined.map((p) => live.get(p)!.title).join(' and ')}`);
-        r.joined.forEach((p) => ids.add(p));
+        r.joined.forEach((p) => {
+          ids.add(p);
+          if (reasons[p]) joinedWhy[p] = reasons[p];
+        });
         bump('joined');
       }
     }
@@ -791,7 +884,7 @@ export class Librarian {
       }
     }
     // Not a change to any project, so not in what the look says it did.
-    if (typeof a.thread === 'string' && a.thread.trim()) this.host.setBrief?.(rec.id, a.thread);
+    if (typeof a.thread === 'string' && a.thread.trim()) this.host.setBrief?.(rec.id, a.thread, typeof a.purpose === 'string' ? a.purpose : undefined);
     // A thread that has moved on from its title gets a new one. Not from
     // the first message alone: the title model has only just named it.
     if (typeof a.title === 'string' && a.title.trim() && job.reason !== 'first-message') {
@@ -833,7 +926,7 @@ export class Librarian {
     }
     const why = typeof a.why === 'string' ? a.why.trim().slice(0, 200) : '';
     const text = said.length ? said.join('. ') : why ? `Nothing to change: ${lowerFirst(why)}` : 'Nothing to change';
-    this.note(job, outcome, text, [...ids]);
+    this.note(job, outcome, text, [...ids], Object.keys(joinedWhy).length ? { reasons: joinedWhy, ...(why ? { why } : {}) } : undefined);
   }
 
   // The other threads waiting on a topic.
@@ -841,10 +934,10 @@ export class Librarian {
     return (this.host.waitingTopics?.() ?? []).filter((w) => w.threadId !== rec.id);
   }
 
-  private markLooked(rec: ThreadRecord, job: LibrarianJob): void {
+  private markLooked(rec: ThreadRecord, job: LibrarianJob, refused: string[] | undefined = this.looks[rec.id]?.refused): void {
     // Its seq as it is now, after any notes the look added.
     const seq = this.host.threadRecords().find((t) => t.id === rec.id)?.lastSeq ?? rec.lastSeq;
-    this.looks[rec.id] = { at: new Date(this.clock.now()).toISOString(), seq, ...(job.reason === 'first-message' ? { early: true } : {}) };
+    this.looks[rec.id] = { at: new Date(this.clock.now()).toISOString(), seq, ...(job.reason === 'first-message' ? { early: true } : {}), ...(refused?.length ? { refused } : {}) };
     // An early look hasn't seen the turn's edits yet; the first-turn look will.
     if (job.reason !== 'first-message') {
       this.edited.delete(rec.id);
@@ -852,7 +945,7 @@ export class Librarian {
     }
   }
 
-  private note(job: LibrarianJob, outcome: LibrarianOutcome, text: string, projectIds?: string[]): void {
+  private note(job: LibrarianJob, outcome: LibrarianOutcome, text: string, projectIds?: string[], filed?: { reasons: Record<string, string>; why?: string }): void {
     this.entry({
       threadId: job.threadId,
       threadTitle: this.host.threadRecords().find((t) => t.id === job.threadId)?.title ?? job.threadTitle,
@@ -860,6 +953,7 @@ export class Librarian {
       outcome,
       text,
       ...(projectIds?.length ? { projectIds } : {}),
+      ...filed,
     });
     this.log.info('librarian looked', { threadId: job.threadId, reason: job.reason, outcome, text });
   }
@@ -1322,7 +1416,8 @@ Reply with JSON only, no prose and no code fence:
  "state": {"<project id>": "the project's new state"} only when this thread changed where the whole project stands (shipped or finished something, made a decision, hit a blocker), else {},
  "addFolders": {"<project id>": ["~/path"]} for repos this thread shows belong to a project it's in, else {},
  "links": {"<project id>": [{"title": "Live site", "url": "https://..."}]} for lasting places of a project it's in that the messages give and the project doesn't list yet, else {},
- "thread": "where this thread itself is up to, as two or three short bullets, one per line, each starting \"- \": what it did or found, and what it's waiting on or doing next",
+ "thread": "where this thread itself is up to, as two or three short bullets, one per line, each starting \"- \": what it did or found, and what it's waiting on or doing next, and who that's on. About the work, never about how the thread was filed or renamed",
+ "purpose": "one plain sentence, under 20 words, on what this thread is for, for someone who has forgotten: name the thing and why it came up",
  "title": null, or a new title when the thread's title no longer says what it's about (see below),
  "retitle": {"<project id>": "the project's new name"} for a project it's in whose name has gone out of date (see below), else {},
  "wake": ["<ids of hibernating threads the user is talking about here>"], or [] (see below),
@@ -1347,6 +1442,15 @@ Some hibernating threads are waiting until this thread has done something ("unti
 The Pocket is a deck of short cards on the user's phone, to read at a counter when they're out. Keep this thread's cards true: save one with the same title when a fact on it has changed, and remove one when the messages say it's done with (the parcel's posted, the trip's over). Add a card only when the user, in their own messages here, says they're going somewhere or will need something while out, the messages hold the facts they'd want there, and this thread has no card. A plan for someday isn't enough. If the messages say a card was filed and it isn't listed, the user took it out: leave it. Copy addresses, codes and numbers exactly from the messages and never guess one. The text is only the facts, a line each, with no explanation. The place is what you'd search a map for ("post office"), only if the card is for somewhere. The icon is the closest of ${POCKET_ICONS.join(', ')}, left out if none fits. Most looks change nothing: pocket null.
 
 The thread bullets are for the user glancing at the thread later: concrete, in their plain words, each under ten words, no full stops. The last one says who's waiting on whom ("Waiting on you to pick a design", "Fixing the last failing test").`;
+
+// The second opinion on a pick with no folder evidence (confirmPick).
+const CHECK_SYSTEM = `You check one filing decision in Threadbear, an app where the user runs AI coding agents in threads. ${userLine()}A project is a body of work the user comes back to. Another look suggested this thread belongs in this project; you decide whether it really does.
+
+Say yes when the thread does something for that project: building, fixing, triaging, planning, promoting, running or deciding something for it, or asking about it specifically. The folder the thread runs in says nothing either way: many threads run in a general folder while working on a project.
+
+Say no when all they share is a subject: a technology, company, person, tool or platform. Nearly everything the user builds uses Convex and they work at Convex, so Convex in common means nothing. Say no too when the project is only mentioned in passing or is one of several things listed.
+
+Reply with JSON only, no prose and no code fence: {"belongs": true or false, "why": "under 12 words"}`;
 
 const NOTES_SYSTEM = `You tidy a project's notes in Threadbear, the user's app for running AI coding agents in threads. ${userLine()}Agents add to a project's notes as they work, and these have grown into a log. Rewrite them as short markdown notes that a later agent reads before working on the project.
 
@@ -1397,6 +1501,43 @@ function byProject(v: unknown): Record<string, string> {
 // "Unrelated", "No clear fit". A real one says what the thread does there.
 export function saysNoFit(why: string): boolean {
   return /^(not|no|none|n\/a|ignore|unrelated|irrelevant|doesn'?t|isn'?t|nothing)\b/i.test(why.trim()) || /\b(ignore|unrelated|no (clear )?(fit|match)|not (about|related|part|tied|relevant))\b/i.test(why);
+}
+
+// Whether a line says the thread isn't this project: "about a Convex module,
+// not Lets Build It", "kept out of Questions". A pick its own answer argues
+// against. Only with the project's name, as "not yet merged" says nothing.
+// By hand, as a project's title would have to go into a pattern.
+export function disclaims(line: string, title: string): boolean {
+  const bracket = title.indexOf(' (');
+  const name = (bracket > 0 ? title.slice(0, bracket) : title).trim().toLowerCase();
+  const text = line.toLowerCase();
+  if (!name) return false;
+  for (const word of ['not ', 'out of ']) {
+    for (let at = text.indexOf(word); at >= 0; at = text.indexOf(word, at + 1)) {
+      // The name straight after, give or take a small word: "out of date
+      // Threadbear docs" isn't saying anything about Threadbear.
+      let from = at + word.length;
+      for (const small of ['about ', 'for ', 'in ', 'the ']) if (text.startsWith(small, from)) from += small.length;
+      const after = text[from + name.length];
+      if (text.startsWith(name, from) && (after === undefined || !/[\p{L}\p{N}]/u.test(after))) return true;
+    }
+  }
+  return false;
+}
+
+// What of the answer's `projects` could stand: known projects, and for one
+// the thread isn't in yet, a reason that says it fits. Haiku, given
+// seventy-odd projects and a thread that fits none, sometimes lists one
+// anyway, with no reason or one like "Not that; ignore", while its `why`
+// says nothing fits: that's how a Qantas booking check ended up in Walkies
+// (30 Oct 2026). Ones it's in already stay.
+function picksOf(a: Answer, live: Map<string, { title: string }>, rec: ThreadRecord): { reasons: Record<string, string>; listed: string[]; wanted: string[] } {
+  const reasons = byProject(a.reasons);
+  const inAlready = new Set((rec.projects ?? []).map((m) => m.id));
+  const overall = typeof a.why === 'string' ? a.why : '';
+  const listed = Array.isArray(a.projects) ? a.projects.filter((x): x is string => typeof x === 'string' && live.has(x)) : [];
+  const fits = (pid: string) => reasons[pid] !== undefined && !saysNoFit(reasons[pid]) && !disclaims(overall, live.get(pid)!.title) && !disclaims(reasons[pid], live.get(pid)!.title);
+  return { reasons, listed, wanted: listed.filter((pid) => inAlready.has(pid) || fits(pid)) };
 }
 
 function readNew(v: unknown): { title: string; folders: string[]; goals: string; state: string; why: string } | undefined {

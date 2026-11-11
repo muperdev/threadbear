@@ -1,0 +1,54 @@
+{
+  "closed" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Set up a Cloudflare tunnel for the preview server.",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 3,
+      "text" : "The tunnel is running as a LaunchAgent and forwards preview.example.com to port 4321.",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 4,
+      "text" : "18s, $0.05",
+      "turn" : "turn_1"
+    }
+  ],
+  "open" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Set up a Cloudflare tunnel for the preview server.",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 3,
+      "text" : "The tunnel is running as a LaunchAgent and forwards preview.example.com to port 4321.",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 4,
+      "text" : "18s, $0.05",
+      "turn" : "turn_1"
+    }
+  ]
+}

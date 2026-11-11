@@ -21,6 +21,8 @@ import type { RestartResult } from './restart.ts';
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
 import { inBackground } from './background.ts';
 import type { UpdateFailure } from './fix-update.ts';
+import { machineTrouble } from './machine-trouble.ts';
+import { cleanGitError, followOrigin as fetchAndFollowOrigin, oldestMissingAt, type OriginResult } from './follow-origin.ts';
 
 export const CHECK_INTERVAL_MS = 5 * 60_000;
 // After main's ref changes in the checkout (a commit or merge landing), the
@@ -36,8 +38,38 @@ export const BACKGROUND_WAIT_MS = 30 * 60_000;
 // What a release holds from runner/, as deploy.mjs's RELEASE_PATHS: only a
 // change to these changes what runs, so a commit that only touches tests
 // or docs doesn't restart the runner.
-export const RELEASE_PATHS = ['src', 'bin', 'package.json', 'package-lock.json'];
+export const RELEASE_PATHS = ['src', 'bin', 'package.json', 'package-lock.json', '.npmrc'];
+// Failures that say nothing about the commit, so it's tried again later
+// rather than marked failed: another deploy holding the lock, and a step
+// that failed while the Mac slept through it, which deploy.mjs exits with
+// SLEPT_EXIT for (deploy-steps.mjs, SleptThrough).
 const TRANSIENT = /Another deploy \(pid/;
+const SLEPT_EXIT = 75;
+// A commit whose build the Mac slept through this many times in a row is
+// marked failed after all, with what the last try said, so a real break on
+// a laptop that sleeps through every build can't stay hidden (Codex, 9 Nov).
+export const MAX_SLEPT_TRIES = 3;
+// A build that failed while this machine was short of something
+// (machine-trouble.ts) waits for it to recover and is built again, this many
+// tries at one build tree before it counts as the code's fault after all.
+export const MAX_MACHINE_TRIES = 3;
+// How long a failure blamed on the machine can wait for it to recover
+// before it goes to a fix thread anyway. A sick machine that never recovers
+// mustn't hide a commit that really is broken (Codex, 10 Nov), and it needs
+// someone to look at it by then regardless.
+export const MACHINE_WAIT_MS = 6 * 60 * 60_000;
+// deploy.mjs's exit when its checks went to a check host and no check step
+// failed there (the host too full, or busy past check-remote.sh's limit):
+// the host's trouble, so tried again like a sleep, with the same limit
+// (deploy-steps.mjs, ChecksUnavailable).
+const UNAVAILABLE_EXIT = 69;
+// A followOrigin machine (follow-origin.ts): how long GitHub can be out of
+// reach before it's worth saying (a laptop asleep, a phone off the wifi), and
+// how long something that runs can have been on GitHub's main and not here. A
+// restart waits for busy threads, so an hour or two is normal; bruce's three
+// days wasn't.
+export const FETCH_WARN_MS = 60 * 60_000;
+export const BEHIND_WARN_MS = 6 * 60 * 60_000;
 
 export type UpdateState = 'off' | 'idle' | 'checking' | 'building' | 'waiting' | 'failed';
 
@@ -58,18 +90,26 @@ export type UpdateStatus = {
   // (launchAgentBehind below), and which way.
   launcherChanged?: boolean;
   launcherReason?: string;
+  // followOrigin in runner.json: this machine follows GitHub's main itself.
+  followsOrigin?: boolean;
+  // What's wrong with that, in a sentence or two, when something is: its main
+  // can't follow GitHub's, GitHub's been out of reach for a while, or the
+  // runner has been hours behind. Goes in the heartbeat too (sync.ts).
+  followProblem?: string;
 };
 
 // tree is what a release of main would hold (RELEASE_PATHS); buildTree is
 // the whole of runner/ (tests, scripts, configs too), everything a build
 // reads, so a failed build can be retried when only a test was fixed.
 export type MainInfo = { commit: string; short: string; subject: string; tree: string; buildTree?: string };
-export type DeployResult = { ok: true; id: string } | { ok: false; error: string; transient?: boolean };
+export type DeployResult = { ok: true; id: string } | { ok: false; error: string; transient?: boolean; slept?: boolean; unavailable?: boolean };
 
 // <home>/runner/update.json: the build that failed, so it isn't retried
 // every five minutes.
-// buildTree is missing in files written before it was kept.
-export type UpdateFile = { failed?: { tree: string; buildTree?: string; commit: string; at: string; error: string } };
+// buildTree is missing in files written before it was kept. machine is
+// what was wrong with this machine when the failure is blamed on that, and
+// machineTries how many builds of this tree it has failed that way.
+export type UpdateFile = { failed?: { tree: string; buildTree?: string; commit: string; at: string; error: string; machine?: string; machineTries?: number } };
 
 export type UpdateDeps = {
   home: string;
@@ -87,14 +127,22 @@ export type UpdateDeps = {
   // Restarter.request with when: 'idle'.
   restart: (p: { release: string; reason: string; backgroundWaitMs: number }) => RestartResult;
   pendingRestart: () => boolean;
+  // followOrigin in runner.json (read every check, so setting it on a
+  // machine needs no restart).
+  followsOrigin?: () => boolean;
   // Replaced in tests: bringing the clone to main, and the deploy itself.
-  sync?: (checkout: string, prefix: string, dir: string) => Promise<MainInfo>;
+  // sync's ref is what to build when it isn't the checkout's main.
+  sync?: (checkout: string, prefix: string, dir: string, ref?: string) => Promise<MainInfo>;
+  fetchOrigin?: (checkout: string) => Promise<OriginResult>;
+  oldestMissing?: (checkout: string, prefix: string, since: string, ref: string) => Promise<number | undefined>;
   treeOf?: (dir: string, prefix: string, commit: string) => string | undefined;
   deploy?: (runnerDir: string, home: string, logFile: string, follow: string) => Promise<DeployResult>;
   // Deploys the Convex backend and website at main before the runner is
   // built (scripts/deploy-backend.mjs): a no-op when they haven't changed.
   deployBackend?: (repoDir: string, runnerDir: string, home: string, commit: string, logFile: string) => Promise<{ ok: boolean; error?: string }>;
   watch?: (checkout: string, onChange: () => void) => () => void;
+  // What's wrong with this machine, if anything (machine-trouble.ts).
+  machineTrouble?: () => string | undefined;
   // The environment launchAgentBehind reads (process.env; tests replace it).
   env?: NodeJS.ProcessEnv;
   // The launcher app above launch.mjs (launcherAppAbove; tests replace it).
@@ -240,14 +288,15 @@ function joinTreeHashes(lsTree: string): string | undefined {
 // Brings <dir> to the checkout's main: a clone of the checkout (so only
 // what's committed on main is built, never a working tree), fetched and
 // reset each time. runner/node_modules is kept between runs for the checks,
-// and dropped when package-lock.json changed so they install afresh.
-export async function syncClone(checkout: string, prefix: string, dir: string): Promise<MainInfo> {
+// and dropped when package-lock.json changed so they install afresh. `ref` is
+// the checkout's own main unless the machine follows GitHub's (follow-origin.ts).
+export async function syncClone(checkout: string, prefix: string, dir: string, ref = 'refs/heads/main'): Promise<MainInfo> {
   if (!fs.existsSync(path.join(dir, '.git'))) {
     await fs.promises.rm(dir, { recursive: true, force: true });
     await fs.promises.mkdir(path.dirname(dir), { recursive: true });
     await gitAsync(path.dirname(dir), ['clone', '-q', '--no-checkout', checkout, dir]);
   }
-  await gitAsync(dir, ['fetch', '-q', checkout, 'refs/heads/main']);
+  await gitAsync(dir, ['fetch', '-q', checkout, ref]);
   await gitAsync(dir, ['checkout', '-q', '-B', 'main', 'FETCH_HEAD']);
   const modules = path.join(dir, prefix, 'node_modules');
   await gitAsync(dir, ['clean', '-qfdx', '-e', `${prefix}node_modules`]);
@@ -267,13 +316,31 @@ export async function syncClone(checkout: string, prefix: string, dir: string): 
   }
   const tree = await releaseTreeAtAsync(dir, prefix, 'HEAD');
   if (!tree) throw new Error(`main in ${checkout} has no ${prefix}src to build`);
-  const buildTree = await gitAsync(dir, ['rev-parse', `HEAD:${prefix.replace(/\/$/, '')}`]);
+  const buildTree = await buildTreeAt(dir, prefix);
   const [commit, short, subject] = await Promise.all([
     gitAsync(dir, ['rev-parse', 'HEAD']),
     gitAsync(dir, ['rev-parse', '--short', 'HEAD']),
     gitAsync(dir, ['log', '-1', '--format=%s']),
   ]);
   return { commit, short, subject, tree, buildTree };
+}
+
+// What a failed build is keyed by: the whole of runner/, plus check.sh and
+// scripts/ when the runner sits in a repo that has them, as deploy.mjs's
+// checks run through those on a check host (deploy-steps.mjs, remoteChecks),
+// so a commit that only fixes one of them is built again (Codex, 9 Nov).
+export async function buildTreeAt(dir: string, prefix: string): Promise<string> {
+  const runner = await gitAsync(dir, ['rev-parse', `HEAD:${prefix.replace(/\/$/, '')}`]);
+  if (!prefix) return runner;
+  const extra: string[] = [];
+  for (const p of ['check.sh', 'scripts']) {
+    try {
+      extra.push(await gitAsync(dir, ['rev-parse', `HEAD:${p}`]));
+    } catch {
+      // not in this repo
+    }
+  }
+  return [runner, ...extra].join(' ');
 }
 
 // deploy.mjs from the clone, stopping after it has pointed current at the
@@ -362,7 +429,9 @@ export function runDeploy(runnerDir: string, home: string, logFile: string, foll
       }
       const lines = text.trim().split('\n').filter(Boolean);
       const last = lines.at(-1) ?? (signal ? `stopped by ${signal}` : `exit ${code}`);
-      resolve({ ok: false, error: last.slice(0, 300), transient: TRANSIENT.test(text) });
+      const slept = code === SLEPT_EXIT;
+      const unavailable = code === UNAVAILABLE_EXIT;
+      resolve({ ok: false, error: last.slice(0, 300), transient: slept || unavailable || TRANSIENT.test(text), ...(slept ? { slept } : {}), ...(unavailable ? { unavailable } : {}) });
     });
   });
 }
@@ -381,7 +450,20 @@ export class RunnerUpdater {
   private subject?: string;
   private launcherChanged = false;
   private launcherReason?: string;
+  private followsOrigin = false;
+  private followProblem?: string;
+  private fetchFailingSince?: number;
+  private syncFailingSince?: number;
+  // What followOrigin itself said, kept for a check that fails after it.
+  private originTrouble?: string;
+  private behindNote?: string;
+  // When this runner was first seen missing something that runs, for a
+  // release commit git can't count from.
+  private behindSeenAt?: number;
   private releaseBuilt?: string;
+  // The tree whose builds the Mac slept through (or no check host could
+  // check), and how many in a row.
+  private slept?: { tree: string; tries: number };
   private busy = false;
   private stopped = false;
   private unwatch?: () => void;
@@ -457,6 +539,8 @@ export class RunnerUpdater {
     if (this.releaseBuilt) out.release = this.releaseBuilt;
     if (this.launcherChanged) out.launcherChanged = true;
     if (this.launcherReason) out.launcherReason = this.launcherReason;
+    if (this.followsOrigin) out.followsOrigin = true;
+    if (this.followProblem) out.followProblem = this.followProblem;
     if (this.state !== 'off') out.logFile = updateLogPath(this.deps.home);
     return out;
   }
@@ -483,12 +567,32 @@ export class RunnerUpdater {
     this.state = 'checking';
     try {
       const dir = path.join(updateDir(home), 'src');
-      const main = await (this.deps.sync ?? syncClone)(release.checkout, release.prefix, dir);
+      this.followsOrigin = this.deps.followsOrigin?.() ?? false;
+      const origin = this.followsOrigin ? await (this.deps.fetchOrigin ?? fetchAndFollowOrigin)(release.checkout) : undefined;
+      if (this.stopped) return undefined;
+      // Before anything below can fail, so it's said even when the clone is stuck.
+      this.originTrouble = origin ? this.originTroubleOf(origin) : undefined;
+      if (!origin) this.behindNote = undefined;
+      // The last word on being behind stands until a check gets that far.
+      this.followProblem = joined(this.originTrouble, this.behindNote);
+      // Nothing from GitHub to build, and the checkout's own main may be a
+      // commit made only here: stay on this release rather than build that.
+      if (origin && !origin.ref) {
+        this.state = wasFailed ? 'failed' : 'idle';
+        return { action: 'nothing', why: 'no origin/main to build yet' };
+      }
+      const main = await (this.deps.sync ?? syncClone)(release.checkout, release.prefix, dir, origin?.ref);
+      this.syncFailingSince = undefined;
       this.checkedAt = new Date(this.deps.clock.now()).toISOString();
       this.commit = main.commit;
       this.subject = main.subject;
       this.launcherReason = launchAgentBehind(path.join(dir, release.prefix), home, this.deps.env ?? process.env, this.deps.findLauncherApp, this.deps.platform);
       this.launcherChanged = this.launcherReason !== undefined;
+      if (origin) {
+        this.behindNote = await this.behindTrouble(origin, main, release);
+        this.followProblem = joined(this.originTrouble, this.behindNote);
+      }
+      if (origin) this.deps.onChange?.();
       if (main.commit !== this.backendTried) {
         this.backendTried = main.commit;
         const b = await (this.deps.deployBackend ?? runBackendDeploy)(dir, path.join(dir, release.prefix), home, main.commit, backendLogPath(home));
@@ -512,36 +616,71 @@ export class RunnerUpdater {
       const treeOf = this.deps.treeOf ?? releaseTreeAt;
       const running = { id: release.id, tree: release.tree ?? (release.dirty ? undefined : treeOf(dir, release.prefix, release.commit)) };
       const file = readJsonSync<UpdateFile>(updateFilePath(home));
+      // The machine's fault, and the machine has recovered: not a failure of
+      // this tree any more. The same tree only, as a new one is built anyway.
+      const recovered = Boolean(file?.failed?.machine && failedAlready(file.failed, main) && !this.troubleNow());
       const decision = decideUpdate({
         mainTree: main.tree,
         mainBuildTree: main.buildTree,
         running,
         current: currentLink(home),
         pendingRestart: this.deps.pendingRestart(),
-        failed: file?.failed,
+        failed: recovered ? undefined : file?.failed,
         crashedTrees: this.crashedTrees(dir, release.prefix, treeOf),
       });
       if (decision.action === 'nothing') {
         log.debug('main checked', { commit: main.short, why: decision.why });
         // A failure stays on show until main moves on from it.
         this.state = wasFailed && failedAlready(file?.failed, main) ? 'failed' : 'idle';
+        if (!recovered && file?.failed?.machine && failedAlready(file.failed, main) && this.deps.clock.now() - Date.parse(file.failed.at) >= MACHINE_WAIT_MS) this.machineWaitOver(file.failed, main);
         return decision;
       }
       this.state = 'building';
       this.reason = undefined;
       this.deps.onChange?.();
       log.info('building a release of main', { commit: main.short, subject: main.subject });
-      const result = await (this.deps.deploy ?? runDeploy)(path.join(dir, release.prefix), home, updateLogPath(home), release.checkout);
+      let result = await (this.deps.deploy ?? runDeploy)(path.join(dir, release.prefix), home, updateLogPath(home), release.checkout);
       if (this.stopped) return decision;
+      // Counted per build tree, as failedAlready keys a failure, so a commit
+      // that only fixes a test starts its own count (Codex, 9 Nov).
+      const builds = main.buildTree ?? main.tree;
+      const tries = !result.ok && (result.slept || result.unavailable) ? (this.slept?.tree === builds ? this.slept.tries : 0) + 1 : 0;
+      this.slept = tries ? { tree: builds, tries } : undefined;
       if (!result.ok) {
-        if (result.transient) {
-          log.info('could not build main now; trying again later', { error: result.error });
+        if (result.transient && tries < MAX_SLEPT_TRIES) {
+          log.info('could not build main now; trying again later', { error: result.error, ...(tries ? { sleptTries: tries } : {}) });
           this.state = 'idle';
           return decision;
         }
+        if (tries) this.slept = undefined;
+        // Only for a failure that really ran here: after slept or no-host
+        // tries the checks may never have touched this machine.
+        const trouble = tries ? undefined : this.troubleNow();
+        const machineTries = trouble ? (file?.failed?.machine && failedAlready(file.failed, main) ? (file.failed.machineTries ?? 1) : 0) + 1 : 0;
+        const failedRecord = { tree: main.tree, buildTree: main.buildTree, commit: main.commit, at: this.checkedAt, error: result.error };
+        if (trouble && machineTries < MAX_MACHINE_TRIES) {
+          this.state = 'failed';
+          this.reason = `this machine ${trouble}, so the build of main failed; it tries again by itself once that clears`;
+          atomicWriteFileSync(updateFilePath(home), JSON.stringify({ failed: { ...failedRecord, machine: trouble, machineTries } } as UpdateFile, null, 2) + '\n');
+          log.warn('could not build a release of main while this machine is short of something', { commit: main.short, trouble, machineTries, error: result.error });
+          // No fix thread: there's no code to fix. The same trouble at a
+          // newer commit isn't worth saying again.
+          if (file?.failed?.machine !== trouble) {
+            this.deps.notice('warning', `The runner couldn't update to main at ${main.short}: this machine ${trouble}. It tries again by itself once that clears. The output is in ${updateLogPath(home)}.`);
+          }
+          return decision;
+        }
+        const error = trouble
+          ? `${result.error} (this machine ${trouble} in all ${machineTries} tries at this commit, so this may be a real failure)`
+          : !tries
+          ? result.error
+          : !result.ok && result.unavailable
+            ? `${result.error} (no check host could run the checks in all ${tries} tries at this commit)`
+            : `${result.error} (the Mac slept through all ${tries} tries at this commit, so this may be a real failure)`;
+        result = { ...result, error };
         this.state = 'failed';
         this.reason = result.error;
-        atomicWriteFileSync(updateFilePath(home), JSON.stringify({ failed: { tree: main.tree, buildTree: main.buildTree, commit: main.commit, at: this.checkedAt, error: result.error } } as UpdateFile, null, 2) + '\n');
+        atomicWriteFileSync(updateFilePath(home), JSON.stringify({ failed: { ...failedRecord, error: result.error } } as UpdateFile, null, 2) + '\n');
         log.error('could not build a release of main', { commit: main.short, error: result.error });
         this.failed(
           { kind: 'build', commit: main.commit, short: main.short, subject: main.subject, error: result.error, logFile: updateLogPath(home) },
@@ -557,12 +696,68 @@ export class RunnerUpdater {
     } catch (e) {
       // Git trouble in the clone, say: logged, and tried again next time.
       log.warn('could not check main', { error: String(e) });
+      if (this.followsOrigin) {
+        const now = this.deps.clock.now();
+        this.syncFailingSince ??= now;
+        if (now - this.syncFailingSince >= FETCH_WARN_MS) {
+          this.followProblem = joined(this.originTrouble, this.behindNote, `Couldn't bring the runner's update clone to GitHub's main for ${hours(now - this.syncFailingSince)}: ${cleanGitError(String(e))}`);
+        }
+      }
       this.state = wasFailed ? 'failed' : 'idle';
       return undefined;
     } finally {
       this.busy = false;
       this.deps.onChange?.();
     }
+  }
+
+  // Still sick after MACHINE_WAIT_MS: a failure like any other from here on.
+  private machineWaitOver(failed: NonNullable<UpdateFile['failed']>, main: MainInfo): void {
+    const { machine, machineTries: _tries, ...rest } = failed;
+    const error = `${failed.error} (this machine ${machine} for ${hours(this.deps.clock.now() - Date.parse(failed.at))} since, so this may be a real failure)`;
+    atomicWriteFileSync(updateFilePath(this.deps.home), JSON.stringify({ failed: { ...rest, error } } as UpdateFile, null, 2) + '\n');
+    this.state = 'failed';
+    this.reason = error;
+    this.failed(
+      { kind: 'build', commit: main.commit, short: main.short, subject: main.subject, error, logFile: updateLogPath(this.deps.home) },
+      `The runner couldn't update to main at ${main.short} (${main.subject}): ${error}. The output is in ${updateLogPath(this.deps.home)}.`,
+    );
+  }
+
+  private troubleNow(): string | undefined {
+    return (this.deps.machineTrouble ?? (() => machineTrouble(this.deps.home)))();
+  }
+
+  // What followOrigin found, with GitHub out of reach only once it's lasted.
+  private originTroubleOf(origin: OriginResult): string | undefined {
+    const p = origin.problem;
+    if (p?.kind !== 'fetch') {
+      this.fetchFailingSince = undefined;
+      return p?.message;
+    }
+    const now = this.deps.clock.now();
+    this.fetchFailingSince ??= now;
+    return now - this.fetchFailingSince >= FETCH_WARN_MS ? `Couldn't reach GitHub for ${hours(now - this.fetchFailingSince)}: ${p.message}` : undefined;
+  }
+
+  // Whether something that runs has been on GitHub's main and not here for
+  // hours. A release built with local changes has no tree to compare and is
+  // never updated (decideUpdate), so that's judged from its commit alone.
+  private async behindTrouble(origin: OriginResult, main: MainInfo, release: ReleaseJson): Promise<string | undefined> {
+    const prefix = release.prefix ?? '';
+    const tree = release.tree ?? (release.dirty ? undefined : (this.deps.treeOf ?? releaseTreeAt)(path.join(updateDir(this.deps.home), 'src'), prefix, release.commit));
+    if (tree === main.tree) {
+      this.behindSeenAt = undefined;
+      return undefined;
+    }
+    const now = this.deps.clock.now();
+    // Failing to count isn't worth stopping the check for.
+    const since = origin.ref && release.checkout ? await (this.deps.oldestMissing ?? oldestMissingAt)(release.checkout, prefix, release.commit, origin.ref).catch(() => undefined) : undefined;
+    if (!tree && since === undefined) return undefined;
+    this.behindSeenAt ??= now;
+    const missingFor = now - (since ?? this.behindSeenAt);
+    if (missingFor < BEHIND_WARN_MS) return undefined;
+    return `This runner is ${hours(missingFor)} behind GitHub's main.${tree ? '' : " It was built with uncommitted changes, so it won't update itself: deploy once by hand."}`;
   }
 
   // A thread to fix it when one can be started, else the notice.
@@ -592,6 +787,15 @@ export class RunnerUpdater {
     }
     return out;
   }
+}
+
+function joined(...parts: (string | undefined)[]): string | undefined {
+  return parts.filter(Boolean).join(' ') || undefined;
+}
+
+function hours(ms: number): string {
+  const h = Math.max(1, Math.round(ms / 3_600_000));
+  return h === 1 ? 'an hour' : `${h} hours`;
 }
 
 // Whether main's launch.mjs (in the clone) isn't the installed one. Only

@@ -142,6 +142,120 @@ test('idle release after 30 minutes, then the next send resumes the session', as
   assert.equal(h.runner.get(thread.id).costUsd, 0.005);
 });
 
+test('coming back after a long gap asks the agent for a recap; the transcript keeps what he typed', async () => {
+  const HOUR = 3_600_000;
+  const h = makeHarness();
+  const { thread, turnId: first } = create(h);
+  const s = h.adapter.last;
+  // A new thread has no last turn to be away from.
+  assert.equal(s.sent[0].id, first);
+  assert.doesNotMatch(s.sent[0].text, /last turn ended/);
+  s.init();
+  const finish = async () => { h.adapter.last.result('completed', 0.01); await tick(); };
+  const lastText = () => h.adapter.last.sent.at(-1)!.text;
+  await finish();
+
+  // Back the same day: nothing added.
+  h.clock.advance(12 * HOUR - 1);
+  h.runner.send(thread.id, 'soon after');
+  await tick();
+  assert.equal(lastText(), 'soon after');
+  await finish();
+
+  // Three days on.
+  h.clock.advance(72 * HOUR);
+  h.runner.send(thread.id, 'what was this?');
+  await tick();
+  assert.match(lastText(), /^\[This thread's last turn ended 3 days ago, so the user may have lost track: .*\]\nwhat was this\?$/);
+  await finish();
+
+  // The gap is from the last turn, not his last message; and the phone's line stays next to what he typed.
+  h.clock.advance(14 * HOUR);
+  h.runner.send(thread.id, 'on the bus', [], { origin: 'phone' });
+  await tick();
+  assert.match(lastText(), /^\[This thread's last turn ended 14 hours ago.*\]\n\[Sent from the iPhone app\]\non the bus$/);
+  await finish();
+
+  // Not for a schedule, another agent, the answer to a card, or a command.
+  const quiet: [string, Record<string, unknown>][] = [
+    ['from a schedule', { origin: 'schedule', scheduleId: 'sch' }],
+    ['[Sent by the agent in the thread "x" (y)]\nhello', {}],
+    ['Yes', { answers: [{ action: 'Land it', answer: 'Yes' }] }],
+  ];
+  for (const [text, opts] of quiet) {
+    h.clock.advance(72 * HOUR);
+    h.runner.send(thread.id, text, [], opts);
+    await tick();
+    assert.equal(lastText(), text);
+    await finish();
+  }
+
+  // Sent into a running turn: he hasn't come back to anything.
+  h.clock.advance(72 * HOUR);
+  h.runner.send(thread.id, 'start');
+  await tick();
+  h.clock.advance(13 * HOUR);
+  h.runner.send(thread.id, 'still going?');
+  assert.equal(lastText(), 'still going?');
+  await finish();
+
+  const typed = h.events(thread.id).filter((e) => e.type === 'user.message').map((e) => e.text);
+  assert.ok(typed.includes('what was this?'));
+  assert.ok(!typed.some((t) => t.includes('last turn ended')));
+});
+
+test('the recap box: only with the experiment on, and the agent then skips its own recap', async () => {
+  const HOUR = 3_600_000;
+  const h = makeHarness();
+  const { thread } = create(h);
+  const s = h.adapter.last;
+  s.init();
+  s.result('completed', 0.01);
+  await tick();
+  const lastText = () => h.adapter.last.sent.at(-1)!.text;
+  const finish = async () => { h.adapter.last.result('completed', 0.01); await tick(); };
+  const setBox = (on: boolean) => {
+    const file = path.join(h.cfg.home, 'runner.json');
+    const json = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+    fs.writeFileSync(file, JSON.stringify({ ...json, experiments: { recapBox: on } }));
+    h.clock.advance(6000);
+  };
+
+  h.runner.setBrief(thread.id, '- Built it\n- Waiting on you', 'Cheffy guides people to a template.');
+  assert.equal(h.runner.get(thread.id).recap, undefined, 'off by default');
+  setBox(true);
+  assert.equal(h.runner.get(thread.id).recap, 'Cheffy guides people to a template.\n- Built it\n- Waiting on you');
+
+  // A later look with no purpose keeps the sentence it has.
+  h.runner.setBrief(thread.id, '- Built it\n- Pushed');
+  assert.equal(h.runner.get(thread.id).recap, 'Cheffy guides people to a template.\n- Built it\n- Pushed');
+
+  // The box was up, so no second recap from the agent.
+  h.clock.advance(72 * HOUR);
+  h.runner.send(thread.id, 'where were we');
+  await tick();
+  assert.equal(lastText(), 'where were we');
+  await finish();
+
+  // With the experiment off there's no box, so the agent still says it.
+  setBox(false);
+  h.clock.advance(72 * HOUR);
+  h.runner.send(thread.id, 'and now');
+  await tick();
+  assert.match(lastText(), /^\[This thread's last turn ended 3 days ago/);
+  await finish();
+
+  // A note from before purposes: the box lacks what it's for, so the agent adds it.
+  setBox(true);
+  const rec = (h.runner as unknown as { threads: Map<string, { rec: { brief?: { purpose?: string } } }> }).threads.get(thread.id)!.rec;
+  delete rec.brief!.purpose;
+  assert.equal(h.runner.get(thread.id).recap, '- Built it\n- Pushed');
+  h.clock.advance(72 * HOUR);
+  h.runner.send(thread.id, 'one more');
+  await tick();
+  assert.match(lastText(), /^\[This thread's last turn ended 3 days ago/);
+});
+
 test('a message from the phone tells the agent so, and where Mike is; the transcript keeps what he typed', async () => {
   let atMac: boolean | undefined;
   const h = makeHarness(undefined, {}, { atMac: () => atMac });
@@ -402,11 +516,26 @@ test('calls queued on a card: listed by approval.queued, grown, and answered in 
   assert.deepEqual(h.events(thread.id).filter((e) => e.type === 'approval.queued').at(-1).calls.map((c: { itemId: string }) => c.itemId), ['w1', 'b1']);
   h.runner.respondApproval({ threadId: thread.id, approvalId: req.approvalId, decision: 'deny', queued: { w1: 'allow', b1: 'deny', x9: 'allow' } });
   assert.deepEqual(await answer, { decision: 'deny', message: undefined, queued: { w1: 'allow', b1: 'deny' } });
-  // From the phone, which never saw the list, only the card's own call counts.
-  const again = s.sink.requestApproval({ toolUseId: 'e2', name: 'Edit', title: 'Edit a.txt', input: {}, canAlwaysAllow: true, signal: new AbortController().signal, queued: [w1] });
+  // From the phone, which never saw the list, only the card's own call
+  // counts. (A command: an edit can't be allowed from the phone at all.)
+  const again = s.sink.requestApproval({ toolUseId: 'e2', name: 'Bash', title: 'npm test', input: { command: 'npm test' }, canAlwaysAllow: true, signal: new AbortController().signal, queued: [w1] });
   const req2 = h.events(thread.id).filter((e) => e.type === 'approval.requested').at(-1);
   h.runner.respondApproval({ threadId: thread.id, approvalId: req2.approvalId, decision: 'allow', queued: { w1: 'allow' }, remote: true });
   assert.deepEqual(await again, { decision: 'allow', message: undefined });
+});
+
+// Mike, 10 Nov 2026: the phone shows only an edit's path, and Allow writes
+// all of it, so an edit is allowed only in the Mac app.
+test("an edit can't be allowed from the phone, website or another Mac, only denied", async () => {
+  const h = makeHarness();
+  const { thread } = create(h, { permissionMode: 'ask' });
+  const s = h.adapter.last;
+  s.init();
+  const answer = s.sink.requestApproval({ toolUseId: 'w9', name: 'Write', title: 'Write build.sh', input: { file_path: '/tmp/build.sh', content: '# fine\nrm -rf ~\n' }, canAlwaysAllow: true, signal: new AbortController().signal });
+  const req = h.events(thread.id).filter((e) => e.type === 'approval.requested').at(-1);
+  assert.throws(() => h.runner.respondApproval({ threadId: thread.id, approvalId: req.approvalId, decision: 'allow', remote: true }));
+  h.runner.respondApproval({ threadId: thread.id, approvalId: req.approvalId, decision: 'allow' });
+  assert.equal((await answer).decision, 'allow', 'the Mac app connected straight to the runner can');
 });
 
 test('questions are answered by question text, header or index', async () => {
@@ -2063,6 +2192,22 @@ test('needs you: end_turn with archive archives the thread once its turn is over
   assert.ok(t.archivedAt, 'archived once the turn completed');
   assert.ok(h.events(thread.id).some((e) => e.type === 'system.note' && /archived/i.test(String(e.text))), 'says why it went');
   assert.deepEqual(checkSequence(h.events(thread.id)), []);
+});
+
+test('needs you: end_turn with archive leaves the thread where it is while a card still waits', async () => {
+  const h = makeHarness();
+  const { thread } = create(h);
+  const s = h.adapter.last;
+  s.init();
+  // A subagent's card (no tool call of the agent's), which outlives the turn.
+  const answer = s.sink.requestApproval({ toolUseId: undefined, name: 'Bash', title: 'Run', input: { command: 'npm test' }, canAlwaysAllow: true, signal: new AbortController().signal });
+  endTurnCall(s, 't1', { needs: 'nothing', archive: true });
+  s.result('completed');
+  assert.equal(h.runner.get(thread.id).archivedAt, undefined, 'not archived with the card waiting');
+  const evs = h.events(thread.id);
+  assert.ok(evs.some((e) => e.type === 'approval.requested'), 'the card was shown');
+  assert.ok(!evs.some((e) => e.type === 'approval.resolved'), 'and still waits for Mike');
+  void answer;
 });
 
 test('needs you: an interrupted turn, or one without archive, leaves the thread where it is', () => {

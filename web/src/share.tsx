@@ -6,30 +6,66 @@
 // this browser is signed in as Mike the page also has ShareControl, so he
 // can stop sharing it or share it again.
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery } from 'convex/react';
+import { useConvex, useMutation, useQuery } from 'convex/react';
 import { useLiveQuery } from './live';
 import { api } from '../../convex/_generated/api';
 import type { Id } from '../../convex/_generated/dataModel';
 import { MessageText, Pictures, picturesByRow, ToolRun, Worked, type PageMessage, type Picture } from './messages';
 import { CommandState } from './command-state';
+import { empty, hasMore, nextBefore, pictures, rows, takeLive, takeOlder, type History } from './share-history';
 import { fold, splitTurns, duration, roughly, type Item, type Turn } from './turns';
 import { day, modelLabel, plain, sender, sentences } from './format';
 import * as Icon from './icons';
 
 // Big enough that most threads arrive whole: the outline and byline only
-// know the turns that have loaded.
+// know the turns that have loaded. It's the live query's size for good:
+// older rows are read once each (share-history.ts).
 const FIRST_PAGE = 400;
 const MORE = 200;
 const SITE = 'https://threadbear.mikecann.app';
 
 export function SharePage({ slug, token }: { slug: string; token: string | null }) {
-  const [limit, setLimit] = useState(FIRST_PAGE);
-  const data = useLiveQuery(api.share.view, { slug, limit, ...(token ? { token } : {}) });
-  // Keeps the last page on screen while a bigger one loads.
+  const convex = useConvex();
+  const data = useLiveQuery(api.share.view, { slug, limit: FIRST_PAGE, ...(token ? { token } : {}) });
   const [shown, setShown] = useState<typeof data>(undefined);
+  // The rows as far back as the reader has gone: the live answer, then older
+  // chunks (share-history.ts).
+  const [history, setHistory] = useState<History<Row, Pic>>(empty);
+  const historyRef = useRef(history);
+  const [loadingChunk, setLoadingChunk] = useState(false);
   useEffect(() => {
-    if (data) setShown(data);
+    if (!data) return;
+    setShown(data);
+    if (data.state !== 'ok') return;
+    historyRef.current = takeLive(historyRef.current, data);
+    setHistory(historyRef.current);
   }, [data]);
+
+  const more = () => {
+    const before = nextBefore(historyRef.current);
+    if (before === undefined || loadingChunk) return;
+    setLoadingChunk(true);
+    convex
+      .query(api.share.view, { slug, limit: MORE, beforeSeq: before, ...(token ? { token } : {}) })
+      .then((chunk) => {
+        if (chunk.state !== 'ok') return;
+        const took = takeOlder(historyRef.current, chunk, before);
+        if (!took) return;
+        historyRef.current = took;
+        setHistory(took);
+      })
+      // What's shown stays; the button can try again.
+      .catch((e) => console.warn('could not load earlier messages', e))
+      .finally(() => setLoadingChunk(false));
+  };
+
+  // The same rows until the history changes: the write-up keeps its place
+  // after loading earlier ones when they change, and a new array each render
+  // (a click re-renders at once) would spend that before they came.
+  const all = useMemo(() => {
+    if (shown?.state !== 'ok' || !history.live) return shown;
+    return { ...shown, messages: rows(history), images: pictures(history), hasMore: hasMore(history) };
+  }, [shown, history]);
 
   const title = shown?.state === 'ok' ? shown.title || 'Untitled' : undefined;
   useEffect(() => {
@@ -46,8 +82,11 @@ export function SharePage({ slug, token }: { slug: string; token: string | null 
       </main>
     );
   }
-  return <WriteUp slug={slug} token={token} data={shown} loading={data !== shown} onMore={() => setLimit((n) => n + MORE)} />;
+  return <WriteUp slug={slug} token={token} data={all as Shared} loading={data !== shown || loadingChunk} onMore={more} />;
 }
+
+type Row = Shared['messages'][number];
+type Pic = Shared['images'][number];
 
 type Shared = Extract<NonNullable<ReturnType<typeof useQuery<typeof api.share.view>>>, { state: 'ok' }>;
 
@@ -60,13 +99,25 @@ function WriteUp({ slug, token, data, loading, onMore }: { slug: string; token: 
   const after = useMemo(() => picturesByRow(messages, data.images), [messages, data.images]);
   const active = useActiveTurn(turns.length);
 
-  // After loading earlier messages, stay where you were rather than jumping.
-  const keepFromBottom = useRef<number | null>(null);
+  // After loading earlier messages, stay where you were rather than jumping:
+  // the turns on screen when it was asked for go back to where they sat.
+  // By a turn on screen rather than the distance from the bottom, as a new
+  // reply can grow the page below while they load (Codex, 9 Nov). Several,
+  // as the first one shown may be cut off by the page's edge and get a new
+  // first row once the rest of it comes. And only once rows older than the
+  // first one shown have come: a live update can change the rows meanwhile.
+  const keep = useRef<{ turns: { seq: string; top: number }[]; first: number } | null>(null);
   useEffect(() => {
-    if (keepFromBottom.current === null) return;
-    window.scrollTo(0, document.documentElement.scrollHeight - keepFromBottom.current);
-    keepFromBottom.current = null;
-  }, [data]);
+    const k = keep.current;
+    if (!k || (messages[0]?.seq ?? Infinity) >= k.first) return;
+    keep.current = null;
+    for (const t of k.turns) {
+      const el = document.querySelector(`section.turn[data-turn="${t.seq}"]`);
+      if (!el) continue;
+      window.scrollBy(0, el.getBoundingClientRect().top - t.top);
+      return;
+    }
+  }, [messages]);
 
   const started = data.createdAt ?? messages[0]?.at;
   const byline = [started ? day(started) : null, asked.length ? `${asked.length} ${asked.length === 1 ? 'turn' : 'turns'}` : null, worked >= 60_000 ? `worked ${roughly(worked)}` : null].filter(Boolean);
@@ -121,7 +172,11 @@ function WriteUp({ slug, token, data, loading, onMore }: { slug: string; token: 
               className="btn earlier"
               disabled={loading}
               onClick={() => {
-                keepFromBottom.current = document.documentElement.scrollHeight - window.scrollY;
+                const turns = [...document.querySelectorAll<HTMLElement>('section.turn[data-turn]')]
+                  .filter((el) => el.getBoundingClientRect().bottom > 0)
+                  .slice(0, 5)
+                  .map((el) => ({ seq: el.dataset.turn!, top: el.getBoundingClientRect().top }));
+                keep.current = { turns, first: messages[0]?.seq ?? Infinity };
                 onMore();
               }}
             >
@@ -154,7 +209,7 @@ function TurnSection({ id, turn, busy, after, inText, rows }: { id: string; turn
 
   const text = (m: PageMessage) => <MessageText text={m.text} pictures={inText} seq={m.seq} rows={rows} />;
   return (
-    <section className="turn" id={id}>
+    <section className="turn" id={id} data-turn={turn.messages[0]!.seq}>
       {items.map((item) => {
         if (item.kind === 'worked') {
           return (

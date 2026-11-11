@@ -10,6 +10,8 @@ export default {
     if (request.method !== "GET" && request.method !== "HEAD") {
       return new Response("Method not allowed", { status: 405, headers: { Allow: "GET, HEAD" } });
     }
+    const url = new URL(request.url);
+    if (url.pathname.startsWith("/media/")) return media(request, env, url.pathname);
     const response = await env.ASSETS.fetch(request);
     const headers = new Headers(response.headers);
     const extra = headersFor(new URL(request.url).pathname, headers.get("Content-Type") ?? "");
@@ -34,3 +36,46 @@ export default {
     return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
   },
 };
+
+/**
+ * The changelog's pictures and clips, from the R2 bucket bound as MEDIA (wrangler.jsonc): the
+ * key is the path without /media/, so /media/changelog/2026-11-09/x.webp is
+ * changelog/2026-11-09/x.webp. They're kept out of the repo so a fork doesn't download every
+ * one; scripts/media.mjs puts them up. A name never changes once it's up (a new picture gets a
+ * new name), so they're cached for good. Byte ranges come from R2 itself, since Safari won't
+ * play a <video> without them.
+ */
+async function media(request, env, pathname) {
+  const key = decodeURIComponent(pathname.slice("/media/".length));
+  const type = { webp: "image/webp", png: "image/png", jpg: "image/jpeg", mp4: "video/mp4" }[key.split(".").pop()];
+  if (!type || key.includes("..") || !/^[a-z0-9][a-z0-9/._-]*$/.test(key)) return notFound(request, env);
+  let object;
+  try {
+    object = await env.MEDIA.get(key, { range: request.headers, onlyIf: request.headers });
+  } catch {
+    // R2 throws on a range it can't serve (past the end, say).
+    return new Response(null, { status: 416 });
+  }
+  if (!object) return notFound(request, env);
+  const headers = new Headers({ "Content-Type": type, "Accept-Ranges": "bytes", ETag: object.httpEtag });
+  for (const [name, value] of Object.entries(headersFor(pathname, type))) headers.set(name, value);
+  headers.set("Cache-Control", "public, max-age=31536000, immutable");
+  // A conditional request whose ETag still matches: R2 gives back the object without a body.
+  if (!("body" in object)) return new Response(null, { status: 304, headers });
+  if (object.range && request.headers.has("Range")) {
+    const { offset = 0, length = object.size - offset } = object.range;
+    headers.set("Content-Range", `bytes ${offset}-${offset + length - 1}/${object.size}`);
+    headers.set("Content-Length", String(length));
+    return new Response(request.method === "HEAD" ? null : object.body, { status: 206, headers });
+  }
+  headers.set("Content-Length", String(object.size));
+  return new Response(request.method === "HEAD" ? null : object.body, { headers });
+}
+
+/** The site's own 404 page, with a 404, for a media path that isn't there. */
+async function notFound(request, env) {
+  const page = await env.ASSETS.fetch(new Request(new URL("/404.html", request.url)));
+  const headers = new Headers(page.headers);
+  for (const [name, value] of Object.entries(headersFor("/404.html", "text/html"))) headers.set(name, value);
+  return new Response(page.body, { status: 404, headers });
+}

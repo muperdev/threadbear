@@ -202,7 +202,7 @@ before(() => {
   agents = path.join(root, 'LaunchAgents');
   for (const d of ['scripts', 'src', 'bin']) fs.mkdirSync(path.join(rdir, d), { recursive: true });
   // The real scripts and launch.mjs, around a fake runner with no packages.
-  for (const f of ['deploy-runner.sh', 'deploy.mjs', 'deploy-steps.mjs', 'rpc-client.mjs', 'install-runner.sh', 'deploy-backend.mjs']) {
+  for (const f of ['deploy-runner.sh', 'find-node.sh', 'deploy.mjs', 'deploy-steps.mjs', 'rpc-client.mjs', 'install-runner.sh', 'deploy-backend.mjs']) {
     fs.copyFileSync(path.join(RUNNER, 'scripts', f), path.join(rdir, 'scripts', f));
   }
   fs.copyFileSync(path.join(RUNNER, 'launch.mjs'), path.join(rdir, 'launch.mjs'));
@@ -322,6 +322,78 @@ test('a second release goes live through runner.restart', { timeout: 60_000 }, a
   assert.equal(call.release, second, 'the runner is told which release to expect');
   assert.equal(call.resume, undefined, 'no thread to resume outside one');
   assert.deepEqual(leftovers(), []);
+});
+
+// A deploy builds and tests on the Node the installed runner starts releases
+// with, not whichever it was started on (Codex's review, 9 Nov 2026): one
+// tested on Node 26 that the LaunchAgent starts on 24 could pass here and
+// crash there.
+test('a deploy moves over to the Node the installed runner starts releases with', { timeout: 120_000 }, async () => {
+  const plistFile = path.join(agents, `${LABEL}.plist`);
+  const saved = fs.readFileSync(plistFile);
+  // The whole array: plutil -replace at an index inserts rather than replaces.
+  const args = JSON.parse(spawnSync('plutil', ['-convert', 'json', '-o', '-', plistFile], { encoding: 'utf8' }).stdout).ProgramArguments as string[];
+  const setNode = (p: string) => assert.equal(spawnSync('plutil', ['-replace', 'ProgramArguments', '-json', JSON.stringify([args[0], p, ...args.slice(2)]), plistFile]).status, 0);
+  const re = (s: string) => new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const dir = path.join(root, 'other-node');
+  fs.mkdirSync(dir, { recursive: true });
+  const log = path.join(dir, 'ran.log');
+  // Another file than this Node, that runs it: what it's asked is logged.
+  const other = path.join(dir, 'node');
+  fs.writeFileSync(other, `#!/bin/sh\necho "$*" >> ${JSON.stringify(log)}\nexec ${JSON.stringify(NODE)} "$@"\n`, { mode: 0o755 });
+  try {
+    setNode(other);
+    let r = deploy(['--skip-checks', '--dry-run']);
+    assert.equal(r.status, 0, out(r));
+    assert.match(r.stdout, re(`Using the Node the runner runs on, ${other}`));
+    const ran = fs.readFileSync(log, 'utf8').trim().split('\n');
+    assert.equal(ran[0], '--version', 'asked it is a Node first');
+    assert.equal(ran.filter((l) => /deploy\.mjs --home .* --dry-run/.test(l)).length, 1, 'and ran the deploy on it, once');
+
+    // The Node install-runner.sh is installing is taken as it is: the plist
+    // may still name the old one.
+    fs.rmSync(log);
+    r = deploy(['--skip-checks', '--dry-run'], { THREADBEAR_DEPLOY_NODE_GIVEN: '1' });
+    assert.equal(r.status, 0, out(r));
+    assert.ok(!fs.existsSync(log), 'not moved over');
+
+    // A Node that's gone: refused before anything is built or switched.
+    const before = current();
+    setNode(path.join(dir, 'gone', 'node'));
+    r = deploy(['--skip-checks']);
+    assert.notEqual(r.status, 0, out(r));
+    assert.match(r.stderr, /isn't there any more, so no release would start/);
+    assert.equal(current(), before);
+
+    // Something that isn't a Node: refused too, rather than "succeeding".
+    const notNode = path.join(dir, 'not-node');
+    fs.writeFileSync(notNode, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    setNode(notNode);
+    r = deploy(['--skip-checks', '--dry-run']);
+    assert.notEqual(r.status, 0, out(r));
+    assert.match(r.stderr, /doesn't answer --version as Node does/);
+
+    // Stopping the deploy stops the one it runs on the other Node, and waits
+    // for it to clean up: here a stand-in that takes 300 ms over SIGTERM.
+    const slow = path.join(dir, 'slow-node');
+    const seen = path.join(dir, 'seen');
+    fs.writeFileSync(slow, `#!/bin/sh\nif [ "$1" = --version ]; then exec ${JSON.stringify(NODE)} --version; fi\nexec ${JSON.stringify(NODE)} -e 'process.on("SIGTERM", () => { require("fs").writeFileSync(${JSON.stringify(seen)}, "TERM"); setTimeout(() => process.exit(143), 300); }); console.log("child up"); setInterval(() => {}, 1000)'\n`, { mode: 0o755 });
+    setNode(slow);
+    const child = spawn('/bin/bash', [path.join(rdir, 'scripts', 'deploy-runner.sh'), '--home', home, '--label', LABEL, '--skip-checks', '--dry-run'], { env: env(), stdio: ['ignore', 'pipe', 'pipe'] });
+    let said = '';
+    child.stdout.on('data', (d) => (said += d));
+    child.stderr.on('data', (d) => (said += d));
+    const closed = new Promise<number | null>((resolve) => child.once('close', resolve));
+    for (let i = 0; i < 200 && !said.includes('child up'); i++) await new Promise((r) => setTimeout(r, 50));
+    assert.match(said, /child up/);
+    const at = Date.now();
+    child.kill('SIGTERM');
+    assert.equal(await closed, 143, said);
+    assert.equal(fs.readFileSync(seen, 'utf8'), 'TERM', 'it was told');
+    assert.ok(Date.now() - at >= 250, 'and waited for it');
+  } finally {
+    fs.writeFileSync(plistFile, saved);
+  }
 });
 
 test('inside a thread, the restart waits for the thread and then resumes it', { timeout: 60_000 }, async () => {

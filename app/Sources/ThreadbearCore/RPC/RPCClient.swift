@@ -107,8 +107,13 @@ public final class RPCClient: Sendable {
         var receiveTask: Task<Void, Never>?
     }
 
-    public init(transport: RPCTransport) {
+    /// Told each notification that couldn't be read and was dropped, with
+    /// why (`decodeFailure`). The log by default; tests listen in.
+    private let unreadableNotification: @Sendable (_ method: String, _ reason: String) -> Void
+
+    public init(transport: RPCTransport, unreadableNotification: @escaping @Sendable (_ method: String, _ reason: String) -> Void = RPCClient.logUnreadableNotification) {
         self.transport = transport
+        self.unreadableNotification = unreadableNotification
         (notifications, notificationContinuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
         (closed, closedContinuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
         let (stream, continuation) = AsyncStream<(id: Int, text: String)>.makeStream(bufferingPolicy: .unbounded)
@@ -238,68 +243,85 @@ public final class RPCClient: Sendable {
         }
     }
 
-    private func decodeNotification(method: String, data: Data) -> RPCNotification? {
-        let decoder = JSONDecoder()
+    /// A notification's params, or nil, said in the log with why: a decode
+    /// that failed in silence would leave the app quietly not updating
+    /// (9 Nov review). The method and where it broke, never the text.
+    private func decoded<Params: Decodable>(_ type: Params.Type, method: String, data: Data) -> Params? {
+        do {
+            return try JSONDecoder().decode(RPCNotificationEnvelope<Params>.self, from: data).params
+        } catch {
+            unreadableNotification(method, Self.decodeFailure(error))
+            return nil
+        }
+    }
+
+    /// Where and how a decode broke, by field names alone, so no thread
+    /// text or value from the message reaches the log.
+    public static func decodeFailure(_ error: Error) -> String {
+        guard let error = error as? DecodingError else { return String(describing: Swift.type(of: error)) }
+        func path(_ keys: [CodingKey]) -> String {
+            let text = keys.map { $0.intValue.map { "[\($0)]" } ?? $0.stringValue }.joined(separator: ".")
+            return text.isEmpty ? "the top" : text
+        }
+        switch error {
+        case .typeMismatch(let type, let context): return "\(path(context.codingPath)) isn't a \(type)"
+        case .valueNotFound(let type, let context): return "\(path(context.codingPath)) is null, wanted a \(type)"
+        case .keyNotFound(let key, let context): return "\(path(context.codingPath + [key])) is missing"
+        case .dataCorrupted(let context): return "\(path(context.codingPath)) can't be read"
+        @unknown default: return "it can't be read"
+        }
+    }
+
+    public static func logUnreadableNotification(_ method: String, _ reason: String) {
+        protocolLog.error("Couldn't read a \(method, privacy: .public) notification, so it was dropped: \(reason, privacy: .public)")
+    }
+
+    func decodeNotification(method: String, data: Data) -> RPCNotification? {
         switch method {
         case "thread.updated":
-            guard let params = try? decoder.decode(RPCNotificationEnvelope<ThreadUpdatedParams>.self, from: data).params
-            else { return nil }
+            guard let params = decoded(ThreadUpdatedParams.self, method: method, data: data) else { return nil }
             return .threadUpdated(params.thread)
         case "thread.event":
-            guard let params = try? decoder.decode(RPCNotificationEnvelope<ThreadEventParams>.self, from: data).params
-            else { return nil }
+            guard let params = decoded(ThreadEventParams.self, method: method, data: data) else { return nil }
             return .threadEvent(threadId: params.threadId, event: params.event)
         case "thread.deleted":
-            guard let params = try? decoder.decode(RPCNotificationEnvelope<ThreadDeletedParams>.self, from: data).params
-            else { return nil }
+            guard let params = decoded(ThreadDeletedParams.self, method: method, data: data) else { return nil }
             return .threadDeleted(threadId: params.threadId)
         case "accounts.updated":
-            guard let params = try? decoder.decode(RPCNotificationEnvelope<AccountsUpdatedParams>.self, from: data).params
-            else { return nil }
+            guard let params = decoded(AccountsUpdatedParams.self, method: method, data: data) else { return nil }
             return .accountsUpdated(params.accounts)
         case "pools.updated":
-            guard let params = try? decoder.decode(RPCNotificationEnvelope<PoolsResult>.self, from: data).params
-            else { return nil }
+            guard let params = decoded(PoolsResult.self, method: method, data: data) else { return nil }
             return .poolsUpdated(params.pools)
         case "clis.updated":
-            guard let params = try? decoder.decode(RPCNotificationEnvelope<ClisResult>.self, from: data).params
-            else { return nil }
+            guard let params = decoded(ClisResult.self, method: method, data: data) else { return nil }
             return .clisUpdated(params.clis)
         case "schedules.updated":
-            guard let params = try? decoder.decode(RPCNotificationEnvelope<SchedulesResult>.self, from: data).params
-            else { return nil }
+            guard let params = decoded(SchedulesResult.self, method: method, data: data) else { return nil }
             return .schedulesUpdated(params.schedules)
         case "remoteThreads.updated":
-            guard let params = try? decoder.decode(RPCNotificationEnvelope<RemoteThreads>.self, from: data).params
-            else { return nil }
+            guard let params = decoded(RemoteThreads.self, method: method, data: data) else { return nil }
             return .remoteThreadsUpdated(params)
         case "projects.updated":
-            guard let params = try? decoder.decode(RPCNotificationEnvelope<ProjectsResult>.self, from: data).params
-            else { return nil }
+            guard let params = decoded(ProjectsResult.self, method: method, data: data) else { return nil }
             return .projectsUpdated(params.projects)
         case "librarian.updated":
-            guard let params = try? decoder.decode(RPCNotificationEnvelope<LibrarianResult>.self, from: data).params
-            else { return nil }
+            guard let params = decoded(LibrarianResult.self, method: method, data: data) else { return nil }
             return .librarianUpdated(params.librarian)
         case "connectors.updated":
-            guard let params = try? decoder.decode(RPCNotificationEnvelope<ConnectorsResult>.self, from: data).params
-            else { return nil }
+            guard let params = decoded(ConnectorsResult.self, method: method, data: data) else { return nil }
             return .connectorsUpdated(params.connectors)
         case "settings.updated":
-            guard let params = try? decoder.decode(RPCNotificationEnvelope<SettingsResult>.self, from: data).params
-            else { return nil }
+            guard let params = decoded(SettingsResult.self, method: method, data: data) else { return nil }
             return .settingsUpdated(params.settings)
         case "instructions.updated":
-            guard let params = try? decoder.decode(RPCNotificationEnvelope<StandingInstructionsResult>.self, from: data).params
-            else { return nil }
+            guard let params = decoded(StandingInstructionsResult.self, method: method, data: data) else { return nil }
             return .standingInstructions(params.instructions)
         case "runner.updates":
-            guard let params = try? decoder.decode(RPCNotificationEnvelope<RunnerUpdatesParams>.self, from: data).params
-            else { return nil }
+            guard let params = decoded(RunnerUpdatesParams.self, method: method, data: data) else { return nil }
             return .runnerUpdates(params.updates)
         case "runner.notice":
-            guard let params = try? decoder.decode(RPCNotificationEnvelope<RunnerNoticeParams>.self, from: data).params
-            else { return nil }
+            guard let params = decoded(RunnerNoticeParams.self, method: method, data: data) else { return nil }
             return .runnerNotice(level: params.level ?? "info", message: params.message ?? "")
         default:
             return .other(method: method)

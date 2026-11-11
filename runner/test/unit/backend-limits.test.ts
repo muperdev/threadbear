@@ -5,7 +5,7 @@
 // (test/helpers/convex-memory.ts), which counts the bytes a call reads.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { call, load, memoryBackend, outcome } from '../helpers/convex-memory.ts';
+import { call, load, memoryBackend, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
 
 const OWNER = 'owner-key';
 const BRUCE_KEY = 'tbr_bruce';
@@ -44,7 +44,7 @@ async function setup() {
 }
 type S = Awaited<ReturnType<typeof setup>>;
 
-const thread = (threadId: string, runnerId: string) => ({ threadId, runnerId, title: 'T', view: 'inbox', needsYou: false });
+const thread = (threadId: string, runnerId: string) => ({ threadId, runnerId, ...THREAD_BASICS, title: 'T', view: 'inbox', needsYou: false });
 
 // A file uploaded the way a runner key's runner does (/runner/upload).
 async function runnerUpload(s: S, id: string, bytes = 1): Promise<string> {
@@ -412,6 +412,25 @@ test('one phone token keeps at most a few registrations, and only real-looking o
   // Registering the same phone again replaces its row.
   await call(s.ctx, phone.registerDevice, { token: TOKEN, apnsToken: apns(299), environment: 'production' });
   assert.equal(s.rows('devices').filter((d) => d.tokenId === s.tokenId).length, 5);
+});
+
+test('an Android phone registers with its Firebase token, and an Apple token is still hex only', async () => {
+  const s = await setup();
+  const firebase = 'fXyZ1234567890abcdef:APA91bHexample_token-with-dashes_0123456789abcdefghij';
+  await call(s.ctx, phone.registerDevice, { token: TOKEN, apnsToken: firebase, environment: 'production', platform: 'android', pushKey: 'A'.repeat(43) + '=' });
+  assert.equal(s.rows('devices').length, 1);
+  assert.equal(s.rows('devices')[0].platform, 'android');
+  const targets = await call(s.ctx, devices.targets, {});
+  assert.deepEqual(targets.map((t: any) => [t.apnsToken, t.platform]), [[firebase, 'android']]);
+  // An iPhone sends no platform: its token is hex, and this is not
+  assert.equal(await outcome(call(s.ctx, phone.registerDevice, { token: TOKEN, apnsToken: firebase, environment: 'production' })), 'invalid');
+  // And a Firebase token has to look like one
+  assert.equal(await outcome(call(s.ctx, phone.registerDevice, { token: TOKEN, apnsToken: 'short', environment: 'production', platform: 'android' })), 'invalid');
+  assert.equal(await outcome(call(s.ctx, phone.registerDevice, { token: TOKEN, apnsToken: 'has spaces in it '.repeat(3), environment: 'production', platform: 'android' })), 'invalid');
+  assert.equal(await outcome(call(s.ctx, phone.registerDevice, { token: TOKEN, apnsToken: 'a'.repeat(5000), environment: 'production', platform: 'android' })), 'invalid');
+  // An iPhone's row has no platform at all, so older readers see what they always did
+  await call(s.ctx, phone.registerDevice, { token: TOKEN, apnsToken: apns(7), environment: 'production' });
+  assert.equal(s.rows('devices').find((d) => d.apnsToken === apns(7))?.platform, undefined);
 });
 
 test('revoking a token with a flood of registrations commits at once, and they go in batches', async () => {

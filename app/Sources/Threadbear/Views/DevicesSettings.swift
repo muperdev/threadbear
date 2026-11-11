@@ -34,18 +34,31 @@ struct DevicesSettings: View {
                         .foregroundStyle(.secondary)
                 }
             } else {
-                SettingsSection("Add a phone or browser",
-                                about: "The Threadbear iPhone app shows your inbox, lets you reply, approve and start threads, and gets a push when a thread needs you. It reads the Convex mirror, so it works while the Mac is asleep.\n\nThe website is your threads on the web, at \(app.devicesSite ?? "your deployment's .convex.site address"): a link you can paste anywhere. Each browser keeps a key of its own; sign another one in from here too.",
+                SettingsSection(app.localOnly ? "Add a browser" : "Add a phone or browser",
+                                about: app.localOnly
+                                    ? "Your backend is on this Mac only, so the website opens in a browser on this Mac, at \(app.devicesSite ?? "its local address"). Each browser keeps a key of its own.\n\nThe iPhone app needs a backend it can reach: Convex cloud, or a self-hosted one on your tailnet (docs/self-hosting.md)."
+                                    : "The Threadbear iPhone app shows your inbox, lets you reply, approve and start threads, and gets a push when a thread needs you. It reads the Convex mirror, so it works while the Mac is asleep.\n\nThe website is your threads on the web, at \(app.devicesSite ?? "your deployment's .convex.site address"): a link you can paste anywhere. Each browser keeps a key of its own; sign another one in from here too.",
                                 ask: "put the iPhone app on your phone, or change how the mirror is set up.") {
-                    if app.pushOff {
+                    if app.localOnly {
+                        // setup --self-hosted --local: a pairing code would send the phone to its own 127.0.0.1.
+                        LabeledContent("iPhone") {
+                            Text("Can't pair: your backend is on this Mac only")
+                                .foregroundStyle(.secondary)
+                        }
+                        Text("A phone can't reach it. To use the iPhone app, install Tailscale and run ./threadbear setup --self-hosted --tailnet. Your threads stay.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else if app.pushOff {
                         // A self-hosted backend: the push relay only reaches Convex cloud (docs/self-hosting.md).
                         Label("Your backend is self-hosted, so the iPhone app gets no notifications. It shows what needs you when you open it.", systemImage: "bell.slash")
                             .foregroundStyle(.secondary)
                     }
-                    LabeledContent("iPhone") {
-                        Button("Show the code…") { pairPhone() }
-                            .busy(pairing)
-                            .tip("A code to scan with the Threadbear iPhone app. It pairs the phone with your threads for 90 days.")
+                    if !app.localOnly {
+                        LabeledContent("iPhone") {
+                            Button("Show the code…") { pairPhone() }
+                                .busy(pairing)
+                                .tip("A code to scan with the Threadbear iPhone app. It pairs the phone with your threads for 90 days.")
+                        }
                     }
                     LabeledContent("Website") {
                         Button("Open signed in") { openBrowser() }
@@ -75,9 +88,6 @@ struct DevicesSettings: View {
             }
         }
         .formStyle(.grouped)
-        .fixedSize(horizontal: false, vertical: true)
-        .scrollIndicators(.never)
-        .scrollDisabled(true)
         .onAppear { app.loadDevices() }
         .onChange(of: app.connection) { _, state in if state == .connected { app.loadDevices() } }
         // The automation's {"cmd":"settings","pair":true}, for screenshots.

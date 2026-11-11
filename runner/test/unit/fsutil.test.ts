@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { atomicWriteFileSync, removeTempFiles } from '../../src/fsutil.ts';
 
@@ -71,4 +71,52 @@ test('a failed atomic write leaves no temp file behind', () => {
   assert.throws(() => atomicWriteFileSync(target, '{}'));
 
   assert.deepEqual(fs.readdirSync(dir), ['thread.json']);
+});
+
+function folder(t: { after(fn: () => void): void }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic-write-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return { dir, file: path.join(dir, 'data.json') };
+}
+
+// A nearly full disk can take part of a write and say so in the count, without
+// throwing (THREADBEAR-1R): the next write is the one that gets ENOSPC.
+function shortWrites(t: { after(fn: () => void): void }, afterFirst: 'rest' | 'full' | 'nothing') {
+  const real = fs.writeSync.bind(fs) as (fd: number, b: Buffer, off: number, len: number) => number;
+  let calls = 0;
+  const m = mock.method(fs, 'writeSync', (fd: number, data: string | Buffer, off?: number, len?: number) => {
+    const buf = typeof data === 'string' ? Buffer.from(data) : data;
+    const start = typeof off === 'number' ? off : 0;
+    const left = typeof len === 'number' ? len : buf.length - start;
+    calls++;
+    if (calls === 1) return real(fd, buf, start, Math.ceil(left / 2));
+    if (afterFirst === 'full') throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
+    if (afterFirst === 'nothing') return 0;
+    return real(fd, buf, start, left);
+  });
+  t.after(() => m.mock.restore());
+}
+
+test('a write the disk only half takes is finished, not renamed over the file cut short', (t) => {
+  const { file } = folder(t);
+  shortWrites(t, 'rest');
+  atomicWriteFileSync(file, '{"schedules":["one","two"]}\n');
+  assert.equal(fs.readFileSync(file, 'utf8'), '{"schedules":["one","two"]}\n');
+});
+
+test('a full disk partway through a write leaves the old file alone and says so', (t) => {
+  const { dir, file } = folder(t);
+  fs.writeFileSync(file, 'the old list\n');
+  shortWrites(t, 'full');
+  assert.throws(() => atomicWriteFileSync(file, Buffer.from('{"schedules":["one","two"]}\n')), /ENOSPC/);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'the old list\n');
+  assert.deepEqual(fs.readdirSync(dir), ['data.json'], 'no temp file left behind');
+});
+
+test('a write that makes no progress fails rather than spinning', (t) => {
+  const { file } = folder(t);
+  fs.writeFileSync(file, 'the old list\n');
+  shortWrites(t, 'nothing');
+  assert.throws(() => atomicWriteFileSync(file, 'something new and longer\n'));
+  assert.equal(fs.readFileSync(file, 'utf8'), 'the old list\n');
 });

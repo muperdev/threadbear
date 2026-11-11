@@ -1,0 +1,97 @@
+{
+  "closed" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Show me the account-picker options together so I can pick one and leave notes.",
+      "turn" : "turn_review"
+    },
+    {
+      "expanded" : false,
+      "id" : "g:t:show_picker_options",
+      "inGroup" : false,
+      "kind" : "group",
+      "seq" : 3,
+      "text" : "Worked for 1s",
+      "turn" : "turn_review"
+    },
+    {
+      "id" : "review:review_account_picker",
+      "inGroup" : false,
+      "kind" : "review",
+      "seq" : 4,
+      "text" : "Account picker · 4 images · pending",
+      "turn" : "turn_review"
+    },
+    {
+      "id" : "a:review_ready",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 6,
+      "text" : "The four images are ready to compare. Pick an option or leave notes, then send your reply when you’…",
+      "turn" : "turn_review"
+    },
+    {
+      "id" : "f:turn_review",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 7,
+      "text" : "1s",
+      "turn" : "turn_review"
+    }
+  ],
+  "open" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Show me the account-picker options together so I can pick one and leave notes.",
+      "turn" : "turn_review"
+    },
+    {
+      "expanded" : true,
+      "id" : "g:t:show_picker_options",
+      "inGroup" : false,
+      "kind" : "group",
+      "seq" : 3,
+      "text" : "Worked for 1s",
+      "turn" : "turn_review"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:show_picker_options",
+      "inGroup" : true,
+      "kind" : "tool",
+      "seq" : 3,
+      "text" : "Compare options: Account picker",
+      "turn" : "turn_review"
+    },
+    {
+      "id" : "review:review_account_picker",
+      "inGroup" : false,
+      "kind" : "review",
+      "seq" : 4,
+      "text" : "Account picker · 4 images · pending",
+      "turn" : "turn_review"
+    },
+    {
+      "id" : "a:review_ready",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 6,
+      "text" : "The four images are ready to compare. Pick an option or leave notes, then send your reply when you’…",
+      "turn" : "turn_review"
+    },
+    {
+      "id" : "f:turn_review",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 7,
+      "text" : "1s",
+      "turn" : "turn_review"
+    }
+  ]
+}

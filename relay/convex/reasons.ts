@@ -13,6 +13,9 @@ export const APPLE = new Set([
   'InvalidProviderToken', 'MissingProviderToken', 'UnrelatedKeyIdInToken', 'BadEnvironmentKeyInToken', 'BadPath', 'MethodNotAllowed',
   'ExpiredToken', 'Unregistered', 'PayloadTooLarge', 'TooManyProviderTokenUpdates', 'TooManyRequests', 'InternalServerError',
   'ServiceUnavailable', 'Shutdown',
+  // And Firebase's (FCM HTTP v1 error statuses), for an Android phone
+  'UNREGISTERED', 'INVALID_ARGUMENT', 'SENDER_ID_MISMATCH', 'QUOTA_EXCEEDED', 'UNAVAILABLE', 'INTERNAL',
+  'THIRD_PARTY_AUTH_ERROR', 'PERMISSION_DENIED', 'UNAUTHENTICATED',
 ]);
 // Socket error codes worth telling apart.
 export const SOCKET = new Set([

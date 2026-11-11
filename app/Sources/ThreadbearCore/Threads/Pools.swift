@@ -201,19 +201,10 @@ public enum Pools {
         "Waiting for room · " + waitingTime(waiting.until, now: now, calendar: calendar)
     }
 
-    /// The open thread's line while it waits: "Every login in Evenings is
-    /// out of room. It carries on by itself at 5:25 pm."
-    public static func waitingSentence(poolTitle: String, _ waiting: WaitingForRoom, now: Date, calendar: Calendar = .current) -> String {
-        let start = "Every login in \(poolTitle) is out of room. "
-        if waiting.until <= now { return start + "It carries on any moment now." }
-        let (day, clock) = waitingParts(waiting.until, now: now, calendar: calendar)
-        return start + "It carries on by itself " + (day.map { "\($0) at " } ?? "at ") + clock + "."
-    }
-
     /// A time with its minutes always shown ("5:00 am"), with the day in
     /// front when it isn't today. Past times read "any moment now": the
     /// runner is about to carry on.
-    static func waitingTime(_ date: Date, now: Date, calendar: Calendar) -> String {
+    public static func waitingTime(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
         if date <= now { return "any moment now" }
         let (day, clock) = waitingParts(date, now: now, calendar: calendar)
         return day.map { $0 + " " + clock } ?? clock

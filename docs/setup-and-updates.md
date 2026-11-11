@@ -15,13 +15,14 @@ Mike, since it's his app first and other people patch their own copy.
 How it works today (file references are in the research notes at the bottom):
 
 - **Install** is two hand-run scripts: `app/install.sh` builds the Mac app, and
-  `runner/scripts/install-runner.sh` installs the runner's LaunchAgent. Node is pinned
-  to Mike's nvm path, and some defaults are his (`~/dev/me/misc`, `claude-2` for
+  `runner/scripts/install-runner.sh` installs the runner's LaunchAgent. Node was pinned
+  to Mike's nvm path (since 9 Nov, the node on PATH or nvm's newest), and some defaults are his (`~/dev/me/misc`, `claude-2` for
   Convex work, Token Stats for account limits).
 - **Updates** follow the local `main` branch of the checkout. The runner and the Mac app
   both notice when `main` moves and rebuild themselves, and the runner rolls back to its
-  last good release after 3 crashes in 10 minutes. Nothing ever fetches from GitHub, so
-  a commit on Mike's Mac ships to Mike's Mac, and that's all.
+  last good release after 3 crashes in 10 minutes. Nothing fetches from GitHub unless a
+  second machine has `followOrigin` on (docs/dev-tools.md), so a commit on Mike's Mac
+  ships to Mike's Mac, and that's all.
 - **Convex** is a cloud deployment in Mike's account, set up by hand in about 8 steps
   (project, `.env.local`, deploy, make a key, `RUNNER_KEY`, `sync.url`, phone token, the
   APNs keys). Functions are deployed by hand and nothing checks that the runner and the
@@ -76,7 +77,9 @@ Archive moved off Convex because of reads and writes, not storage).
 your own machine, served over Tailscale. It's a setting in setup, not a fork. The phone
 then needs Tailscale on, and it can't reach a sleeping Mac unless the backend lives on an
 always-on machine. Built 7 Nov (docs/self-hosting.md): `setup --self-hosted`, with no
-phone notifications, as the push relay only reaches Convex cloud.
+phone notifications, as the push relay only reaches Convex cloud. Since 10 Nov,
+`setup --self-hosted --local` keeps it on this Mac's loopback with no Tailscale, for
+someone whose work keeps them on its own tailnet: no phone and no second Mac then.
 
 ### 2.2 Setup: one command
 
@@ -273,7 +276,7 @@ it public is Mike's call, once he's happy for others to use it.
 8. Done 7 Nov: self-hosted backend as a setup option (`setup --self-hosted`,
    docs/self-hosting.md). Docker on the same Mac, served with `tailscale serve`,
    phone notifications off. Convex cloud stays the default and the one we
-   recommend everywhere.
+   recommend everywhere. 10 Nov: `--local`, the same on loopback only, no Tailscale.
 
 Steps 1 and 2 are useful to Mike straight away. 3 to 5 are what make it installable by
 other people. The landing page already says "Threadbear makes a Convex deployment in
@@ -298,7 +301,7 @@ How things work today, from a read of the repo on 28 Oct:
 
 - Install: `app/install.sh` (checks swift and python3, runs `setup_mac.sh`, which runs
   `build-app.sh`); `runner/scripts/install-runner.sh` (main's tip only, not from inside a
-  thread, Node 24 at the nvm path, writes the LaunchAgent, first release through
+  thread, Node 24 or newer from `scripts/find-node.sh`, writes the LaunchAgent, first release through
   `deploy.mjs`). Since 28 Oct the LaunchAgent's program is `~/Applications/Threadbear
   Runner.app` (`runner/launcher/`), which runs `node launch.mjs` as its child, so macOS's
   privacy prompts name Threadbear Runner rather than node (seen on Tinker Desk's first

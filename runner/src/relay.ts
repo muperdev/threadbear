@@ -72,6 +72,9 @@ const MAX_PICTURES = 6;
 // one drops them and sends the words alone. sync.ts RELAY_PICTURES_API_VERSION,
 // not imported so this module doesn't load the whole sync.
 const PICTURES_API = 63;
+// Reply buttons and slash commands on a thread there (convex/relay.ts press,
+// slashCommands, rows' buttons): an older backend refuses the commands.
+const BUTTONS_API = 68;
 // A send or a new thread with pictures answers within this, as the app gives
 // up on one at 120 s (RPCClient.sendTimeout) and then puts the draft back
 // while it may still go, so a send again would be a second one. Uploading
@@ -101,8 +104,12 @@ export type RelayRow = {
   summary?: boolean;
   turn?: string;
   wokeBy?: { kind: string; description: string }[];
+  // The reply buttons its text links, as they are now (backend API 59; the
+  // relay's rows carry them from 68).
+  buttons?: RowButton[];
   at: string;
 };
+export type RowButton = { id: string; title: string; kind: 'start' | 'send'; target?: string; pressedThreadId?: string; failed?: string };
 type Page = { messages: RelayRow[]; hasMore: boolean };
 
 type Pending =
@@ -377,7 +384,7 @@ export class Relay {
       lastSeenSeq: 0,
       runnerId: t.runnerId,
     };
-    for (const k of ['model', 'createdAt', 'lastActivityAt', 'snoozedUntil', 'archivedAt', 'starredAt', 'startedBy', 'asked'] as const) {
+    for (const k of ['model', 'createdAt', 'lastActivityAt', 'snoozedUntil', 'archivedAt', 'starredAt', 'startedBy', 'asked', 'recap'] as const) {
       if (t[k] !== undefined) thread[k] = t[k];
     }
     if (t.lastActivityAt) thread.updatedAt = t.lastActivityAt;
@@ -862,6 +869,17 @@ export class Relay {
     }
   }
 
+  // What a backend older than `api` can't do: said, rather than queued and dropped.
+  private needsBackend(w: Watch, api: number, what: string): void {
+    let src: RelaySource;
+    try {
+      src = this.src();
+    } catch (e) {
+      throw notSent(e);
+    }
+    if ((src.apiVersion ?? 0) < api) throw new RpcError(ErrorCode.other, `${what} on ${this.runnerName(w.runnerId)} works once your Convex backend is updated, which happens with the next runner update.`);
+  }
+
   private unsupported(w: Watch | undefined, what: string): never {
     const name = w ? this.runnerName(w.runnerId) : 'the other runner';
     throw new RpcError(ErrorCode.other, `${what} isn't possible through Convex yet. Do it on ${name}, or turn on Connect to other machines directly in Settings > Runners.`);
@@ -1015,6 +1033,28 @@ export class Relay {
         const share = await this.sharedAs(w, access, old);
         return { thread: { ...this.summary(threadId), ...(share ? { share } : {}) } };
       }
+      case 'buttons.list': {
+        // From the rows, as the phone draws them: never the brief or the
+        // message behind a button, which stay on that runner.
+        if (!w.loaded) await this.load(w);
+        return { buttons: buttonsOf([...w.rows.values()]) };
+      }
+      case 'buttons.press': {
+        this.needsBackend(w, BUTTONS_API, 'Pressing a reply button');
+        const buttonId = String(p.buttonId ?? '');
+        if (!/^[a-z0-9]{8}$/.test(buttonId)) throw new RpcError(ErrorCode.badParams, 'No such button.');
+        // Pressing twice is harmless there (buttons.ts pressButton).
+        const done = await this.command(w.runnerId, threadId, 'press', { buttonId }, { done: true, ms: CALL_MS });
+        if (!w.loaded) await this.load(w).catch(() => undefined);
+        const known = buttonsOf([...w.rows.values()]).find((b) => b.id === buttonId) ?? { id: buttonId, title: '', createdAt: '' };
+        const now = new Date(this.deps.clock.now()).toISOString();
+        return { button: { ...known, failed: undefined, ...(done.threadId ? { pressed: { at: now, threadId: done.threadId } } : {}) } };
+      }
+      case 'threads.commands': {
+        this.needsBackend(w, BUTTONS_API, 'Its slash commands');
+        const done = await this.command(w.runnerId, threadId, 'slashCommands', {}, { done: true, ms: CALL_MS });
+        return { commands: Array.isArray(done.result) ? done.result : [] };
+      }
       case 'threads.subagent':
         return this.unsupported(w, "Reading a sub-agent's work");
       default:
@@ -1078,6 +1118,23 @@ export class Relay {
     return done.result;
   }
 
+  /**
+   * The Move sheet (threads.movePreview): the runner that has a thread
+   * describes it (`moves.describe`), and a move's target says where it
+   * would go (`moves.preview`). Both only plan; nothing starts.
+   */
+  async describeForMove(threadId: string): Promise<unknown> {
+    const t = this.find(threadId);
+    if (!t) throw new RpcError(ErrorCode.badParams, 'No such thread on another runner.');
+    const done = await this.command(t.runnerId, threadId, 'call', { method: 'moves.describe', params: {} }, { done: true, ms: CALL_MS });
+    return done.result;
+  }
+
+  async previewMove(runnerId: string, params: { info: unknown; cwd?: string; accountId?: string }): Promise<unknown> {
+    const done = await this.command(runnerId, undefined, 'call', { method: 'moves.preview', params }, { done: true, ms: CALL_MS });
+    return done.result;
+  }
+
   /** Another runner's logins for the new-thread pickers, from the backend's accounts rows. */
   async logins(runnerId: string): Promise<{ accounts: unknown[]; pools: unknown[]; defaults: Record<string, unknown> }> {
     const rows = (await this.read('relay:remoteAccounts', { runnerId })) as { id: string; provider: string; runnerId?: string }[];
@@ -1132,4 +1189,24 @@ function describe(method: string): string {
     default:
       return method.startsWith('panels.') || method.startsWith('actions.') || method.startsWith('patches.') ? 'Its patches' : method.startsWith('reviews.') ? 'Design reviews' : method.startsWith('buttons.') ? 'Reply buttons' : 'That';
   }
+}
+
+// A thread's reply buttons as the app's buttons.list has them, from its rows:
+// the newest row's state of each, oldest first. A row only names the kind
+// and where it goes, so `start`/`send` carry that and no brief.
+export function buttonsOf(rows: RelayRow[]): Record<string, unknown>[] {
+  const out = new Map<string, Record<string, unknown>>();
+  for (const r of [...rows].sort((a, b) => a.seq - b.seq)) {
+    for (const b of r.buttons ?? []) {
+      out.set(b.id, {
+        id: b.id,
+        title: b.title,
+        createdAt: r.at,
+        ...(b.kind === 'start' ? { start: { text: '', cwd: b.target ?? '' } } : { send: { threadId: '', threadTitle: b.target ?? '', text: '' } }),
+        ...(b.pressedThreadId ? { pressed: { at: r.at, threadId: b.pressedThreadId } } : {}),
+        ...(b.failed ? { failed: { at: r.at, error: b.failed } } : {}),
+      });
+    }
+  }
+  return [...out.values()];
 }

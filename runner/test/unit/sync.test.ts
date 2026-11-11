@@ -499,6 +499,8 @@ function setupFull(opts: { heads?: { threadId: string; lastSeq: number }[]; take
         applied.push(`press ${id} ${buttonId}`);
         return h.runner.pressButton(id, buttonId);
       },
+      // As handover.ts's phoneCommands has it: where the thread is now.
+      listButtons: (id) => h.runner.listButtons(id),
       schedule: (p) => {
         applied.push(`schedule ${p.scheduleId} ${p.action}`);
       },
@@ -3109,6 +3111,45 @@ test("a subagent's cards reach the phone between turns, and an older one comes b
 // suffix"): the phone and another Mac's view show one line of a card, at
 // most 200 characters, and could allow it. A card that line can't show all
 // of offers only Deny there, and the runner refuses an allow from there.
+test('approvals: a card whose line a value found since would change loses Allow there, and an allow from there is refused', async () => {
+  const f = setupFull();
+  const docs = () => f.calls.filter((c) => c.fn === 'sync:upsertThreads').flatMap((c) => c.args.threads as ThreadDoc[]);
+  const { h, sync, push, calls } = f;
+  sync.start();
+  await sync.flushNow();
+  const t = h.runner.create({ text: 'go', cwd: h.cfg.defaults.cwd, accountId: 'claude-3', permissionMode: 'ask' }).thread;
+  const s = session(h, t.id);
+  s.init();
+  const answer = s.sink.requestApproval({ toolUseId: undefined, name: 'Bash', title: 'Run', input: { command: 'echo lateword | login' }, canAlwaysAllow: true, signal: new AbortController().signal });
+  // The card is made while nothing in its line is known to be secret...
+  await tick();
+  // ...and a .env read late turns up a value it holds before the row goes
+  // up (Codex's review, 9 Nov 2026).
+  const scrubber = (sync as unknown as { scrubber: { safeText: (t: string) => string } }).scrubber;
+  const before = scrubber.safeText;
+  scrubber.safeText = (text: string) => before(text).replaceAll('lateword', '[REDACTED]');
+  h.clock.advance(SYNC_COALESCE_MS);
+  await tick();
+  const card = docs().filter((d) => d.threadId === t.id && d.pendingApproval).at(-1)!.pendingApproval as { approvalId: string; options: string[]; title: string };
+  assert.deepEqual(card.options, ['deny']);
+  assert.equal(card.title, `Run. ${REMOTE_ALLOW_REFUSED}`);
+  const respond = async (id: string, decision: string) => {
+    push([{ commandId: id, kind: 'respond', threadId: t.id, args: { approvalId: card.approvalId, decision }, createdAt: Date.now() }]);
+    await tick(10);
+    return calls.filter((c) => c.fn === 'sync:finishCommand' && c.args.commandId === id).at(-1)!.args;
+  };
+  const refused = await respond('r1', 'allow');
+  assert.equal(refused.ok, false, 'an allow sent anyway is refused');
+  // Still refused once another card is shown in front of it.
+  const second = s.sink.requestApproval({ toolUseId: undefined, name: 'Bash', title: 'Run', input: { command: 'npm test' }, canAlwaysAllow: true, signal: new AbortController().signal });
+  h.clock.advance(SYNC_COALESCE_MS);
+  await tick();
+  assert.equal((await respond('r2', 'allow')).ok, false, 'refused while it waits behind another card');
+  assert.equal((await respond('r3', 'deny')).ok, true);
+  assert.equal((await answer).decision, 'deny');
+  void second;
+});
+
 test('approvals: a card the phone cannot show whole offers only Deny there, and an allow from there is refused', async () => {
   const f = setupFull();
   const docs = () => f.calls.filter((c) => c.fn === 'sync:upsertThreads').flatMap((c) => c.args.threads as ThreadDoc[]);
@@ -3144,7 +3185,7 @@ test('approvals: a card the phone cannot show whole offers only Deny there, and 
   assert.deepEqual(p.options, ['deny']);
   const refused = await respond('r2', p.approvalId, 'allow');
   assert.equal(refused.ok, false);
-  assert.match(String(refused.note), /too long to show in full here/);
+  assert.match(String(refused.note), /can.t be shown in full here/);
   assert.equal((await respond('r3', p.approvalId, 'allowAlways')).ok, false);
   assert.equal((await respond('r4', p.approvalId, 'deny')).ok, true, 'Deny still works');
   assert.equal((await hidden).decision, 'deny');
@@ -3170,7 +3211,12 @@ test('which cards the phone may allow: a short one-line command, or a threadbear
   assert.equal(remoteCardShowsAll('Bash', { command: 'npm test', description: 'x' }), true);
   assert.equal(remoteCardShowsAll('Bash', { command: 'a'.repeat(161) }), false);
   assert.equal(remoteCardShowsAll('Bash', { command: 'ls\nrm -rf ~' }), false);
-  assert.equal(remoteCardShowsAll('Write', { file_path: '/x', content: 'long' }), true, 'an edit shows its path, as before');
+  // An edit shows only its path there and Allow writes all of it, so
+  // only the Mac allows one (Mike, 10 Nov 2026).
+  for (const name of ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'apply_patch']) {
+    assert.equal(remoteCardShowsAll(name, { file_path: '/x', content: 'rm -rf ~', paths: ['/x'] }), false, name);
+  }
+  assert.equal(remoteCardShowsAll('WebFetch', { url: 'https://example.com', prompt: 'x' }), true, "a page's address is still its line");
   // A Codex card's folder and network are more than its line shows, unless it's the thread's own folder.
   assert.equal(remoteCardShowsAll('shell', { command: 'rm -rf build', cwd: '/w' }, '/w'), true);
   assert.equal(remoteCardShowsAll('shell', { command: 'rm -rf build', cwd: '/Users/me' }, '/w'), false);
@@ -3306,4 +3352,64 @@ test("commands: a page asked for while a row sharing the thread is on its way wa
   release!();
   await flushing;
   await sync.stop();
+});
+
+// Daybreak, 10 Nov (finding 61): a card's Run is pressed by its id alone, so
+// it runs the command on this Mac, never what the phone showed. Comment lines
+// dressed as a PEM key around a statement were scrubbed out of the row, and
+// Run ran the statement. Now a Run the scrub would change goes up without its
+// button, and a press from off the Mac is refused all the same.
+import { REMOTE_RUN_REFUSED } from '../../src/tools.ts';
+import { RUN_ASKS_API_VERSION, toPhoneAsk } from '../../src/sync.ts';
+const HIDDEN_RUN = "printf 'Health check OK\\n'\n# -----BEGIN PRIVATE KEY-----\ntouch hidden-execution.txt\n# -----END PRIVATE KEY-----";
+
+test("a card's Run the scrub would change goes up without its button, and a press from the phone is refused", async () => {
+  const { h, sync, calls, push, applied } = setupFull({ apiVersion: RUN_ASKS_API_VERSION });
+  sync.start();
+  await sync.flushNow();
+  fs.writeFileSync(path.join(h.cfg.home, 'runner.json'), JSON.stringify({ ...readRunnerJson(h.cfg.home), experiments: { runAsks: true } }));
+  const t = h.runner.create({ text: 'Health', cwd: h.cfg.defaults.cwd, accountId: 'claude-3', permissionMode: 'ask' }).thread;
+  const s = session(h, t.id);
+  s.init();
+  s.result('completed');
+  await tick();
+  const st = (h.runner as any).threads.get(t.id);
+  const asks = h.runner.armRunAsks(st, [{ action: 'Check health?', why: 'It prints OK.', run: { command: HIDDEN_RUN } }, { action: 'List it?', run: { command: 'ls -la' } }], 'turn_x');
+  st.rec.needs = { seq: st.rec.lastTurnCompletedSeq, needs: 'you', asks };
+  h.runner.update({ threadId: t.id, title: 'Health check' });
+  h.clock.advance(SYNC_COALESCE_MS);
+  await tick();
+  const rows = calls.filter((c) => c.fn === 'sync:upsertThreads').flatMap((c) => c.args.threads as ThreadDoc[]).filter((d) => d.threadId === t.id && d.asks);
+  const up = rows.at(-1)!.asks!;
+  assert.equal(up[0]!.run, undefined, 'no button for what the phone would show scrubbed');
+  assert.equal(up[0]!.why, `It prints OK. ${REMOTE_RUN_REFUSED}`);
+  assert.ok(!JSON.stringify(up).includes(asks[0]!.run!.buttonId!), 'its id never goes up');
+  assert.equal(up[1]!.run?.command, 'ls -la', 'one that shows whole keeps its Run');
+  assert.equal(up[1]!.run?.buttonId, asks[1]!.run!.buttonId);
+
+  // The id sent anyway (a phone or backend that kept it): refused before the runner.
+  push([{ commandId: 'r1', kind: 'press', threadId: t.id, args: { buttonId: asks[0]!.run!.buttonId }, createdAt: 1 }]);
+  await tick(10);
+  const r1 = calls.find((c) => c.fn === 'sync:finishCommand' && c.args.commandId === 'r1')!;
+  assert.equal(r1.args.ok, false);
+  assert.match(String(r1.args.note), /can only be run in the Mac app/);
+  assert.deepEqual(applied.filter((a) => a.startsWith('press')), []);
+  assert.ok(!fs.existsSync(path.join(h.cfg.defaults.cwd, 'hidden-execution.txt')));
+  // The whole one still presses from the phone.
+  push([{ commandId: 'r2', kind: 'press', threadId: t.id, args: { buttonId: asks[1]!.run!.buttonId }, createdAt: 2 }]);
+  await tick(10);
+  assert.deepEqual(applied.filter((a) => a.startsWith('press')), [`press ${t.id} ${asks[1]!.run!.buttonId}`]);
+  await sync.stop();
+});
+
+test("a Run is checked against the runner's own scrub: a value it knows, in the command or its folder, holds it on the Mac", () => {
+  const scrubber = new Scrubber({ env: {}, folders: false });
+  scrubber.known.add('Zq9vLm2Xw8Kp4Rt7');
+  const ask = (command: string, cwd = '/w') => toPhoneAsk({ action: 'Go?', run: { command, cwd, buttonId: 'abcd1234' } }, scrubber.safeText);
+  assert.equal(ask('deploy --token Zq9vLm2Xw8Kp4Rt7').run, undefined);
+  assert.equal(ask('ls', '/w/Zq9vLm2Xw8Kp4Rt7').run, undefined);
+  assert.equal(ask(HIDDEN_RUN).run, undefined);
+  assert.equal(ask('ls').run?.buttonId, 'abcd1234');
+  // A scrub that fails holds it too.
+  assert.equal(toPhoneAsk({ action: 'Go?', run: { command: 'ls', cwd: '/w', buttonId: 'abcd1234' } }, () => { throw new Error('boom'); }).run, undefined);
 });

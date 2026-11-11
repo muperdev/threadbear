@@ -154,9 +154,11 @@ export class CodexCopies {
     let output = '';
     try {
       const env = { ...(this.o.env ?? process.env) };
+      // Public npm, whatever ~/.npmrc says: a company registry's expired token
+      // gave E401 here, and nothing in tools/codex pins it like runner/.npmrc.
       // The runner's own Node first, so npm and the package's scripts run on it.
       env.PATH = `${path.dirname(this.o.npmPath)}${path.delimiter}${env.PATH ?? ''}`;
-      const npm = await this.o.exec(this.o.npmPath, ['install', '--prefix', partial, '--no-save', '--no-fund', '--no-audit', `${CODEX_PACKAGE}@${version}`], {
+      const npm = await this.o.exec(this.o.npmPath, ['install', '--prefix', partial, '--no-save', '--no-fund', '--no-audit', '--registry', 'https://registry.npmjs.org/', `${CODEX_PACKAGE}@${version}`], {
         cwd: this.dir,
         env,
         timeoutMs: INSTALL_TIMEOUT_MS,

@@ -7,9 +7,9 @@ import { tmpDir } from '../helpers/fakes.ts';
 import { FakeClock } from '../../src/clock.ts';
 import type { UpdateFailure } from '../../src/fix-update.ts';
 import { nullLogger } from '../../src/log.ts';
-import { CHECK_INTERVAL_MS, FIRST_CHECK_MS, SOON_MS, RunnerUpdater, launcherDiffers, launchAgentBehind, launcherSourcesHash, appOfExecutable, updateDir, watchMainRef, decideUpdate, failedAlready, releaseTreeAt, syncClone, updateFilePath, type UpdateDeps } from '../../src/update.ts';
+import { CHECK_INTERVAL_MS, FIRST_CHECK_MS, MACHINE_WAIT_MS, MAX_MACHINE_TRIES, MAX_SLEPT_TRIES, SOON_MS, RunnerUpdater, runDeploy, launcherDiffers, launchAgentBehind, launcherSourcesHash, appOfExecutable, updateDir, watchMainRef, decideUpdate, failedAlready, releaseTreeAt, syncClone, updateFilePath, buildTreeAt, type UpdateDeps } from '../../src/update.ts';
 import type { ReleaseJson } from '../../src/release.ts';
-import { patiently } from '../helpers/patience.ts';
+import { noFileWatches, patiently } from '../helpers/patience.ts';
 
 const running = { id: 'r1', tree: 'a+b+c+d' };
 const none = { pendingRestart: false, crashedTrees: new Set<string>() };
@@ -120,7 +120,7 @@ type Harness = {
   deploys: number;
   follows: string[];
   main: { commit: string; short: string; subject: string; tree: string; buildTree?: string };
-  deployResult: { ok: true; id: string } | { ok: false; error: string; transient?: boolean };
+  deployResult: { ok: true; id: string } | { ok: false; error: string; transient?: boolean; slept?: boolean; unavailable?: boolean };
   backendDeploys: string[];
   backendResult: { ok: boolean; error?: string };
   pending: boolean;
@@ -163,6 +163,8 @@ function harness(releaseExtra: Partial<ReleaseJson> = {}, depsExtra: Partial<Upd
     // Not the environment these tests happen to run in (inside a thread it
     // is a supervised runner's).
     env: {},
+    // Nor the health of the machine they happen to run on.
+    machineTrouble: () => undefined,
     sync: async () => h.main,
     deployBackend: async (_repo, _runnerDir, _home, commit) => {
       h.backendDeploys.push(commit);
@@ -371,7 +373,8 @@ test('main moving in the checkout is checked within seconds, not at the next fiv
   h.u.stop();
 });
 
-test('watchMainRef hears a commit on main, from a worktree too', async () => {
+test('watchMainRef hears a commit on main, from a worktree too', async (t) => {
+  if (noFileWatches(t)) return;
   const { repo, commit } = makeRepo();
   let heard = 0;
   const stop = watchMainRef(repo, () => heard++);
@@ -453,7 +456,7 @@ test('launchAgentBehind: launch.mjs, a plist that runs node, and an app built fr
 
 test('appOfExecutable: only the launcher app\'s executable', () => {
   assert.equal(appOfExecutable('/Users/m/Applications/Threadbear Runner.app/Contents/MacOS/Threadbear Runner'), '/Users/m/Applications/Threadbear Runner.app');
-  assert.equal(appOfExecutable('/Users/m/.nvm/versions/node/v24.22.1/bin/node'), undefined);
+  assert.equal(appOfExecutable('/Users/m/.nvm/versions/node/v24.0.0/bin/node'), undefined);
   assert.equal(appOfExecutable('/Applications/Threadbear.app/Contents/MacOS/Threadbear'), undefined);
   assert.equal(appOfExecutable(''), undefined);
 });
@@ -502,4 +505,386 @@ test('a failed backend deploy holds the runner back until main changes', async (
   await h.u.check();
   assert.deepEqual(h.backendDeploys, ['c2', 'c3']);
   assert.equal(h.deploys, 1);
+});
+
+// deploy.mjs's exit for a step the Mac slept through (SleptThrough), so the
+// build is tried again later, not marked failed. By exit code, not by words in
+// the log, as a failing test can print anything (Codex, 9 Nov).
+test('a build that failed while the Mac slept is tried again later, and words in the log are not enough', async () => {
+  const root = tmpDir();
+  fs.mkdirSync(path.join(root, 'scripts'));
+  const stepsUrl = new URL('../../scripts/deploy-steps.mjs', import.meta.url).href;
+  fs.writeFileSync(path.join(root, 'scripts', 'deploy.mjs'), `import { SLEPT_EXIT, SleptThrough, checkSlept } from ${JSON.stringify(stepsUrl)};\ntry { checkSlept(1, 2, 'Unit tests'); } catch (e) { console.error(e.message); process.exit(e instanceof SleptThrough ? SLEPT_EXIT : 1); }\n`);
+  const result = await runDeploy(root, root, path.join(root, 'build.log'), root);
+  assert.equal(!result.ok && result.transient && result.slept, true);
+  fs.writeFileSync(path.join(root, 'scripts', 'deploy.mjs'), "console.log(\"The Mac slept during Unit tests, so it's tried again later\"); console.error(\"The Mac slept during Unit tests, so it's tried again later\"); process.exit(1);\n");
+  const broken = await runDeploy(root, root, path.join(root, 'build.log'), root);
+  assert.equal(!broken.ok && broken.transient, false);
+});
+
+// deploy.mjs's exit when no check step failed on the check host (ChecksUnavailable):
+// the host's trouble, tried again later, and given up on after the same few tries.
+test('a build whose check host could not run the checks is tried again, then marked failed', async () => {
+  const root = tmpDir();
+  fs.mkdirSync(path.join(root, 'scripts'));
+  const stepsUrl = new URL('../../scripts/deploy-steps.mjs', import.meta.url).href;
+  fs.writeFileSync(path.join(root, 'scripts', 'deploy.mjs'), `import { UNAVAILABLE_EXIT } from ${JSON.stringify(stepsUrl)};\nconsole.error('No check host has room'); process.exit(UNAVAILABLE_EXIT);\n`);
+  const result = await runDeploy(root, root, path.join(root, 'build.log'), root);
+  assert.equal(!result.ok && result.transient && result.unavailable && !result.slept, true);
+
+  const failures: UpdateFailure[] = [];
+  const h = harness({}, { onFailed: (f) => (failures.push(f), true) });
+  h.deployResult = { ok: false, error: 'No check host has room', transient: true, unavailable: true };
+  h.u.start();
+  h.main = { ...h.main, buildTree: 'B1' };
+  for (let i = 1; i < MAX_SLEPT_TRIES; i++) {
+    await h.u.check();
+    assert.equal(h.u.status().state, 'idle', `try ${i}`);
+  }
+  await h.u.check();
+  assert.equal(h.u.status().state, 'failed');
+  assert.match(failures[0]!.error, /no check host could run the checks in all 3 tries/);
+});
+
+test('a commit the Mac slept through every build of is marked failed after a few tries', async () => {
+  const failures: UpdateFailure[] = [];
+  const h = harness({}, { onFailed: (f) => (failures.push(f), true) });
+  h.deployResult = { ok: false, error: "The Mac slept during Unit tests, so it's tried again later", transient: true, slept: true };
+  h.u.start();
+  h.main = { ...h.main, buildTree: 'B1' };
+  await h.u.check();
+  // A commit that changes only a test has a count of its own.
+  h.main = { ...h.main, commit: 'c3', short: 'c3', subject: 'Fix a test', buildTree: 'B2' };
+  for (let i = 1; i < MAX_SLEPT_TRIES; i++) {
+    await h.u.check();
+    assert.equal(h.u.status().state, 'idle', `try ${i}`);
+  }
+  assert.equal(failures.length, 0);
+  await h.u.check();
+  assert.equal(h.deploys, MAX_SLEPT_TRIES + 1);
+  assert.equal(h.u.status().state, 'failed');
+  assert.equal(failures.length, 1);
+  assert.match(failures[0]!.error, /slept through all 3 tries at this commit/);
+});
+
+// The cloud box ran out of file watches on 9 Nov: two tests failed in every
+// build, the watches came back, and it sat 13 hours behind main until
+// something under runner/ happened to change.
+function sickMachine() {
+  const failures: UpdateFailure[] = [];
+  const state = { trouble: 'has no file watches left (EMFILE)' as string | undefined, answers: [] as (string | undefined)[] };
+  const h = harness({}, { onFailed: (f) => (failures.push(f), true), machineTrouble: () => (state.answers.length ? state.answers.shift() : state.trouble) });
+  h.deployResult = { ok: false, error: 'Unit tests failed' };
+  h.main = { ...h.main, buildTree: 'B1' };
+  h.u.start();
+  return { h, failures, state };
+}
+
+test('a build that failed on a sick machine waits for it, with no fix thread, then is built again', async () => {
+  const { h, failures, state } = sickMachine();
+  await h.u.check();
+  assert.equal(h.deploys, 1);
+  assert.equal(failures.length, 0, 'there is no code to fix');
+  assert.equal(h.notices.length, 1);
+  assert.match(h.notices[0]!, /no file watches left.*tries again by itself/);
+  assert.equal(h.u.status().state, 'failed');
+  assert.match(h.u.status().reason!, /no file watches left/);
+
+  await h.u.check();
+  assert.equal(h.deploys, 1, 'not built while the machine is still sick');
+  assert.equal(h.notices.length, 1, 'said once');
+
+  state.trouble = undefined;
+  h.deployResult = { ok: true, id: 'r2' };
+  await h.u.check();
+  assert.equal(h.deploys, 2, 'built again once it recovered, with main unchanged');
+  assert.equal(h.restarts.length, 1);
+  h.u.stop();
+});
+
+test('a build that fails again on a healthy machine is a real failure', async () => {
+  const { h, failures, state } = sickMachine();
+  await h.u.check();
+  state.trouble = undefined;
+  await h.u.check();
+  assert.equal(h.deploys, 2);
+  assert.equal(failures.length, 1);
+  assert.equal(h.u.status().state, 'failed');
+  await h.u.check();
+  assert.equal(h.deploys, 2, 'and is not tried again');
+  h.u.stop();
+});
+
+test('a machine that keeps going sick during each try is marked failed after a few, so a real break stays visible', async () => {
+  const { h, failures, state } = sickMachine();
+  // Each retry finds it well enough to build, and sick again when that fails.
+  const sick = state.trouble;
+  state.answers = [sick, undefined, sick, undefined, sick];
+  for (let i = 1; i < MAX_MACHINE_TRIES; i++) {
+    await h.u.check();
+    assert.equal(failures.length, 0, `try ${i}`);
+  }
+  await h.u.check();
+  assert.equal(h.deploys, MAX_MACHINE_TRIES);
+  assert.equal(failures.length, 1);
+  assert.match(failures[0]!.error, /no file watches left \(EMFILE\) in all 3 tries at this commit/);
+  await h.u.check();
+  assert.equal(h.deploys, MAX_MACHINE_TRIES, 'and that one stays failed');
+  h.u.stop();
+});
+
+test('a machine that stays sick goes to a fix thread after a while, once, so a real break behind it is seen', async () => {
+  const { h, failures } = sickMachine();
+  await h.u.check();
+  h.clock.advance(MACHINE_WAIT_MS - 60_000);
+  await h.u.check();
+  assert.equal(failures.length, 0, 'not yet');
+  h.clock.advance(60_000);
+  await h.u.check();
+  assert.equal(failures.length, 1);
+  assert.match(failures[0]!.error, /no file watches left \(EMFILE\) for 6 hours? since/);
+  assert.equal(h.u.status().state, 'failed');
+  h.clock.advance(60 * 60_000);
+  await h.u.check();
+  assert.equal(failures.length, 1, 'once');
+  assert.equal(h.deploys, 1, 'and it did not build meanwhile');
+  h.u.stop();
+});
+
+test('a new commit is still built on a sick machine, and the same trouble is not said twice', async () => {
+  const { h, failures } = sickMachine();
+  await h.u.check();
+  h.main = { ...h.main, commit: 'c3', short: 'c3', subject: 'Next', tree: 'y+b+c+d', buildTree: 'B2' };
+  await h.u.check();
+  assert.equal(h.deploys, 2, 'a permanently sick machine must not stop every update');
+  assert.equal(h.notices.length, 1);
+  assert.equal(failures.length, 0);
+  h.u.stop();
+});
+
+test("a build that the machine's health doesn't explain is failed as before", async () => {
+  const failures: UpdateFailure[] = [];
+  const h = harness({}, { onFailed: (f) => (failures.push(f), true) });
+  h.deployResult = { ok: false, error: 'Unit tests failed' };
+  h.u.start();
+  await h.u.check();
+  assert.equal(failures.length, 1);
+  await h.u.check();
+  assert.equal(h.deploys, 1);
+  h.u.stop();
+});
+
+// A failure is keyed by runner/ and, in a repo that has them, check.sh and
+// scripts/, as the self-update's checks run through those (Codex, 9 Nov).
+test('buildTreeAt changes with check.sh or scripts/, not with other files', async () => {
+  const dir = tmpDir();
+  const g = (...a: string[]) => spawnSync('git', ['-C', dir, ...a], { encoding: 'utf8' });
+  g('init', '-q');
+  g('config', 'user.email', 't@t'); g('config', 'user.name', 't');
+  fs.mkdirSync(path.join(dir, 'runner', 'src'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'scripts'));
+  fs.writeFileSync(path.join(dir, 'runner', 'src', 'a.ts'), '1');
+  fs.writeFileSync(path.join(dir, 'check.sh'), '1');
+  fs.writeFileSync(path.join(dir, 'scripts', 'check-remote.sh'), '1');
+  fs.writeFileSync(path.join(dir, 'README.md'), '1');
+  const commit = () => (g('add', '-A'), g('commit', '-qm', 'x'));
+  commit();
+  const first = await buildTreeAt(dir, 'runner/');
+  fs.writeFileSync(path.join(dir, 'README.md'), '2');
+  commit();
+  assert.equal(await buildTreeAt(dir, 'runner/'), first);
+  fs.writeFileSync(path.join(dir, 'check.sh'), '2');
+  commit();
+  const second = await buildTreeAt(dir, 'runner/');
+  assert.notEqual(second, first);
+  fs.writeFileSync(path.join(dir, 'scripts', 'check-remote.sh'), '2');
+  commit();
+  assert.notEqual(await buildTreeAt(dir, 'runner/'), second);
+  // A runner that is the repo itself (no prefix): just its tree.
+  assert.equal(await buildTreeAt(dir, ''), g('rev-parse', 'HEAD:').stdout.trim());
+});
+
+test('followOrigin: main is fetched from GitHub before the clone syncs, and the problem shows in status', async () => {
+  const home = tmpDir('tb-update-origin-');
+  fs.mkdirSync(path.join(home, 'runner', 'releases', 'r1'), { recursive: true });
+  fs.symlinkSync(path.join('releases', 'r1'), path.join(home, 'runner', 'current'));
+  const clock = new FakeClock();
+  const release = { id: 'r1', commit: 'abc', checkout: home, prefix: 'runner/', tree: 'same' } as ReleaseJson;
+  const refs: (string | undefined)[] = [];
+  let follow = true;
+  let result: Awaited<ReturnType<NonNullable<UpdateDeps['fetchOrigin']>>> = { ref: 'refs/remotes/origin/main', problem: { kind: 'diverged', message: 'main has a stray commit.' } };
+  let tree = 'same';
+  const u = new RunnerUpdater({
+    home,
+    release,
+    enabled: true,
+    clock,
+    log: nullLogger,
+    notice: () => {},
+    restart: () => ({ scheduled: true, waitingFor: [] }),
+    pendingRestart: () => false,
+    env: {},
+    followsOrigin: () => follow,
+    fetchOrigin: async () => result,
+    oldestMissing: async () => clock.now() - 7 * 3600_000,
+    sync: async (_c, _p, _d, ref) => {
+      refs.push(ref);
+      return { commit: 'c1', short: 'c1', subject: 's', tree };
+    },
+    deployBackend: async () => ({ ok: true }),
+    deploy: async () => ({ ok: false, error: 'boom' }),
+  });
+  await u.check();
+  assert.deepEqual(refs, ['refs/remotes/origin/main']);
+  assert.equal(u.status().followsOrigin, true);
+  assert.match(u.status().followProblem ?? '', /stray commit/);
+  // All clear: the problem goes.
+  result = { ref: 'refs/remotes/origin/main' };
+  await u.check();
+  assert.equal(u.status().followProblem, undefined);
+  // Hours behind: something that runs has been on GitHub 7 hours, not here.
+  tree = 'newer';
+  await u.check();
+  assert.match(u.status().followProblem ?? '', /7 hours behind GitHub/);
+  // Turned off: back to the local main, nothing said.
+  follow = false;
+  tree = 'same';
+  await u.check();
+  assert.equal(refs.at(-1), undefined);
+  assert.equal(u.status().followsOrigin, undefined);
+  assert.equal(u.status().followProblem, undefined);
+});
+
+test('followOrigin: GitHub out of reach is said only once it has lasted an hour', async () => {
+  const home = tmpDir('tb-update-origin-');
+  fs.mkdirSync(path.join(home, 'runner', 'releases', 'r1'), { recursive: true });
+  fs.symlinkSync(path.join('releases', 'r1'), path.join(home, 'runner', 'current'));
+  const clock = new FakeClock();
+  const release = { id: 'r1', commit: 'abc', checkout: home, prefix: 'runner/', tree: 'same' } as ReleaseJson;
+  let reachable = false;
+  const u = new RunnerUpdater({
+    home,
+    release,
+    enabled: true,
+    clock,
+    log: nullLogger,
+    notice: () => {},
+    restart: () => ({ scheduled: true, waitingFor: [] }),
+    pendingRestart: () => false,
+    env: {},
+    followsOrigin: () => true,
+    fetchOrigin: async () => (reachable ? { ref: 'refs/remotes/origin/main' } : { ref: 'refs/remotes/origin/main', problem: { kind: 'fetch', message: 'could not resolve host' } }),
+    sync: async () => ({ commit: 'c1', short: 'c1', subject: 's', tree: 'same' }),
+    deployBackend: async () => ({ ok: true }),
+  });
+  await u.check();
+  assert.equal(u.status().followProblem, undefined, 'a blip');
+  clock.advance(61 * 60_000);
+  await u.check();
+  assert.match(u.status().followProblem ?? '', /could not resolve host/);
+  reachable = true;
+  await u.check();
+  assert.equal(u.status().followProblem, undefined);
+  // The clock starts again after a good fetch.
+  reachable = false;
+  await u.check();
+  assert.equal(u.status().followProblem, undefined);
+});
+
+function originRig(over: Partial<UpdateDeps>, releaseOver: Partial<ReleaseJson> = {}) {
+  const home = tmpDir('tb-update-origin-');
+  fs.mkdirSync(path.join(home, 'runner', 'releases', 'r1'), { recursive: true });
+  fs.symlinkSync(path.join('releases', 'r1'), path.join(home, 'runner', 'current'));
+  const clock = new FakeClock();
+  const release = { id: 'r1', commit: 'abc', checkout: home, prefix: 'runner/', tree: 'same', ...releaseOver } as ReleaseJson;
+  const u = new RunnerUpdater({
+    home,
+    release,
+    enabled: true,
+    clock,
+    log: nullLogger,
+    notice: () => {},
+    restart: () => ({ scheduled: true, waitingFor: [] }),
+    pendingRestart: () => false,
+    env: {},
+    followsOrigin: () => true,
+    sync: async () => ({ commit: 'c1', short: 'c1', subject: 's', tree: 'same' }),
+    deployBackend: async () => ({ ok: true }),
+    ...over,
+  });
+  return { u, clock };
+}
+
+test("followOrigin: with no origin/main to build it stays put rather than build the local main", async () => {
+  let synced = 0;
+  const { u, clock } = originRig({
+    fetchOrigin: async () => ({ problem: { kind: 'fetch', message: 'no route to host' } }),
+    sync: async () => {
+      synced++;
+      return { commit: 'stray', short: 'stray', subject: 's', tree: 'stray' };
+    },
+    deploy: async () => assert.fail('a local commit must not be built'),
+  });
+  await u.check();
+  assert.equal(synced, 0);
+  clock.advance(61 * 60_000);
+  await u.check();
+  assert.equal(synced, 0);
+  assert.match(u.status().followProblem ?? '', /no route to host/);
+});
+
+test('followOrigin: a stuck clone does not hide what the fetch found, and is said once it lasts', async () => {
+  let broken = true;
+  const { u, clock } = originRig({
+    fetchOrigin: async () => ({ ref: 'refs/remotes/origin/main', problem: { kind: 'diverged', message: 'main has a stray commit.' } }),
+    sync: async () => {
+      if (broken) throw new Error("git checkout failed: fatal: Unable to create 'index.lock': File exists.");
+      return { commit: 'c1', short: 'c1', subject: 's', tree: 'same' };
+    },
+  });
+  await u.check();
+  assert.equal(u.status().followProblem, 'main has a stray commit.');
+  clock.advance(61 * 60_000);
+  await u.check();
+  assert.match(u.status().followProblem ?? '', /stray commit.*update clone.*index\.lock/);
+  broken = false;
+  await u.check();
+  assert.equal(u.status().followProblem, 'main has a stray commit.');
+});
+
+test('followOrigin: a release built with local changes is still said to be behind', async () => {
+  const { u, clock } = originRig({
+    fetchOrigin: async () => ({ ref: 'refs/remotes/origin/main' }),
+    oldestMissing: async () => clock.now() - 30 * 3600_000,
+    sync: async () => ({ commit: 'c2', short: 'c2', subject: 's', tree: 'newer' }),
+  }, { tree: undefined, dirty: true });
+  await u.check();
+  assert.match(u.status().followProblem ?? '', /30 hours behind.*deploy once by hand/);
+});
+
+test('followOrigin: a stuck clone does not clear an hours-behind warning', async () => {
+  let broken = false;
+  const { u, clock } = originRig({
+    fetchOrigin: async () => ({ ref: 'refs/remotes/origin/main' }),
+    oldestMissing: async () => clock.now() - 30 * 3600_000,
+    sync: async () => {
+      if (broken) throw new Error('index.lock');
+      return { commit: 'c2', short: 'c2', subject: 's', tree: 'newer' };
+    },
+    deploy: async () => ({ ok: false, error: 'boom', transient: true }),
+  });
+  await u.check();
+  assert.match(u.status().followProblem ?? '', /30 hours behind/);
+  broken = true;
+  await u.check();
+  assert.match(u.status().followProblem ?? '', /30 hours behind/);
+});
+
+test('the follower compares the same release paths deploy.mjs records, or it rebuilds the same commit for ever', async () => {
+  const { RELEASE_PATHS } = await import('../../src/update.ts');
+  const deploy = fs.readFileSync(new URL('../../scripts/deploy.mjs', import.meta.url), 'utf8');
+  const m = deploy.match(/const RELEASE_PATHS = (\[[^\]]*\]);/);
+  assert.ok(m, 'deploy.mjs has RELEASE_PATHS');
+  const recorded = JSON.parse(m[1].replace(/'/g, '"')) as string[];
+  assert.deepEqual([...RELEASE_PATHS].sort(), [...recorded].sort());
 });

@@ -1,4 +1,5 @@
 import AppKit
+import AVKit
 import SwiftUI
 import XCTest
 @testable import Threadbear
@@ -375,6 +376,62 @@ final class ReviewWindowTests: XCTestCase {
         XCTAssertTrue(image.isFittedForTests)
     }
 
+    func testASmallImageFitsAnyStageWithoutAppKitThrowing() {
+        let tiny = DesignReview(id: "review", title: "Page", options: [
+            ReviewOption(id: "A", title: "Option A", image: ImageRef(path: Self.images + "A.png", mediaType: "image/png", width: 40, height: 40)),
+        ])
+        let (session, host, window) = make(tiny)
+        defer { window.close() }
+        session.enlarge(0)
+        pump()
+        let image = stage(in: host)
+        XCTAssertGreaterThan(image.minMagnification, 4, "past AppKit's starting maximum")
+        // And back down: the minimum has to give way before the maximum does.
+        window.setContentSize(NSSize(width: 800, height: 660))
+        pump()
+        XCTAssertLessThanOrEqual(image.minMagnification, image.maxMagnification)
+    }
+
+    func testAClipHasItsSoundOnOnTheStageAndIsMutedAmongTheOthers() {
+        let (stage, stageWindow, _) = video(controls: true)
+        defer { stageWindow.close() }
+        XCTAssertEqual(stage.player?.isMuted, false, "enlarged, a clip plays with its sound")
+        let (cell, cellWindow, _) = video(controls: false)
+        defer { cellWindow.close() }
+        XCTAssertEqual(cell.player?.isMuted, true, "in the grid they all play at once")
+    }
+
+    func testTheNextClipKeepsTheMuteAndVolumeJustSet() {
+        let (view, window, host) = video(controls: true)
+        defer { window.close() }
+        view.player?.isMuted = true
+        view.player?.volume = 0.3
+        let first = view.player
+        host.rootView = ReviewVideo(url: URL(fileURLWithPath: "/tmp/next.mp4"), controls: true)
+        pump()
+        XCTAssertFalse(view.player === first, "it's a new player for the next clip")
+        XCTAssertEqual(view.player?.isMuted, true)
+        XCTAssertEqual(view.player?.volume, 0.3)
+    }
+
+    func testClosingTheWindowStopsAClip() throws {
+        let (view, window, host) = video(controls: true)
+        defer { window.close() }
+        let player = try XCTUnwrap(view.player)
+        XCTAssertGreaterThan(player.rate, 0, "it starts by itself")
+        ReviewWindowController.stopVideos(in: host)
+        XCTAssertEqual(player.rate, 0)
+    }
+
+    private func video(controls: Bool) -> (AVPlayerView, NSWindow, NSHostingView<ReviewVideo>) {
+        let host = NSHostingView(rootView: ReviewVideo(url: URL(fileURLWithPath: "/tmp/first.mp4"), controls: controls))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        pump()
+        return (Automation.all(AVPlayerView.self, in: host)[0], window, host)
+    }
+
     /// A page as long as the phone shots that prompted zooming, with today's
     /// version of the same size to flick to, and a shot after it to move to.
     private func tall(width: Int = 780) -> DesignReview {
@@ -451,14 +508,14 @@ final class ReviewWindowTests: XCTestCase {
         [session.focusedOption?.id ?? "", String(session.shot)]
     }
 
-    private func make(_ given: DesignReview? = nil, native: Bool = false) -> (ReviewSession, NSView, NSWindow) {
+    func make(_ given: DesignReview? = nil, native: Bool = false, size: NSSize = NSSize(width: 1100, height: 760)) -> (ReviewSession, NSView, NSWindow) {
         let review = given ?? review()
         let service = ReviewService(load: { review }, save: { _, _ in review }, respond: { _, _ in review }, cancel: { _ in review })
         let session = ReviewSession(threadId: "thread", review: review, service: service,
                                     defaults: UserDefaults(suiteName: "ReviewWindowTests.\(UUID().uuidString)")!, autosave: false)
         let host = NSHostingView(rootView: ReviewWindow(session: session, back: {}, close: {}))
         // The review's own window class where its keys matter.
-        let frame = NSRect(x: 0, y: 0, width: 1100, height: 760)
+        let frame = NSRect(origin: .zero, size: size)
         let window: NSWindow
         if native {
             let reviewWindow = ReviewNativeWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
@@ -491,7 +548,7 @@ final class ReviewWindowTests: XCTestCase {
     /// goes by what's still to do, not a set time: a fixed 0.2 seconds could
     /// all go on the layout on a loaded machine, leaving `session.zoomed`
     /// stale, so Esc left the shot rather than the zoom (6 Nov).
-    private func pump() {
+    func pump() {
         let deadline = Date().addingTimeInterval(20)
         var quiet = 0
         while quiet < Self.quietTurns, Date() < deadline {
@@ -529,7 +586,7 @@ final class ReviewWindowTests: XCTestCase {
     }
 
     /// Each control's tip anchor sits behind it, the same size.
-    private func anchor(_ tip: String, in host: NSView) -> TipAnchorView? {
+    func anchor(_ tip: String, in host: NSView) -> TipAnchorView? {
         func anchors(_ view: NSView) -> [TipAnchorView] {
             view.subviews.flatMap { ($0 as? TipAnchorView).map { [$0] } ?? anchors($0) }
         }
@@ -537,7 +594,7 @@ final class ReviewWindowTests: XCTestCase {
     }
 
     /// A press and release, sent through the window as a real click is.
-    private func click(_ tip: String, in host: NSView, _ window: NSWindow) {
+    func click(_ tip: String, in host: NSView, _ window: NSWindow) {
         guard let anchor = anchor(tip, in: host) else { return XCTFail("nothing with the tip \(tip)") }
         let point = anchor.convert(NSPoint(x: anchor.bounds.midX, y: anchor.bounds.midY), to: nil)
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {

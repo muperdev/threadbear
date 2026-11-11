@@ -6,9 +6,17 @@
 // from convex/schema.ts, so an index read is ordered as Convex orders it.
 // Enough of the API for sync.ts, phone.ts, share.ts and lib.ts; not a
 // Convex emulator.
+//
+// Validators are Convex's own (convex/values), and checked as a deployment
+// checks them (convex-validate.ts): `call` refuses args or a return value its
+// function's validators don't allow, and a row a function writes that its
+// table in convex/schema.ts doesn't allow. Rows a test inserts itself aren't
+// checked, as some stand for rows from before a rule on purpose.
 import fs from 'node:fs';
 import path from 'node:path';
 import { stripTypeScriptTypes } from 'node:module';
+import { v } from 'convex/values';
+import { objectProblem, problem } from './convex-validate.ts';
 
 const CONVEX = path.join(import.meta.dirname, '../../../convex');
 
@@ -20,17 +28,26 @@ export class ConvexError extends Error {
   }
 }
 
-// Validators are only ever read for `.fields` (v.object's), at load time.
-const v: Record<string, (...a: unknown[]) => unknown> = new Proxy({}, { get: (_, p) => (p === 'object' ? (fields: unknown) => ({ fields }) : () => ({})) });
 const fnRef = (prefix: string[]): unknown => new Proxy(() => prefix.join('.'), { get: (_, p) => (p === Symbol.toPrimitive ? () => prefix.join('.') : fnRef([...prefix, String(p)])) });
 
-// defineTable keeps each table's indexes, for withIndex's order.
-type Def = { __idx: Record<string, string[]>; index: (n: string, f: string[]) => Def; searchIndex: () => Def };
-const defineTable = (): Def => {
-  const def: Def = { __idx: {}, index: (n, f) => ((def.__idx[n] = f), def), searchIndex: () => def };
+// defineTable keeps each table's indexes, for withIndex's order, and its
+// fields (an object of validators, or one validator), for checking writes.
+type V = Parameters<typeof problem>[0];
+type Def = { __idx: Record<string, string[]>; __fields: unknown; index: (n: string, f: string[]) => Def; searchIndex: () => Def };
+const defineTable = (fields: unknown): Def => {
+  const def: Def = { __idx: {}, __fields: fields, index: (n, f) => ((def.__idx[n] = f), def), searchIndex: () => def };
   return def;
 };
 let indexes: Record<string, Record<string, string[]>> = {};
+let tableFields: Record<string, unknown> = {};
+
+const isValidator = (x: unknown): x is V => Boolean(x && typeof x === 'object' && (x as { isConvexValidator?: unknown }).isConvexValidator);
+
+// What's wrong with a document against fields (an object of validators, or a validator), or null.
+function fitProblem(fields: unknown, doc: Record<string, unknown>): string | null {
+  if (fields === undefined || fields === null) return null;
+  return isValidator(fields) ? problem(fields, doc) : objectProblem(fields as Record<string, V>, doc);
+}
 
 const fakes: Record<string, Record<string, unknown>> = {
   'convex/values': { v, ConvexError },
@@ -69,6 +86,7 @@ function loadIndexes(): void {
   if (Object.keys(indexes).length) return;
   const schema = load('schema').__default as Record<string, Def>;
   indexes = Object.fromEntries(Object.entries(schema).map(([t, d]) => [t, d.__idx]));
+  tableFields = Object.fromEntries(Object.entries(schema).map(([t, d]) => [t, d.__fields]));
 }
 
 type Row = Record<string, any> & { _id: string; _creationTime: number };
@@ -92,6 +110,15 @@ export function memoryBackend() {
     counter.bytes += Buffer.byteLength(JSON.stringify(r));
   };
   const find = (id: string) => Object.values(tables).flat().find((x) => x._id === id) ?? null;
+  // Inside a function (call), every row written is checked against its table.
+  const inCall = { depth: 0 };
+  const tableOf = (id: string) => Object.keys(tables).find((t) => tables[t]!.some((r) => r._id === id));
+  const checkRow = (table: string | undefined, row: Record<string, unknown>) => {
+    if (!inCall.depth || !table) return;
+    const { _id, _creationTime, ...doc } = row;
+    const p = fitProblem(tableFields[table], doc);
+    if (p) throw new Error(`convex-memory: a row in ${table} that convex/schema.ts doesn't allow, at ${p}`);
+  };
   const db = {
     query(table: string) {
       const preds: ((r: Row) => boolean)[] = [];
@@ -172,6 +199,7 @@ export function memoryBackend() {
       return q;
     },
     async insert(table: string, doc: Record<string, unknown>) {
+      checkRow(table, doc);
       const _id = `${table}:${++next}`;
       all(table).push({ ...doc, _id, _creationTime: next } as Row);
       return _id;
@@ -185,6 +213,12 @@ export function memoryBackend() {
     async patch(id: string, p: Record<string, unknown>) {
       const row = find(id);
       if (!row) throw new Error(`convex-memory: no row ${id}`);
+      const next: Record<string, unknown> = { ...row };
+      for (const [k, x] of Object.entries(p)) {
+        if (x === undefined) delete next[k];
+        else next[k] = x;
+      }
+      checkRow(tableOf(id), next);
       for (const [k, x] of Object.entries(p)) {
         if (x === undefined) delete row[k];
         else row[k] = x;
@@ -193,6 +227,7 @@ export function memoryBackend() {
     async replace(id: string, doc: Record<string, unknown>) {
       const row = find(id);
       if (!row) throw new Error(`convex-memory: no row ${id}`);
+      checkRow(tableOf(id), doc);
       for (const k of Object.keys(row)) if (k !== '_id' && k !== '_creationTime') delete row[k];
       Object.assign(row, doc);
     },
@@ -216,6 +251,8 @@ export function memoryBackend() {
   };
   const scheduled: unknown[] = [];
   const ctx = { db, storage, scheduler: { runAfter: async (_ms: number, fn: unknown, args: unknown) => void scheduled.push({ fn: String(fn), args }) } };
+  // For call: rows written meanwhile are checked.
+  Object.defineProperty(ctx, CALLS, { value: inCall });
   return {
     ctx,
     rows: (t: string) => all(t),
@@ -229,10 +266,40 @@ export function memoryBackend() {
   };
 }
 
-/** Calls a function as the deployment would: its handler with ctx and args. */
-export async function call(ctx: unknown, fn: { handler: (ctx: any, args: any) => unknown }, args: Record<string, unknown>): Promise<any> {
-  return fn.handler(ctx, args);
+const CALLS = Symbol('convex-memory calls');
+
+// What every thread row a runner sends has (convex/schema.ts threadFields'
+// required ones), for tests that only care about a few: spread it first.
+const AT = '2026-11-01T00:00:00.000Z';
+export const THREAD_BASICS = { cwd: '/Users/m/x', accountId: 'claude-main', provider: 'claude', status: 'idle', unread: false, preview: '', createdAt: AT, lastActivityAt: AT, lastActivityMs: Date.parse(AT) } as const;
+
+/**
+ * Calls a function as the deployment would: its args checked against its
+ * validators, its handler with ctx and args, the rows it writes checked
+ * against the schema, and what it returns against its `returns`.
+ */
+export async function call(ctx: unknown, fn: { handler: (ctx: any, args: any) => unknown; args?: unknown; returns?: unknown }, args: Record<string, unknown>): Promise<any> {
+  const argsProblem = fitProblem(fn.args, args);
+  if (argsProblem) throw new ArgumentValidationError(`convex-memory: args its validators don't allow, at ${argsProblem}`);
+  const inCall = (ctx as Record<symbol, { depth: number } | undefined>)[CALLS];
+  if (inCall) inCall.depth++;
+  let out: unknown;
+  try {
+    out = await fn.handler(ctx, args);
+  } finally {
+    if (inCall) inCall.depth--;
+  }
+  if (isValidator(fn.returns)) {
+    // Convex returns null for a handler that returned nothing.
+    const p = problem(fn.returns, out === undefined ? null : out, 'the return value');
+    if (p) throw new Error(`convex-memory: a return value its validator doesn't allow, at ${p}`);
+  }
+  return out;
 }
+
+// Thrown before the handler runs, as Convex's own argument validation is:
+// not a ConvexError, so outcome() rethrows it rather than reading a kind.
+export class ArgumentValidationError extends Error {}
 
 /** The ConvexError kind a call threw, or "ok". */
 export async function outcome(p: Promise<unknown>): Promise<string> {

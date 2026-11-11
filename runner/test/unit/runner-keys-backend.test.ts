@@ -3,7 +3,7 @@
 // attacks a review reproduced with Bruce's runner key, each shut.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { call, load, memoryBackend, outcome } from '../helpers/convex-memory.ts';
+import { call, load, memoryBackend, outcome, THREAD_BASICS } from '../helpers/convex-memory.ts';
 
 const OWNER = 'owner-key';
 const BRUCE_KEY = 'tbr_bruce';
@@ -30,7 +30,7 @@ async function setup() {
   return { ...b, owner: as(OWNER), bruce: as(BRUCE_KEY) };
 }
 
-const thread = (threadId: string, runnerId: string, extra: Record<string, unknown> = {}) => ({ threadId, runnerId, title: 'T', view: 'inbox', needsYou: false, ...extra });
+const thread = (threadId: string, runnerId: string, extra: Record<string, unknown> = {}) => ({ threadId, runnerId, ...THREAD_BASICS, title: 'T', view: 'inbox', needsYou: false, ...extra });
 const textsOf = (rows: Record<string, any>[], threadId: string) => rows.filter((m) => m.threadId === threadId).map((m) => m.text);
 
 test("Bruce's key can't put messages or pictures on a thread id that has no row", async () => {
@@ -350,7 +350,7 @@ const indexRow = (threadId: string) => ({ threadId, title: 'x', cwd: '/', accoun
 
 test('the old mirrored-schedule writers and the runner list are the main key\'s only', async () => {
   const s = await setup();
-  assert.equal(await outcome(call(s.ctx, sync.setSchedules, { key: BRUCE_KEY, runnerId: BRUCE, schedules: [sched('S', BRUCE)] })), 'forbidden');
+  assert.equal(await outcome(call(s.ctx, sync.setSchedules, { key: BRUCE_KEY, runnerId: BRUCE, schedules: [(({ runnerId: _r, ...doc }) => doc)(sched('S', BRUCE))] })), 'forbidden');
   assert.equal(await outcome(call(s.ctx, sync.runnersList, { key: BRUCE_KEY })), 'forbidden');
   await call(s.ctx, sync.runnersList, { key: OWNER });
 });

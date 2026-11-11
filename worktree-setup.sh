@@ -20,7 +20,10 @@ set -euo pipefail
 # THREADBARE_* was the old name for these variables: each stands in for its new name.
 for v in $(compgen -e | grep '^THREADBARE_' || true); do n="THREADBEAR_${v#THREADBARE_}"; [ -n "${!n+x}" ] || export "$n=${!v}"; done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NODE="${THREADBEAR_NODE:-$HOME/.nvm/versions/node/v24.22.1/bin/node}"
+# Node: THREADBEAR_NODE, else the node on PATH, else nvm's newest
+# Node 24 or newer, else Homebrew's (runner/scripts/find-node.sh).
+. "$ROOT/runner/scripts/find-node.sh"
+NODE="$(threadbear_find_node)" || exit 1
 NPM="$(dirname "$NODE")/npm"
 [ -x "$NPM" ] || NPM="npm"
 

@@ -248,6 +248,15 @@ final class ComposerCardHost: NSView, TranscriptThreadHost {
         }
     }
 
+    /// A Run button's state lives with the buttons, not in the row, so
+    /// what was built has to go when one of them changes.
+    func buttonsChanged() {
+        guard case .asks(let card)? = row?.content, card.asks.contains(where: { $0.run != nil }) else { return }
+        built = nil
+        shown = nil
+        needsLayout = true
+    }
+
     /// Under half the window, so the reply it answers stays in sight.
     var maxHeight: CGFloat {
         max(zoomed(200), (window?.contentLayoutRect.height ?? 800) * 0.45)

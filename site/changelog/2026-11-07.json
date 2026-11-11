@@ -1,0 +1,66 @@
+{
+  "release": "2026-11-07",
+  "highlights": [
+    {
+      "kind": "added",
+      "title": "Type / for a palette of commands",
+      "text": "Type / in a thread's message box and a palette opens above it, with Threadbear's commands, Claude Code's or Codex's, your skills and the ones you used recently, each with how to use it. Up and Down pick one, Return runs it and Tab fills it in for its details. Slash commands now work in Codex threads too, and `/model` and `/effort` stay set for the thread.",
+      "media": {
+        "type": "clip",
+        "src": "slash-palette.mp4",
+        "poster": "slash-palette.webp",
+        "width": 1000,
+        "height": 1290,
+        "alt": "Typing a slash in the message box opens the palette, typing more narrows it to matching commands, and the arrow keys move the pick"
+      }
+    },
+    {
+      "kind": "added",
+      "title": "See how full a thread's context is",
+      "text": "After a thread's first turn, a small ring beside the send button fills as the conversation takes up more of the model's context, and turns orange when it's nearly full. Click it for the tokens used, the model and login the thread really ran on, and what it has cost so far.",
+      "media": {
+        "type": "image",
+        "src": "context-ring.webp",
+        "width": 1128,
+        "height": 540,
+        "alt": "The message box with the context ring beside Send and its popover: 642k of 1M tokens, 64%, the model, the login and the cost so far"
+      }
+    },
+    {
+      "kind": "added",
+      "title": "Plan first, then let it start",
+      "text": "Pick Plan first in the mode menu on the message box and the agent looks around and writes a plan without changing anything. The plan shows as a card with Go ahead and Send back, and once you let it start, the same card ticks off its steps as it works through them."
+    }
+  ],
+  "added": [
+    "Pick Light, Dark or Same as the Mac for Threadbear alone in Settings > General > Appearance",
+    "A soft ding when a thread finishes, waits for you or fails: choose Chime, Bell or Droplet in Settings > General > Notifications (off until you turn it on)",
+    "Editing a file shows line numbers and ⌘S saves it, and a save never writes over a change an agent has just made to the file",
+    "Change any keyboard shortcut in Settings > Keyboard by clicking a command's key and pressing the new one, and use ⌥⌘↓ (Go > Next Inbox Thread) to work through your Inbox without the mouse",
+    "Drag a thread from the sidebar onto the open thread to mention it in your message, or use Copy thread id on its right-click menu (on the iPhone, Copy Thread ID in its ... menu)",
+    "Swipe left or right with two fingers to go Back and Forward between threads, as in Safari",
+    "Diagrams and small pages in a reply are drawn right in the thread, on the Mac and the iPhone",
+    "Drafts an agent writes for Slack or email show in a box line for line, as they'll go out, with a Copy button that keeps the links",
+    "Investigate on the orange error bar starts a thread that looks for the error's cause and fixes it",
+    "iPhone: a mic beside Send in a thread's reply box, with Whisper as an option for more accurate dictation and a word list for names in Settings",
+    "iPhone: choose which Mac a new thread runs on, and set the order they're tried in under Settings > Runners, on the phone or the Mac",
+    "iPhone: messages sent while the thread's Mac is asleep show faded with Cancel until that Mac takes them",
+    "Run Threadbear on your own Convex backend instead of Convex's cloud with `./threadbear setup --self-hosted`",
+    "New experiments you can switch on (the guide's Experiments page says how): keep the Mac awake while threads work, have Codex review Claude's changes and Claude review Codex's, a done card that lists loose ends, buttons in replies, instructions for every agent in Settings, and talking with a thread out loud"
+  ],
+  "changed": [
+    "The bear is redrawn so it looks more like a bear, with a button eye and a stitch, and from 1 to 26 December it wears a Santa hat",
+    "Hibernating a thread tucks it away, sinking into the moon by the Hibernating heading, on the Mac and the iPhone",
+    "Usage on the left-hand rail is a honey pot, filled to how much is left on the login your next thread would use",
+    "Every button shows a spinner or the change straight away, and can't be pressed twice while it waits, on the Mac and the iPhone",
+    "Sent messages lift off the message box, several questions on one card slide past like a deck, and the bear waves when you clear your Inbox",
+    "Drop a file anywhere over the thread to attach it, not just on the message box",
+    "A scheduled run that finds nothing for you puts an archived thread back in the archive, and on the iPhone and the website a hibernating thread's row says what it's waiting for"
+  ],
+  "fixed": [
+    "Screenshots dragged from their floating thumbnail and photos copied from Photos now attach",
+    "A link in a reply to a file in the thread's folder opens that file",
+    "Return in a question's Something else box moves on to the next question, and an empty box no longer counts as an answer",
+    "Closed several ways a cloned repo's settings, a stopped share link or a tampered release could get past Threadbear's checks"
+  ]
+}

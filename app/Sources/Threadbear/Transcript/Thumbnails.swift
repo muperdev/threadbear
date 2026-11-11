@@ -316,6 +316,11 @@ final class ImageGridView: NSView {
         open(index)
     }
 
+    #if DEBUG
+    /// The tile's files, for the scripted app's `tile`.
+    var debugPaths: [String] { paths }
+    #endif
+
     /// Quick Look on one picture, for a click on its tile or its chip in
     /// the words. False when there's nothing here yet to look at.
     @discardableResult

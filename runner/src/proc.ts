@@ -9,7 +9,9 @@ import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
 // mistaken for it. lstart is '' when the leader had already exited when the
 // group was noted.
 type Group = { pgid: number; lstart: string };
-type Entry = { pid: number; command: string; startedAt: string; lstart?: string; groups?: Group[] };
+// threadId: the thread (or a job's label) the process was started for, which
+// the RPC server asks about (peer.ts).
+type Entry = { pid: number; command: string; startedAt: string; lstart?: string; groups?: Group[]; threadId?: string };
 
 const SCAN_MS = 5000;
 
@@ -65,9 +67,9 @@ export class ProcessRegistry {
     }
   }
 
-  add(pid: number, command: string): void {
+  add(pid: number, command: string, threadId?: string): void {
     const lstart = processInfo(pid)?.lstart;
-    this.entries.set(pid, { pid, command, startedAt: new Date().toISOString(), ...(lstart ? { lstart } : {}), groups: [] });
+    this.entries.set(pid, { pid, command, startedAt: new Date().toISOString(), ...(lstart ? { lstart } : {}), groups: [], ...(threadId ? { threadId } : {}) });
     this.save();
     this.scanTimer ??= setInterval(() => void this.scan(), SCAN_MS).unref();
   }
@@ -82,6 +84,35 @@ export class ProcessRegistry {
 
   pids(): number[] {
     return [...this.entries.keys()];
+  }
+
+  // The thread whose CLI ran a tool command in this process group (noted by
+  // scan), or whose CLI leads it. For a process that's lost its parents.
+  threadOfGroup(pgid: number): string | undefined {
+    for (const e of this.entries.values()) {
+      if (e.threadId && (e.pid === pgid || e.groups?.some((g) => g.pgid === pgid))) return e.threadId;
+    }
+    return undefined;
+  }
+
+  // The thread a live CLI was started for: this runner's own (gone from the
+  // map when it exits), or one a draining runner still has (its list is kept
+  // beside this one, where a recycled pid wouldn't have the same start time).
+  threadOfPid(pid: number): string | undefined {
+    const own = this.entries.get(pid);
+    if (own) return own.threadId;
+    let names: string[];
+    try {
+      names = fs.readdirSync(path.dirname(this.file)).filter((n) => /^children-\d+\.json$/.test(n));
+    } catch {
+      return undefined;
+    }
+    for (const n of names) {
+      const entries = readJsonSync<Entry[]>(path.join(path.dirname(this.file), n));
+      const e = Array.isArray(entries) ? entries.find((x) => x?.pid === pid) : undefined;
+      if (e?.threadId && (!e.lstart || processInfo(pid)?.lstart === e.lstart)) return e.threadId;
+    }
+    return undefined;
   }
 
   // Groups the CLI's tool commands ran in that are still running.
@@ -222,7 +253,7 @@ export function processInfo(pid: number): { pgid: number; lstart: string; comman
   }
 }
 
-function psTable(): Promise<{ pid: number; ppid: number; pgid: number }[]> {
+export function psTable(): Promise<{ pid: number; ppid: number; pgid: number }[]> {
   return new Promise((resolve, reject) => {
     execFile('/bin/ps', ['-axo', 'pid=,ppid=,pgid='], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
       if (err) return reject(err);
@@ -252,7 +283,7 @@ export function groupSpawner(
       detached: true,
     });
     const pid = child.pid;
-    if (pid) registry.add(pid, opts.command);
+    if (pid) registry.add(pid, opts.command, threadId);
     log.info('spawned CLI', { threadId, pid, cwd: opts.cwd });
     let buf = '';
     child.stderr?.setEncoding('utf8');

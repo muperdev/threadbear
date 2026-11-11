@@ -171,6 +171,11 @@ final class ReviewWindowController: NSWindowController, NSWindowDelegate {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    static func stopVideos(in view: NSView) {
+        (view as? AVPlayerView)?.player?.pause()
+        view.subviews.forEach(stopVideos)
+    }
+
     func present() {
         #if DEBUG
         if Automation.instanceId != nil {
@@ -183,10 +188,50 @@ final class ReviewWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        // A clip has its sound on, and nothing else stops it when the
+        // window goes: it would loop on, heard but not seen.
+        window?.contentView.map(Self.stopVideos)
         // Keystrokes are already cached locally. Try to flush the final
         // debounce too; a failed connection still leaves that local copy.
         Task { [session] in await session.saveNow() }
         onClose?()
+    }
+}
+
+/// The row under the stage: the arrows at its ends, never squeezed, and
+/// between them the film strip from the left and the marks from the right.
+/// Takes four views, in that order: back, strip, marks, next.
+struct ReviewStepperLayout: Layout {
+    var spacing: CGFloat
+
+    /// Each gets all it wants if there's room. If not, whichever wants less
+    /// than half keeps it, and the other has the rest: an HStack halved it
+    /// whatever they wanted, so a short row of marks scrolled for no reason.
+    static func share(room: CGFloat, strip: CGFloat, marks: CGFloat) -> (strip: CGFloat, marks: CGFloat) {
+        let room = max(0, room)
+        let given = min(marks, max(room / 2, room - strip))
+        return (min(strip, room - given), given)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let ideals = subviews.map { $0.sizeThatFits(.unspecified) }
+        let gaps = spacing * CGFloat(subviews.count - 1)
+        return CGSize(width: proposal.width ?? ideals.map(\.width).reduce(gaps, +), height: ideals.map(\.height).max() ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let ideals = subviews.map { $0.sizeThatFits(.unspecified) }
+        let hasStrip = ideals[1].width > 0
+        let room = bounds.width - ideals[0].width - ideals[3].width - spacing * (hasStrip ? 3 : 2)
+        let share = Self.share(room: room, strip: ideals[1].width, marks: ideals[2].width)
+        func put(_ index: Int, atX x: CGFloat, width: CGFloat) {
+            subviews[index].place(at: CGPoint(x: x, y: bounds.midY), anchor: .leading,
+                                  proposal: ProposedViewSize(width: width, height: ideals[index].height))
+        }
+        put(0, atX: bounds.minX, width: ideals[0].width)
+        put(1, atX: bounds.minX + ideals[0].width + spacing, width: share.strip)
+        put(2, atX: bounds.maxX - ideals[3].width - spacing - share.marks, width: share.marks)
+        put(3, atX: bounds.maxX - ideals[3].width, width: ideals[3].width)
     }
 }
 
@@ -314,7 +359,7 @@ struct ReviewWindow: View {
     @Environment(\.colorScheme) private var colorScheme
     @FocusState private var replying: Bool
 
-    private static let railWidth: CGFloat = 340
+    static let railWidth: CGFloat = 340
     private static let stageInset: CGFloat = 14
     private static let cellSpacing: CGFloat = 12
     private static let cellPadding: CGFloat = 8
@@ -387,6 +432,7 @@ struct ReviewWindow: View {
                 Button { session.peeking.toggle() } label: {
                     Label(baseline.title, systemImage: "rectangle.2.swap")
                         .font(.system(size: TypeScale.detail, weight: .medium))
+                        .lineLimit(1).frame(maxWidth: 140)
                         .padding(.horizontal, 11).frame(height: 26)
                         .foregroundStyle(session.peeking ? Color.white : Color.primary)
                         .background(session.peeking ? Color.accentColor : Color.primary.opacity(0.08), in: Capsule())
@@ -404,7 +450,7 @@ struct ReviewWindow: View {
                         .padding(.horizontal, 11).frame(height: 26)
                         .background(Color.primary.opacity(0.08), in: Capsule())
                         .contentShape(Capsule())
-                }.buttonStyle(.plain).tip("Try \(option.id) running live: \(url.absoluteString)")
+                }.buttonStyle(.plain).fixedSize().tip("Try \(option.id) running live: \(url.absoluteString)")
             }
         }
         .padding(.horizontal, 22).padding(.top, 14)
@@ -416,8 +462,8 @@ struct ReviewWindow: View {
             Group {
                 if session.mode == .single, let shot = session.shownShot {
                     if let video = shot.video {
-                        // Plays on its own, quietly, round and round, as
-                        // X does: the controls turn the sound up.
+                        // Plays on its own, round and round, with its
+                        // sound on: some clips are there to be heard.
                         ReviewVideo(url: video, controls: true)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .accessibilityLabel("\(session.shownOption?.label ?? ""), video")
@@ -455,17 +501,16 @@ struct ReviewWindow: View {
     /// they're all side by side to choose from. A mark or a shot takes you
     /// straight to it.
     private var stepper: some View {
-        HStack(alignment: .center, spacing: 18) {
+        ReviewStepperLayout(spacing: 18) {
             stepButton("chevron.left", tip: session.mode == .all ? "Back to the last one (\u{2190})" : "Previous (\u{2190})",
                        enabled: session.canStepBack) { session.browse(-1) }
             if session.mode == .single, let option = session.focusedOption, option.allShots.count > 1 {
-                filmstrip(option)
+                filmstrip(option).id(option.id)
+            } else {
+                Color.clear.frame(width: 0, height: 0)
             }
-            Spacer(minLength: 8)
             HStack(spacing: 12) {
-                ForEach(Array(session.review.options.enumerated()), id: \.element.id) { index, option in
-                    marks(index, option)
-                }
+                allMarks
                 Button { session.showAll() } label: {
                     Image(systemName: "square.grid.2x2")
                         .font(.system(size: 13, weight: session.mode == .all ? .semibold : .regular))
@@ -480,22 +525,63 @@ struct ReviewWindow: View {
         .frame(maxWidth: .infinity)
     }
 
+    /// Scrolls sideways once there are more than the row has room for, and
+    /// keeps the one on show in view, since nothing else would bring it back.
     private func filmstrip(_ option: ReviewOption) -> some View {
-        HStack(spacing: 8) {
-            ForEach(Array(option.allShots.enumerated()), id: \.offset) { index, shot in
-                let current = index == session.shot
-                Button { session.enlarge(session.focused, shot: index) } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ReviewThumb(path: shot.image.path, width: 92, height: 58)
-                            .opacity(current ? 1 : 0.55)
-                            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(current ? Color.primary : Color.clear, lineWidth: 2).padding(-3))
-                        Text(shot.title ?? "\(index + 1)").font(.system(size: TypeScale.detail - 1))
-                            .foregroundStyle(current ? Color.primary : Color.secondary).lineLimit(1).frame(width: 92, alignment: .leading)
-                    }.contentShape(Rectangle())
-                }.buttonStyle(.plain).tip(shotTip(option, index))
+        ScrollViewReader { scroller in
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    ForEach(Array(option.allShots.enumerated()), id: \.offset) { index, shot in
+                        let current = index == session.shot
+                        Button { session.enlarge(session.focused, shot: index) } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ReviewThumb(path: shot.image.path, width: 92, height: 58)
+                                    .opacity(current ? 1 : 0.55)
+                                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(current ? Color.primary : Color.clear, lineWidth: 2).padding(-3))
+                                Text(shot.title ?? "\(index + 1)").font(.system(size: TypeScale.detail - 1))
+                                    .foregroundStyle(current ? Color.primary : Color.secondary).lineLimit(1).frame(width: 92, alignment: .leading)
+                            }.contentShape(Rectangle())
+                        }.buttonStyle(.plain).tip(shotTip(option, index)).id(index)
+                    }
+                }
+                // The selected shot's outline sits outside its picture, and
+                // the scroll view would cut it off.
+                .padding(3)
             }
+            .scrollIndicators(.never)
+            .onAppear { scroller.scrollTo(session.shot, anchor: .center) }
+            .onChange(of: session.shot) { _, shot in scroller.scrollTo(shot, anchor: .center) }
+            // Narrowing the window can leave the one on show out of view.
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _ in scroller.scrollTo(session.shot, anchor: .center) }
         }
     }
+
+    /// Every option's marks, scrolling sideways when there are too many.
+    private var allMarks: some View {
+        ScrollViewReader { scroller in
+            ScrollView(.horizontal) {
+                HStack(spacing: 12) {
+                    ForEach(Array(session.review.options.enumerated()), id: \.element.id) { index, option in
+                        marks(index, option)
+                    }
+                }
+            }
+            .scrollIndicators(.never)
+            .onAppear { followMark(scroller) }
+            .onChange(of: session.focused) { followMark(scroller) }
+            .onChange(of: session.shot) { followMark(scroller) }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { _ in followMark(scroller) }
+        }
+    }
+
+    /// To the dot on show, not its option: an option with dozens of shots is
+    /// wider than the row, so centring the whole of it could hide the dot.
+    private func followMark(_ scroller: ScrollViewProxy) {
+        guard let option = session.focusedOption else { return }
+        scroller.scrollTo(Self.markId(option, session.shot), anchor: .center)
+    }
+
+    private static func markId(_ option: ReviewOption, _ shot: Int) -> String { "\(option.id)#\(shot)" }
 
     private func shotTip(_ option: ReviewOption, _ index: Int) -> String {
         let shots = option.allShots
@@ -521,7 +607,7 @@ struct ReviewWindow: View {
                     }
                     .frame(width: current ? 10 : 7, height: current ? 10 : 7)
                     .frame(width: 13, height: 26).contentShape(Rectangle())
-                }.buttonStyle(.plain).tip(shotTip(option, shot))
+                }.buttonStyle(.plain).tip(shotTip(option, shot)).id(Self.markId(option, shot))
             }
         }
     }
@@ -566,7 +652,7 @@ struct ReviewWindow: View {
                     .foregroundStyle(picked ? Color.accentColor : Color.secondary)
                 if count > 1 { Text("\(count) shots").font(.system(size: TypeScale.detail)).foregroundStyle(.tertiary) }
                 if session.review.recommended == option.id {
-                    Text("my pick").font(.system(size: TypeScale.detail)).foregroundStyle(Color.accentColor)
+                    Self.recommendedMark
                 }
             }
             .lineLimit(1).frame(height: Self.captionHeight, alignment: .topLeading)
@@ -615,6 +701,10 @@ struct ReviewWindow: View {
                         Divider()
                     }
                 }
+                // The rail's width whatever's in it: without this, one row
+                // too wide for it stretched every row, past both edges of
+                // the rail (Mike, 9 Nov).
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             }
             .onChange(of: session.focused) { _, index in
                 guard session.review.options.indices.contains(index) else { return }
@@ -624,6 +714,7 @@ struct ReviewWindow: View {
             footer.padding(14)
         }
         .background(Color.primary.opacity(0.025))
+        .clipped()
     }
 
     private func choice(_ option: ReviewOption, index: Int) -> some View {
@@ -639,7 +730,8 @@ struct ReviewWindow: View {
                     .buttonStyle(.plain)
                     .tip(current ? "Showing \(option.id)" : "Show \(option.id)")
                 if shots.count > 1 {
-                    HStack(spacing: 5) {
+                    // Wraps: a row of them doesn't fit from about six shots.
+                    FlowRows(spacing: 5, lineSpacing: 6) {
                         ForEach(Array(shots.enumerated()), id: \.offset) { shot, item in
                             let on = current && session.shot == shot
                             Button { session.enlarge(index, shot: shot) } label: {
@@ -684,13 +776,22 @@ struct ReviewWindow: View {
         }
     }
 
+    /// The agent's pick: a small gold star and "Recommended" in grey, as on
+    /// an asks card (RowRenderer), after Ghostex's (Mike, 9 Nov 2026).
+    static var recommendedText: Text {
+        Text(Image(systemName: "star.fill")).font(.system(size: TypeScale.detail - 2)).foregroundStyle(Color(nsColor: Theme.recommendedStar))
+            + Text(" Recommended").font(.system(size: TypeScale.detail)).foregroundStyle(.secondary)
+    }
+
+    static var recommendedMark: some View { recommendedText.accessibilityLabel("Recommended") }
+
     private func choiceText(_ option: ReviewOption) -> some View {
         HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
                 // The agent's pick, worded and coloured as on an asks card.
                 (Text(option.label).font(.system(size: TypeScale.work, weight: .semibold))
                     + (session.review.recommended == option.id
-                        ? Text("  my pick").font(.system(size: TypeScale.detail)).foregroundStyle(Color.accentColor)
+                        ? Text("  ") + Self.recommendedText
                         : Text("")))
                     .fixedSize(horizontal: false, vertical: true)
                 if let reason = option.note, !reason.isEmpty {
@@ -764,9 +865,7 @@ struct ReviewWindow: View {
             VStack(alignment: .leading, spacing: 10) {
                 let sent = session.review.response ?? session.draft
                 if sent.none { Text("None of them").font(.system(size: TypeScale.work, weight: .semibold)) }
-                if let reply = sent.reply, !reply.isEmpty {
-                    Text(reply).font(.system(size: TypeScale.work)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                }
+                if let reply = sent.reply, !reply.isEmpty { sentReply(reply) }
                 HStack {
                     Text(status).font(.system(size: TypeScale.detail)).foregroundStyle(.secondary).lineLimit(1)
                     Spacer()
@@ -774,6 +873,23 @@ struct ReviewWindow: View {
                 }
             }
         }
+    }
+
+    /// As tall as it needs up to the reply box's limit, then it scrolls: a
+    /// long one would otherwise leave no room for the options above it and
+    /// push Done off the window. The hidden copy sets the height, as in the
+    /// reply box.
+    private func sentReply(_ reply: String) -> some View {
+        Text(reply).font(.system(size: TypeScale.work)).opacity(0).accessibilityHidden(true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxHeight: 220)
+            .fixedSize(horizontal: false, vertical: true)
+            .overlay {
+                ScrollView {
+                    Text(reply).font(.system(size: TypeScale.work)).textSelection(.enabled)
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                }
+            }
     }
 
     /// Only for a review that's over, as one that's waiting says it on Send.
@@ -789,9 +905,10 @@ struct ReviewWindow: View {
 
 /// A small picture of a shot, cropped from its top left, where a mockup's
 /// title and controls are, rather than squashed.
-/// A shot that's a video: muted and looping from the start. On the stage
-/// it has the player's controls, for sound and scrubbing; in a cell among
-/// them all it has none, and a click on it enlarges it.
+/// A shot that's a video, looping from the start. On the stage it has the
+/// player's controls and its sound on (Mike, 9 Nov); in a cell among them
+/// all it's muted, as they all play at once, with no controls, and a click
+/// on it enlarges it.
 struct ReviewVideo: NSViewRepresentable {
     let url: URL
     let controls: Bool
@@ -822,8 +939,11 @@ struct ReviewVideo: NSViewRepresentable {
         guard context.coordinator.url != url else { return }
         view.player?.pause()
         let player = AVQueuePlayer()
-        player.isMuted = true
-        // Looping and quiet: it mustn't keep the Mac awake on its own.
+        // Stepping to the next option keeps the mute and volume just set,
+        // so clips being compared by ear play at the same level.
+        player.isMuted = view.player?.isMuted ?? !controls
+        player.volume = view.player?.volume ?? 1
+        // Looping: it mustn't keep the Mac awake on its own.
         player.preventsDisplaySleepDuringVideoPlayback = false
         context.coordinator.looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: url))
         context.coordinator.url = url
@@ -1102,8 +1222,18 @@ final class ReviewImageScroll: NSScrollView {
         // A hair under, as rounding the other way would bring up scrollers
         // on an image with nothing to scroll.
         fitScale = min(bounds.width / document.width, bounds.height / document.height) * 0.9999
-        minMagnification = fitScale
-        maxMagnification = max(fitScale * 2, Self.furthest)
+        // AppKit throws if the minimum ever passes the maximum, even for a
+        // moment, and it starts at 4×: a small image on a big stage needs
+        // more than that to fit, and took the whole app down (9 Nov). So
+        // whichever bound is making room goes first.
+        let furthest = max(fitScale * 2, Self.furthest)
+        if fitScale > maxMagnification {
+            maxMagnification = furthest
+            minMagnification = fitScale
+        } else {
+            minMagnification = fitScale
+            maxMagnification = furthest
+        }
         // Fitted stays fitted through a window resize; zoomed keeps its scale.
         let target = fitted ? fitScale : min(maxMagnification, max(minMagnification, magnification))
         if magnification != target { magnification = target }

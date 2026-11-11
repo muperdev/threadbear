@@ -1,0 +1,124 @@
+{
+  "closed" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Morning brief, please: what needs me today?",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "g:t:tb_b7k2form",
+      "inGroup" : false,
+      "kind" : "group",
+      "seq" : 3,
+      "text" : "Worked for 52s",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 15,
+      "text" : "# Morning brief ## Needs attention - Pebble sent a new replacement link for the Silver 11: confirm …",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 16,
+      "text" : "52s, $0.09",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "ak:16",
+      "inGroup" : false,
+      "kind" : "asks",
+      "seq" : 16,
+      "text" : "open, nothing needed",
+      "turn" : "turn_1"
+    }
+  ],
+  "open" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Morning brief, please: what needs me today?",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : true,
+      "id" : "g:t:tb_b7k2form",
+      "inGroup" : false,
+      "kind" : "group",
+      "seq" : 3,
+      "text" : "Worked for 52s",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:tb_b7k2form",
+      "inGroup" : true,
+      "kind" : "tool",
+      "seq" : 3,
+      "text" : "add_button",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:tb_c4mpanng",
+      "inGroup" : true,
+      "kind" : "tool",
+      "seq" : 6,
+      "text" : "add_button",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:tb_q9m4meet",
+      "inGroup" : true,
+      "kind" : "tool",
+      "seq" : 9,
+      "text" : "add_button",
+      "turn" : "turn_1"
+    },
+    {
+      "expanded" : false,
+      "id" : "t:tb_x2gonefl",
+      "inGroup" : true,
+      "kind" : "tool",
+      "seq" : 12,
+      "text" : "add_button",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 15,
+      "text" : "# Morning brief ## Needs attention - Pebble sent a new replacement link for the Silver 11: confirm …",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 16,
+      "text" : "52s, $0.09",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "ak:16",
+      "inGroup" : false,
+      "kind" : "asks",
+      "seq" : 16,
+      "text" : "open, nothing needed",
+      "turn" : "turn_1"
+    }
+  ]
+}

@@ -4,11 +4,15 @@
 // Part of the Runner (runner.ts); each method's `this` is the Runner.
 import type { Runner } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
-import type { EffortLevel, PermissionMode, ReplyButton } from '../protocol.ts';
+import type { Ask, EffortLevel, EventBody, PermissionMode, ReplyButton } from '../protocol.ts';
 import { AGENT_MESSAGE_PREFIX, ErrorCode, RpcError } from '../protocol.ts';
 import { isDirectory } from '../fsutil.ts';
 import { findPool } from '../pools.ts';
 import type { ThreadState } from '../runner.ts';
+import { runCommand } from '../patches.ts';
+import { threadEnv } from '../restart.ts';
+import { safeStart } from '../safe-cut.ts';
+import { experimentOn } from '../experiments.ts';
 import crypto from 'node:crypto';
 import path from 'node:path';
 
@@ -16,6 +20,8 @@ export const MAX_BUTTON_TITLE = 60;
 export const MAX_BUTTON_TEXT = 20_000;
 // Kept per thread, newest. A daily brief makes about six a day.
 export const MAX_BUTTONS = 200;
+// How much of a run's output the agent is told, from the end.
+const RUN_TELL_CHARS = 8000;
 
 // Ranked like threadbear-mcp.ts's ACCESS: plan only changes what Mike approves.
 const RANK: Record<PermissionMode, number> = { ask: 0, plan: 0, auto: 1, full: 2 };
@@ -97,7 +103,8 @@ export const buttonsPart = {
     const st = this.mustGet(threadId);
     const button = st.rec.buttons?.find((b) => b.id === buttonId);
     if (!button) throw new RpcError(ErrorCode.badParams, `Button not found: ${buttonId}`);
-    if (button.pressed) return { button: structuredClone(button) };
+    if (button.pressed || button.running) return { button: structuredClone(button) };
+    if (button.run) return this.pressRun(st, button);
     // Access is checked again now, not only when it was made: the maker or
     // the target may have changed mode since (Codex's review, 7 Nov 2026).
     // A refusal here is saved as a failed press, like any other.
@@ -128,6 +135,10 @@ export const buttonsPart = {
           ...(s.model ? { model: s.model } : {}),
           ...(s.effort ? { effort: s.effort } : {}),
           permissionMode: s.permissionMode,
+          // Mike's press, of a button he allowed when a sandboxed thread
+          // made it (add_button's card says "outside the sandbox"). One
+          // into a sandbox folder is still shut in there.
+          unconfine: true,
           startedBy: { kind: 'thread', label: 'Button', threadId: st.rec.id, threadTitle: st.rec.title, ...(s.why ? { why: s.why } : {}) },
         });
         next = { ...button, pressed: { at: this.isoNow(), threadId: r.thread.id } };
@@ -146,6 +157,113 @@ export const buttonsPart = {
     return { button: structuredClone(next) };
   },
 
+  // The turn's asks with a command get their button here, as the card is
+  // made, so no agent ever holds the id of one: a link to it in a reply
+  // couldn't show the command it would run.
+  armRunAsks(this: Runner, st: ThreadState, asks: Ask[], turnId: string): Ask[] {
+    if (!asks.some((a) => a.run)) return asks;
+    const on = experimentOn(this.cfg.home, 'runAsks');
+    return asks.map((ask) => {
+      if (!ask.run) return ask;
+      if (!on) {
+        const { run: _run, ...rest } = ask;
+        return rest;
+      }
+      const cwd = st.rec.cwd;
+      const button: ReplyButton = { id: this.newButtonId(st), title: 'Run', createdAt: this.isoNow(), turnId, run: { command: ask.run.command, cwd } };
+      this.persistButton(st, button);
+      return { ...ask, run: { command: ask.run.command, cwd, buttonId: button.id } };
+    });
+  },
+
+  // Starts a run's command and answers at once: it can take minutes, and
+  // the card shows it going through `running`.
+  pressRun(this: Runner, st: ThreadState, button: ReplyButton): { button: ReplyButton } {
+    const problem = this.runProblem(st, button);
+    if (problem) {
+      this.persistButton(st, { ...button, failed: { at: this.isoNow(), error: problem } });
+      throw new RpcError(ErrorCode.badParams, problem);
+    }
+    const { failed: _failed, ...rest } = button;
+    const started: ReplyButton = { ...rest, running: { at: this.isoNow() } };
+    // Saved before it starts, so a second press from another device can't
+    // slip in and a restart can tell it may have partly run.
+    this.persistButton(st, started);
+    void this.runPressed(st, started).catch((e: unknown) => this.log.warn('a run button failed', { threadId: st.rec.id, button: button.id, error: String(e) }));
+    return { button: structuredClone(started) };
+  },
+
+  runProblem(this: Runner, st: ThreadState, button: ReplyButton): string | undefined {
+    if (this.stopping || this.draining) return 'This runner is restarting. Press Run again in a moment.';
+    // Only the open card: an older one's command was for how things stood then.
+    if (!st.rec.needs?.asks?.some((a) => a.run?.buttonId === button.id)) return 'That card has been replaced, so its command is out of date.';
+    // The agent has moved on, so what it asked for may not stand.
+    if (st.rt.turn) return 'The agent has started working again, so this card is out of date.';
+    if (st.rt.cleaning || st.rec.archivedAt) return 'This thread is archived, so its folder may be in use by another thread.';
+    const cwd = button.run!.cwd;
+    const gone = st.rec.worktree;
+    if (gone?.removedAt && cwd.startsWith(gone.path)) return `This thread's worktree at ${gone.path} was removed, so nothing runs there.`;
+    if (!isDirectory(cwd)) return `Folder not found: ${cwd}`;
+    return undefined;
+  },
+
+  async runPressed(this: Runner, st: ThreadState, button: ReplyButton): Promise<void> {
+    const key = `button:${button.id}`;
+    // Holds archiving, handovers and moves until it's done, as an action does.
+    const running = (st.rt.runningActions ??= new Set());
+    running.add(key);
+    try {
+      const run = button.run!;
+      const outcome = await runCommand(run.command, {
+        cwd: run.cwd,
+        env: { ...process.env, ...threadEnv(st.rec.id, this.cfg.home) },
+        shell: this.actionShell,
+        timeoutMs: this.actionTimeoutMs,
+        killGroup: true,
+      });
+      if (st.rt.deleted) return;
+      const { running: _running, ...rest } = button;
+      const ran: NonNullable<ReplyButton['ran']> = { ok: outcome.ok, durationMs: outcome.durationMs, ...(outcome.exitCode !== undefined ? { exitCode: outcome.exitCode } : {}) };
+      this.persistButton(st, { ...rest, pressed: { at: this.isoNow(), threadId: st.rec.id }, ran });
+      const body: EventBody = { type: 'action.run', actionId: key, patch: 'card', title: 'Run', command: run.command, ok: outcome.ok, text: outcome.text, truncated: outcome.truncated, durationMs: outcome.durationMs };
+      if (outcome.exitCode !== undefined) body.exitCode = outcome.exitCode;
+      this.emit(st, body, st.rt.turn?.turnId);
+      st.rec.lastActivityAt = this.isoNow();
+      this.markDirty(st);
+      this.recheckLooseEnds(st);
+      // Its last part, begun where no secret is cut in two (safe-cut.ts), as it goes to Convex as a message.
+      const shown = outcome.text.length > RUN_TELL_CHARS ? outcome.text.slice(safeStart(outcome.text, outcome.text.length - RUN_TELL_CHARS)) : outcome.text;
+      const verdict = outcome.ok ? 'succeeded' : outcome.exitCode !== undefined ? `failed with exit ${outcome.exitCode}` : 'was stopped before it finished, or timed out';
+      const told =
+        `[Threadbear] The user pressed Run on your card. In ${run.cwd} this ${verdict} after ${Math.round(outcome.durationMs / 1000)}s:\n\n` +
+        '```\n' + run.command + '\n```\n\nOutput:\n\n```\n' + (shown.trim() || '(no output)') + '\n```\n\nCarry on from here: they don\'t need to paste anything back.';
+      try {
+        this.sendTo(st, told, [], { origin: 'runner', queue: true });
+      } catch (e) {
+        this.emit(st, { type: 'system.note', text: "Couldn't tell the agent how the command went, so tell it yourself." });
+        this.log.warn('could not tell the agent a run result', { threadId: st.rec.id, button: button.id, error: String(e) });
+      }
+    } finally {
+      running.delete(key);
+      if (running.size === 0) this.archiveWhenGone(st);
+    }
+  },
+
+  // A runner that stopped with a command going took it with it. Run can be
+  // pressed again, but it says what happened, as it may have done half.
+  tellInterruptedRuns(this: Runner, st: ThreadState): void {
+    for (const button of st.rec.buttons ?? []) {
+      if (!button.running || st.rt.runningActions?.has(`button:${button.id}`)) continue;
+      const { running: _running, ...rest } = button;
+      this.persistButton(st, { ...rest, failed: { at: this.isoNow(), error: 'Threadbear restarted while this was running, so it may only have partly run.' } });
+      try {
+        this.sendTo(st, `[Threadbear] Threadbear restarted while the command on your card was running, so it may only have partly run:\n\n\`\`\`\n${button.run?.command ?? ''}\n\`\`\`\n\nCheck how far it got before asking them to run it again.`, [], { origin: 'runner', queue: true });
+      } catch (e) {
+        this.log.warn('could not tell the agent a run was interrupted', { threadId: st.rec.id, button: button.id, error: String(e) });
+      }
+    }
+  },
+
   newButtonId(this: Runner, st: ThreadState): string {
     const taken = new Set((st.rec.buttons ?? []).map((b) => b.id));
     for (;;) {
@@ -158,6 +276,18 @@ export const buttonsPart = {
   persistButton(this: Runner, st: ThreadState, button: ReplyButton): void {
     const previous = st.rec.buttons ?? [];
     const buttons = (previous.some((b) => b.id === button.id) ? previous.map((b) => (b.id === button.id ? button : b)) : [...previous, button]).slice(-MAX_BUTTONS);
+    // What the open card shows of a run, which is all the phone has of it.
+    if (button.run && st.rec.needs?.asks?.some((a) => a.run?.buttonId === button.id)) {
+      st.rec.needs = {
+        ...st.rec.needs,
+        asks: st.rec.needs.asks.map((a) => {
+          if (a.run?.buttonId !== button.id) return a;
+          const { running: _running, failed: _failed, ...run } = a.run;
+          return { ...a, run: { ...run, ...(button.running ? { running: true as const } : {}), ...(button.failed ? { failed: button.failed.error } : {}) } };
+        }),
+      };
+      this.markDirty(st);
+    }
     this.store.save({ ...st.rec, buttons });
     st.rec.buttons = buttons;
     this.emit(st, { type: 'button.updated', button });

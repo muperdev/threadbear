@@ -228,6 +228,10 @@ enum Theme {
     static let buttonFill = dynamic(dark: NSColor(white: 1, alpha: 0.12), light: NSColor(white: 1, alpha: 1))
     static let buttonEdge = dynamic(dark: NSColor(white: 1, alpha: 0.08), light: NSColor(white: 0, alpha: 0.18))
     static let faintText = dynamic(dark: NSColor(white: 1, alpha: 0.36), light: NSColor(white: 0, alpha: 0.45))
+    /// The small star beside "Recommended" on the agent's own pick: a muted
+    /// gold, after Ghostex's (Mike liked it over a blue "my pick", 9 Nov 2026).
+    static let recommendedStar = dynamic(dark: NSColor(calibratedRed: 0.86, green: 0.70, blue: 0.33, alpha: 1),
+                                         light: NSColor(calibratedRed: 0.72, green: 0.54, blue: 0.12, alpha: 1))
     /// Work line icons and chevrons.
     static let faintIcon = dynamic(dark: .tertiaryLabelColor, light: NSColor(white: 0, alpha: 0.36))
     /// Work lines and tool output: secondary, a step darker in light mode,
@@ -340,6 +344,9 @@ enum Theme {
 extension NSAttributedString.Key {
     /// Fill a rounded box behind the whole run (code blocks, cards).
     static let tbBlockBackground = NSAttributedString.Key("tbBlockBackground")
+    /// A ```bash block's command (ShellBlock), on the box's text: the box
+    /// gets the play and copy icons (ShellBlockIcons).
+    static let tbShellBlock = NSAttributedString.Key("tbShellBlock")
     /// Fill each line fragment edge to edge (diff lines).
     static let tbLineBackground = NSAttributedString.Key("tbLineBackground")
     /// A small rounded fill behind just the run's glyphs (inline code).

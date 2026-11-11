@@ -984,6 +984,8 @@ test('every CLI gets THREADBEAR_THREAD_ID, THREADBEAR_HOME and THREADBEAR_RUNNER
   // Where a picture goes to be on the thread's shared page (docs/protocol.md, "Sharing").
   assert.equal(env.THREADBEAR_MEDIA_DIR, path.join(h.home, 'threads', thread.id, 'media'));
   assert.match(env.THREADBEAR_RUNNER_VERSION, /^\d+\.\d+\.\d+\+/);
+  // The Node it runs on, for the repo's scripts (scripts/find-node.sh).
+  assert.equal(env.THREADBEAR_NODE, process.execPath);
   // This runner's bin/ first, so a bare `tb` in the thread is its tb.
   assert.equal(env.PATH.split(':')[0], path.resolve(import.meta.dirname, '..', '..', 'bin'));
   assert.ok(fs.existsSync(path.join(env.PATH.split(':')[0], 'tb')));

@@ -24,6 +24,7 @@ public struct ReviewAnswer: Sendable, Hashable {
     /// then his reply as he wrote it, then "Notes on <id> (<option>): <note>"
     /// paragraphs (`reviewReply` in runner/src/reviews.ts).
     public static func parse(_ text: String) -> ReviewAnswer? {
+        let text = String(withoutPassedOver(text))
         guard let head = text.firstMatch(of: /^Review: (.+?) \(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)(?:\n\n|$)/) else { return nil }
         let title = String(head.1)
         var paragraphs = text[head.range.upperBound...].components(separatedBy: "\n\n")[...]
@@ -60,6 +61,16 @@ public struct ReviewAnswer: Sendable, Hashable {
             lines.append(Line(label: (lines.isEmpty ? title + "\n" : "") + "Notes on \(id): \(bare(String(note.2), id: id))", text: String(note.3)))
         }
         return lines.isEmpty ? nil : ReviewAnswer(title: title, lines: lines)
+    }
+
+    /// The runner's last paragraph names the options he passed over, for the
+    /// agent writing follow-ups (`PASSED_OVER_TAIL` in runner/src/reviews.ts);
+    /// his bubble leaves it out.
+    static let passedOverTail = "Don't offer one of these later (a next step, a follow-up) as if it were new: say it's one they passed over."
+
+    static func withoutPassedOver(_ text: String) -> Substring {
+        guard text.hasSuffix(passedOverTail), let start = text.range(of: "\n\nPassed over: ", options: .backwards) else { return Substring(text) }
+        return text[..<start.lowerBound]
     }
 
     /// Agents often title options "A: Summary first", which would read

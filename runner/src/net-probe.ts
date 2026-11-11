@@ -20,6 +20,9 @@ const HOSTS: Record<Provider, string> = {
   codex: 'chatgpt.com',
   // Grok Build under a grok.com login chats through this proxy.
   grok: 'cli-chat-proxy.grok.com',
+  cursor: 'api2.cursor.sh',
+  // Its free models; a login's own provider may be elsewhere.
+  opencode: 'opencode.ai',
 };
 
 // How long a probe may take in all, whatever arrives meanwhile: a proxy

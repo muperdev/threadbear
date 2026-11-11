@@ -144,6 +144,7 @@ extension AppModel {
             guard openProjectId == nil else { return openRemoteFile(url, .app, in: thread, title: title) }
             var preview = PanePreview(target: .remote(path: path, failed: nil), title: title, from: from ?? paneSection(for: thread))
             preview.away = name
+            preview.remotePath = path
             preview.back = back
             show(preview, in: thread.id)
             let opened = panePreview[thread.id]?.opened

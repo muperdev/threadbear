@@ -689,6 +689,7 @@ test('a login with no settings.json yet: writing one is code, and a saved edit r
   put(path.join(login, '.claude.json'), '{}');
   const h = makeHarness(home, {}, {
     accounts: new FakeAccounts([...ACCOUNTS, { id: 'claude-9', provider: 'claude', title: 'nine', configDir: login }]),
+    panelsRoot: tmpDir(),
     patchTrust: new PatchTrust({ file: path.join(home, 'patch-trust.json'), claudeHome: tmpDir() }),
   });
   const { thread } = h.runner.create({ text: 'hi', accountId: 'claude-3', cwd: project, permissionMode: 'ask' });
@@ -878,6 +879,7 @@ test("worktree setup doesn't run the main checkout's uncommitted package.json", 
   fs.chmodSync(path.join(bin, 'npm'), 0o755);
   fs.chmodSync(path.join(bin, 'node'), 0o755);
   put(path.join(main, 'worktree-setup.sh'), fs.readFileSync(path.join(REPO, 'worktree-setup.sh'), 'utf8'));
+  put(path.join(main, 'runner', 'scripts', 'find-node.sh'), fs.readFileSync(path.join(REPO, 'runner', 'scripts', 'find-node.sh'), 'utf8'));
   for (const dir of ['.', 'runner', 'app/Tools/mock-runner']) {
     put(path.join(main, dir, 'package.json'), '{}\n');
     put(path.join(main, dir, 'package-lock.json'), '{}\n');

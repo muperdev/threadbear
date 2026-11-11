@@ -35,7 +35,8 @@ struct ProjectsList: View {
             ThreadList(order: built.order, scrollID: { firstRow[$0] ?? $0 }) { select in
                 if app.threadsLoaded {
                     ForEach(built.sections) { section in
-                        ProjectHeader(project: section.project, count: section.threads.count)
+                        ProjectHeader(project: section.project, count: section.threads.count,
+                                      decisions: app.projectDecisionsOn ? ProjectDecisions.count(section.threads) : 0)
                         ForEach(section.threads.map { SectionRow(section: section.id, thread: $0) }) { row in
                             ThreadRowView(thread: row.thread, mode: .projects, heading: section.project.id) { select(row.thread.id) }
                         }
@@ -137,6 +138,10 @@ private struct ProjectHeader: View {
     let project: Project
     /// Its open threads, listed under it.
     let count: Int
+    /// Open asks waiting on Mike in its threads, with the projectDecisions
+    /// experiment on: said in place of the count, in the needs-you orange,
+    /// as they're what its page opens on.
+    var decisions = 0
     @State private var hovering = false
 
     private var isOpen: Bool { app.openProjectId == project.id }
@@ -155,6 +160,13 @@ private struct ProjectHeader: View {
                     Image(systemName: "chevron.right")
                         .font(.system(size: zoomed(10), weight: .semibold))
                         .foregroundStyle(SidebarMetrics.faint)
+                } else if decisions > 0 {
+                    Text(ProjectDecisions.label(decisions))
+                        .font(.system(size: TypeScale.sidebarMeta, weight: .medium))
+                        .foregroundStyle(Color(nsColor: Theme.needsYou))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .fixedSize()
                 } else if count > 0 {
                     Text("\(count)")
                         .font(.system(size: TypeScale.sidebarMeta))
@@ -173,7 +185,7 @@ private struct ProjectHeader: View {
         // The same room above each group as the inbox's headings.
         .padding(.top, zoomed(12))
         .padding(.bottom, zoomed(2))
-        .tip("Open \(project.title)")
+        .tip(decisions > 0 ? "Open \(project.title) to answer its \(ProjectDecisions.label(decisions))" : "Open \(project.title)")
         .iconContextMenu { ProjectMenu(project: project) }
         .accessibilityAddTraits(.isHeader)
     }

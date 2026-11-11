@@ -1555,6 +1555,8 @@ public struct TranscriptModel: Sendable {
                             done.durationMs = worked
                             let costs = footers.compactMap(\.done.costUsd)
                             done.costUsd = costs.isEmpty ? nil : costs.reduce(0, +)
+                            let tokens = footers.compactMap { TurnTokens(usage: $0.done.usage) }
+                            done.usage = tokens.isEmpty ? nil : tokens.dropFirst().reduce(tokens[0], +).usage
                             out.append(derived(row.id, seq: row.seq, turnId: row.turnId, .footer(done)))
                         } else {
                             out.append(row)

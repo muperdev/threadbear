@@ -115,7 +115,7 @@ final class TranscriptLayoutTests: XCTestCase {
     }
 
     /// One reply's answers say what they do, so they're rows: a circle,
-    /// the label, "my pick" on the agent's, the note under it, the whole
+    /// the label, a star and "Recommended" on the agent's, the note under it, the whole
     /// row the click; in one box, with "Something else…" last (docs/
     /// reply-card-design, A). Asks without notes keep their buttons.
     func testAnswersWithNotesAreRowsInABox() {
@@ -130,8 +130,10 @@ final class TranscriptLayoutTests: XCTestCase {
         let note = string.range(of: "I deploy and check it went out")
         XCTAssertTrue(NSLocationInRange(note.location, row), "the note is part of its row")
         XCTAssertLessThan((text.attribute(.font, at: note.location, effectiveRange: nil) as? NSFont)?.pointSize ?? 99, Theme.bodyFont.pointSize)
-        XCTAssertTrue(text.string.contains("Deploy it  my pick"), text.string)
-        XCTAssertFalse(text.string.contains("Hold off  my pick"), text.string)
+        // The star is an image attachment (U+FFFC) between the label and "Recommended".
+        XCTAssertTrue(text.string.contains("Deploy it  \u{FFFC} Recommended"), text.string)
+        XCTAssertFalse(text.string.contains("Hold off  \u{FFFC} Recommended"), text.string)
+        XCTAssertFalse(text.string.contains("my pick"), text.string)
         let own = string.range(of: "Something else…")
         XCTAssertEqual(text.attribute(.tbRow, at: own.location, effectiveRange: nil) as? String, "pick:0:-1")
         // One box from the first row to the last, a rule above each row but the first.

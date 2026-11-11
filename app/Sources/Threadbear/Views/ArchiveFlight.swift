@@ -368,8 +368,24 @@ extension ArchiveFlight {
 extension EnvironmentValues {
     /// Set on the Archived heading only: how many flights have landed in
     /// it, so its box bounces at each, and where the flights aim.
-    @Entry var archiveLandings: Int? = nil
+    // Written out rather than @Entry: SwiftUI's macros ship with Xcode
+    // only, and this builds with the command line tools too.
+    var archiveLandings: Int? {
+        get { self[ArchiveLandingsKey.self] }
+        set { self[ArchiveLandingsKey.self] = newValue }
+    }
     /// The same for the Hibernating heading's moon, which also stirs when a
     /// row that wasn't open goes to sleep.
-    @Entry var hibernateLandings: Int? = nil
+    var hibernateLandings: Int? {
+        get { self[HibernateLandingsKey.self] }
+        set { self[HibernateLandingsKey.self] = newValue }
+    }
+}
+
+private struct ArchiveLandingsKey: EnvironmentKey {
+    static var defaultValue: Int? { nil }
+}
+
+private struct HibernateLandingsKey: EnvironmentKey {
+    static var defaultValue: Int? { nil }
 }

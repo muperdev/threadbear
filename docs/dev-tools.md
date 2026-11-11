@@ -64,6 +64,11 @@ the data dir (`<home>`, normally `~/Library/Application Support/Threadbear`):
   Before 27 Oct it imported main.ts into its own process; a LaunchAgent
   installed before then still does, and can't hand over until Mike runs
   `install-runner.sh` once.
+  A broken `runner.json` is never a reason to go back: the runner refuses
+  to start on one (exit 78) and marks its own boot clean so it isn't
+  counted, launch.mjs since 9 Nov holds the rollback while the file is
+  broken, and `deploy-runner.sh` won't deploy or restore over one. A
+  release from before then would read it as `{}` and write over it.
 - **The supervisor** (launch.mjs since 27 Oct). A child counts as up when
   it sends `{ type: "listening" }` or prints `threadbear-runner listening
   on <port>` (older releases only print it), within 90 s or it's stopped
@@ -95,7 +100,14 @@ the data dir (`<home>`, normally `~/Library/Application Support/Threadbear`):
   `[--skip-checks] [--allow-dirty] [--now [--force]] [--wait 30m]
   [--resume "text"] [--rollback] [--list] [--home DIR] [--label LABEL]
   [--dry-run]`:
-  1. Checks: typecheck and unit tests with the pinned Node.
+  0. The Node: the one the installed runner starts releases with (the
+     argument before `launch.mjs` in its LaunchAgent or unit). Started on
+     another, it runs itself again on that one, so a release is built and
+     tested on the Node it will run on; a LaunchAgent naming a Node that's
+     gone, or a program that isn't one, is refused. install-runner.sh's
+     own Node, which the plist may not name yet, is taken as it is
+     (`THREADBEAR_DEPLOY_NODE_GIVEN`).
+  1. Checks: typecheck and unit tests on that Node.
   2. Snapshot of the committed `runner/` at HEAD (refuse uncommitted
      changes under `runner/` unless `--allow-dirty`), then
      `npm ci --omit=dev` inside the release.
@@ -199,7 +211,7 @@ the data dir (`<home>`, normally `~/Library/Application Support/Threadbear`):
   required). `--app` is the app's part alone. `--e2e`
   adds the runner's real-model e2e (cheapest model, temp dirs); `--shots`
   runs `app/Tools/screenshots.sh`. One line per step, nonzero exit if
-  anything failed, pinned Node 24.
+  anything failed, on the Node `runner/scripts/find-node.sh` picks.
 
 ### 5. Docs
 
@@ -349,6 +361,12 @@ thread is busy (background work holds it 30 minutes at most; under
 reason "Updating to main at <short>: <subject>". `launch.mjs`'s crash
 rollback covers a release that doesn't come up.
 
+- With a check host in `runner.json` (`checkHost`/`checkHosts`), the
+  typecheck and unit tests go there through `check.sh --quick`, the same
+  way a thread's checks do, and run on this Mac at low priority only when
+  no host answers. Mike, 9 Nov: six updates that morning each ran the
+  whole unit suite on his M5 for ten minutes. With no check host they run
+  in the clone as before.
 - A build that fails starts a thread in the background to fix it
   (`runner/src/fix-update.ts`; Mike, 6 Nov: the old banner came up often,
   mostly for tests that flaked on a busy Mac, and told him nothing he could
@@ -365,6 +383,18 @@ rollback covers a release that doesn't come up.
   is often fixed that way. Its output is in `<home>/runner/update.log`. A tree whose
   release crashed at startup isn't built again either. A deploy that
   couldn't run (another deploy holds the lock) is just tried next time.
+- A build that fails while the machine is short of something a build needs
+  (no file watches left, under 1 GB free, can't start processes:
+  `runner/src/machine-trouble.ts`) isn't the code's fault, so it gets no fix
+  thread, just one notice. It's kept in `update.json` with what was wrong
+  (`machine`), and built again as soon as a five-minute check finds the
+  machine well, up to three tries at one build tree before it counts as a
+  real failure. If it's still sick six hours on it goes to a fix thread
+  anyway, so a machine that never recovers can't hide a broken commit. A new
+  commit is still built meanwhile, so a sick machine can't stop every update.
+  The check only runs here: a failure on a check host is treated as the
+  code's, as before. The cloud box sat 13 hours behind main
+  on 9 Nov after its watches had come back.
 - Nothing happens while a restart is pending, while `current` names a
   release that hasn't started yet, from a runner run from a checkout, or
   from a release built before `release.json` recorded its checkout (deploy
@@ -373,6 +403,22 @@ rollback covers a release that doesn't come up.
   it builds records the checkout it was following, not its own clone. A
   release that names the clone (built before 27 Oct's fix) can't see main
   and says so in `tb status`; one deploy by hand from the checkout fixes it.
+- A second machine follows GitHub rather than a local main. With
+  `followOrigin: true` in its `runner.json` (Mike's bruce, Pixel and
+  Hetzner; off by default, since whatever `origin` has gets built and run
+  unsigned) each check runs `git fetch origin main`, builds
+  `origin/main`, and moves the checkout's `main` along when that's a
+  fast-forward (`runner/src/follow-origin.ts`). It's read at each check, so
+  setting it needs no restart. A commit made only on that machine, or
+  uncommitted changes git won't overwrite, are left alone and said; the
+  runner keeps updating from GitHub either way. `tb land` refuses in the
+  followed repo, and a fix-update thread hands its fix to the main Mac
+  (Mike, 9 Nov: hand-made pull jobs on bruce and the Pixel failed quietly
+  for days behind one commit a fix-update thread had made on their main).
+  `followProblem` in `runner.status`'s `update` says what's wrong: a local
+  main that can't follow, GitHub out of reach for over an hour, or something
+  that runs on GitHub's main and not here for over six hours. It goes up
+  in the heartbeat, and the main Mac's `tb status` and Updates panel list it.
 - `followMain: false` in `runner.json`, or `THREADBEAR_FOLLOW_MAIN=0`,
   switches it off. `runner.status` reports it as `update`; `tb status`
   shows the line.

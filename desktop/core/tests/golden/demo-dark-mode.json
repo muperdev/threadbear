@@ -1,0 +1,54 @@
+{
+  "closed" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Add dark mode to the dashboard.",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 3,
+      "text" : "Added. Colours come from the asset catalogue, so they follow the system setting.",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 4,
+      "text" : "18s, $0.05",
+      "turn" : "turn_1"
+    }
+  ],
+  "open" : [
+    {
+      "id" : "u:1",
+      "inGroup" : false,
+      "kind" : "user",
+      "seq" : 1,
+      "text" : "Add dark mode to the dashboard.",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "a:turn_1_m",
+      "inGroup" : false,
+      "kind" : "assistant",
+      "seq" : 3,
+      "text" : "Added. Colours come from the asset catalogue, so they follow the system setting.",
+      "turn" : "turn_1"
+    },
+    {
+      "id" : "f:turn_1",
+      "inGroup" : false,
+      "kind" : "footer",
+      "seq" : 4,
+      "text" : "18s, $0.05",
+      "turn" : "turn_1"
+    }
+  ]
+}

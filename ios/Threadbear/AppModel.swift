@@ -141,6 +141,7 @@ final class AppModel {
     /// Whether the reply box's slash command palette can ask the runner
     /// for a thread's list (backend API 62, phone:slashCommands).
     var canUseSlashCommands: Bool { isFake || (apiVersion ?? 0) >= BackendCompatibility.slashCommandsAPIVersion }
+    var canStop: Bool { isFake || (apiVersion ?? 0) >= BackendCompatibility.stopAPIVersion }
     /// Each thread's slash commands once its runner has answered (SlashPaletteList).
     var slashCommands: [String: [SlashCommand]] = [:]
     /// Why a thread's list didn't come: its runner is away, or it failed.
@@ -1169,6 +1170,57 @@ final class AppModel {
             }
         }
     }
+
+    /// Run buttons tapped and not yet taken by the Mac: spinning, and no
+    /// more taps. After that the card's own `running` says so.
+    private(set) var pressingRuns: Set<String> = []
+
+    /// Run on an ask card (backend API 71), which runs on the thread's Mac.
+    func pressRun(threadId: String, buttonId: String) {
+        guard let backend, pressingRuns.insert(buttonId).inserted else { return }
+        Task {
+            defer { pressingRuns.remove(buttonId) }
+            do {
+                let command = try await backend.press(threadId: threadId, buttonId: buttonId)
+                for try await status in backend.command(command) {
+                    guard let status, status.state == .done || status.state == .failed else { continue }
+                    if status.state == .failed { report(TransportError.server(status.note ?? "That Mac couldn't run it.")) }
+                    return
+                }
+            } catch {
+                report(error)
+            }
+        }
+    }
+
+    /// Threads whose Stop has been tapped and whose turn hasn't stopped
+    /// yet: Stop shows a spinner and takes no more taps meanwhile.
+    private(set) var stopping: Set<String> = []
+
+    /// Stop on a running thread (backend API 69). It stays a spinner until
+    /// the thread's row says the turn is over (`stopped(_:)`, from the
+    /// thread view), or the command fails, which says why.
+    func stop(threadId: String) {
+        guard let backend, !stopping.contains(threadId) else { return }
+        stopping.insert(threadId)
+        Task {
+            do {
+                let command = try await backend.interrupt(threadId: threadId)
+                for try await status in backend.command(command) {
+                    guard let status, status.state == .failed else { if status?.state == .done { return }; continue }
+                    stopping.remove(threadId)
+                    report(TransportError.server(status.note ?? "That Mac couldn't stop it."))
+                    return
+                }
+            } catch {
+                stopping.remove(threadId)
+                report(error)
+            }
+        }
+    }
+
+    /// The thread's turn is over: its Stop is done.
+    func stopped(_ threadId: String) { stopping.remove(threadId) }
 
     func clearError() { lastError = nil }
 

@@ -186,6 +186,9 @@ final class Handover {
         if let mode = info["mode"] as? String, let selection = info["selection"] as? String {
             AppUpdater.restore(mode: mode, selection: selection, scroll: nil, app: app)
         }
+        // The file the outgoing app saved just before "go", pictures and
+        // all; the words in "go" for any it couldn't save.
+        takeDrafts(app)
         if let drafts = info["drafts"] as? [String: String] {
             for (id, text) in drafts where app.drafts[id]?.text.isEmpty ?? true { app.drafts[id, default: Draft()].text = text }
         }
@@ -193,8 +196,23 @@ final class Handover {
         if let from = Self.incomingFrom { Self.post(Self.doneName, from: from, [:]) }
     }
 
+    /// The drafts store, kept back until this incoming app takes over.
+    var pendingDraftStore: DraftStore?
+
+    /// Reads the saved drafts and starts keeping them. Not at launch: the
+    /// outgoing app is still taking typing then, and a draft read early
+    /// would be stale by "go" (Codex's review, 10 Nov).
+    private func takeDrafts(_ app: AppModel) {
+        guard let store = pendingDraftStore else { return }
+        pendingDraftStore = nil
+        store.restore(into: app)
+        app.draftStore = store
+    }
+
     private func takeOver(activate: Bool, reason: String) {
         guard incoming else { return }
+        // Gone without a "go": what it last saved is all there is.
+        takeDrafts(AppModel.shared)
         incoming = false
         exitWatch?.cancel()
         exitWatch = nil
@@ -282,11 +300,19 @@ final class Handover {
         info["mode"] = state.mode
         info["selection"] = state.selection
         // Words only: a picture's chip would be a mark with no picture behind it.
-        let drafts = app.drafts.compactMapValues { draft in
+        // Not an edit's words: without its edit they'd go as a new message.
+        let drafts = DraftStore.kept(drafts: app.drafts, editing: app.editing).compactMapValues { draft in
             let words = InlinePictures.words(draft.text)
             return words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : words
         }
         if !drafts.isEmpty { info["drafts"] = drafts }
+        // On disk before "go", for the incoming app to read with pictures.
+        // Messages held for a runner go with them, so this app stops
+        // sending them (AppModel.post).
+        app.handingOver = true
+        app.draftStore?.save(app, leaving: true)
+        // The file is the incoming app's from here.
+        app.draftStore = nil
         stopListening()
         listen(Self.doneName, from: pid) { _ in Handover.shared.quit() }
         Self.post(Self.goName, from: pid, info)

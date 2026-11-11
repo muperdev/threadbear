@@ -237,9 +237,36 @@ final class PoolPickTests: XCTestCase {
         XCTAssertNil(app.limitAdvice(for: moving), "gmail has room, so the runner moves it")
         let until = Date().addingTimeInterval(3600)
         let waiting = ThreadSummary(id: "th2", title: "t", accountId: "claude-main", poolId: "claude", waitingForRoom: WaitingForRoom(until: until))
-        XCTAssertEqual(app.limitAdvice(for: waiting)?.text.hasPrefix("Every login in Claude is out of room. It carries on by itself"), true)
+        let advice = app.limitAdvice(for: waiting)
+        XCTAssertEqual(advice?.text, "Every login in Claude is out of room.")
+        XCTAssertEqual(advice?.carriesOnAt, until)
+        XCTAssertEqual(advice?.stopped, true, "offers turning carrying on off")
+        XCTAssertEqual(advice?.pool, true, "the switch pins it outside the pool")
         let pinned = ThreadSummary(id: "th3", title: "t", accountId: "claude-main")
         XCTAssertEqual(app.limitAdvice(for: pinned)?.text, "sam@acme.io has reached its limit.", "a pinned thread: as before")
+        XCTAssertEqual(app.limitAdvice(for: pinned)?.stopped, false, "no turn stopped, so nothing to carry on")
+        // A pinned thread waiting on its own login (from 10 Nov).
+        let pinnedWaiting = ThreadSummary(id: "th4", title: "t", accountId: "claude-main", waitingForRoom: WaitingForRoom(until: until))
+        XCTAssertEqual(app.limitAdvice(for: pinnedWaiting)?.carriesOnAt, until)
+        XCTAssertEqual(app.limitAdvice(for: pinnedWaiting)?.stopped, true)
+        XCTAssertEqual(app.limitAdvice(for: pinnedWaiting)?.pool, false)
+    }
+
+    /// The limit box's Carry on menu: No shows at once (the wait ends) and
+    /// sends carryOnAtReset false.
+    func testCarryOnAtResetIsOptimistic() async throws {
+        let app = app()
+        let transport = PoolRecordingTransport()
+        let client = RPCClient(transport: transport)
+        try await client.start()
+        app.useClientForTesting(client)
+        let until = Date().addingTimeInterval(3600)
+        app.threads["th1"] = ThreadSummary(id: "th1", title: "t", accountId: "claude-main", waitingForRoom: WaitingForRoom(until: until))
+        app.setCarryOnAtReset("th1", false)
+        XCTAssertEqual(app.threads["th1"]?.carryOnAtReset, false)
+        XCTAssertNil(app.threads["th1"]?.waitingForRoom)
+        for _ in 0..<200 where transport.updates.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertEqual(transport.updates.first?["carryOnAtReset"] as? Bool, false)
     }
 }
 

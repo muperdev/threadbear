@@ -10,12 +10,15 @@
 //     { deviceToken, environment: "sandbox" | "production", threadId,
 //       encrypted?: base64 AES-GCM sealed box, or title?/body? }
 //     ->  { ok, status, reason?, gone? }  (gone: drop this device token)
+//     An Android phone sends platform: "android" and its Firebase token as
+//     deviceToken, with no environment, and only `encrypted` (fcm.ts).
 //
 // Nothing here is stored but the install row and daily counts.
 import { httpRouter } from 'convex/server';
 import { httpAction } from './_generated/server';
 import { internal } from './_generated/api';
 import { convexSite, deploymentVouches } from './verify';
+import { FCM_TOKEN, fcmGone } from './fcmMessage';
 import { reasonKey } from './reasons';
 import { storedVersion } from './versions';
 
@@ -70,10 +73,13 @@ http.route({
     const auth = req.headers.get('authorization')?.match(/^Bearer (i_[0-9a-f]+)\.(k_[0-9a-f]+)$/);
     if (!auth) return json({ error: 'unauthorized' }, 401);
     const b = await body(req);
-    const deviceToken = str(b?.deviceToken, 200);
+    // An Android phone (platform "android") has a Firebase token, not an Apple
+    // one, and no sandbox or production.
+    const android = b?.platform === 'android';
+    const deviceToken = str(b?.deviceToken, android ? 4096 : 200);
     const environment = b?.environment === 'production' ? 'production' : b?.environment === 'sandbox' ? 'sandbox' : undefined;
     const threadId = str(b?.threadId, 100);
-    if (!b || !deviceToken || !/^[0-9a-f]+$/i.test(deviceToken) || !environment || !threadId) return json({ error: 'bad request' }, 400);
+    if (!b || !deviceToken || !(android ? FCM_TOKEN.test(deviceToken) : /^[0-9a-f]+$/i.test(deviceToken)) || (!android && !environment) || !threadId) return json({ error: 'bad request' }, 400);
     const header = req.headers.get('x-threadbear-version');
     const version = header === null ? undefined : storedVersion(header);
     const admitted = await ctx.runMutation(internal.relay.admit, { installId: auth[1]!, installKey: auth[2]!, ...(version ? { version } : {}) });
@@ -82,18 +88,22 @@ http.route({
     const encrypted = str(b.encrypted, 4000);
     // A throw (a malformed APNS_KEY_P8 makes signing throw) is counted
     // like any other failure, so relay:stats sees it.
-    const r = await ctx.runAction(internal.apns.send, {
-      deviceToken,
-      environment,
-      threadId,
-      ...(encrypted ? { encrypted } : { ...(str(b.title, 200) ? { title: str(b.title, 200) } : {}), ...(str(b.body, 1000) ? { body: str(b.body, 1000) } : {}) }),
-    }).catch(() => ({ status: 0, reason: 'send threw' }) as { status: number; reason?: string });
+    const r = await (android
+      ? ctx.runAction(internal.fcm.send, { deviceToken, threadId, ...(encrypted ? { encrypted } : {}) })
+      : ctx.runAction(internal.apns.send, {
+          deviceToken,
+          environment: environment!,
+          threadId,
+          ...(encrypted ? { encrypted } : { ...(str(b.title, 200) ? { title: str(b.title, 200) } : {}), ...(str(b.body, 1000) ? { body: str(b.body, 1000) } : {}) }),
+        })
+    ).catch(() => ({ status: 0, reason: 'send threw' }) as { status: number; reason?: string });
     const ok = r.status === 200;
-    // The status and Apple's reason only (no token, no install), so the
-    // relay's own logs say why sends fail; relay:stats tallies the same.
+    // The status and Apple's (or Firebase's) reason only (no token, no
+    // install), so the relay's own logs say why sends fail; relay:stats
+    // tallies the same.
     if (!ok) console.warn(`[send] failed: ${reasonKey(r.status, r.reason)}`);
     await ctx.runMutation(internal.relay.counted, { ok, status: r.status, ...(r.reason ? { reason: r.reason } : {}) });
-    const gone = r.status === 410 || r.reason === 'BadDeviceToken' || r.reason === 'Unregistered';
+    const gone = android ? fcmGone(r.status, r.reason) : r.status === 410 || r.reason === 'BadDeviceToken' || r.reason === 'Unregistered';
     return json({ ok, status: r.status, ...(r.reason ? { reason: r.reason } : {}), ...(gone ? { gone: true } : {}) });
   }),
 });

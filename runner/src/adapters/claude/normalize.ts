@@ -164,6 +164,15 @@ export class ClaudeNormalizer {
       out.push({ kind: 'tasks', tasks });
     } else if (msg.subtype === 'informational' && msg.level === 'warning' && typeof msg.content === 'string') {
       out.push({ kind: 'event', event: { type: 'system.note', text: msg.content } });
+    } else if (msg.subtype === 'permission_denied') {
+      // A call refused without a card (Auto's safety check, a deny rule):
+      // its result tells the agent, and this tells Mike why (David, 8 Nov 2026).
+      const reason = typeof msg.decision_reason === 'string' ? msg.decision_reason.trim().slice(0, 1000) : '';
+      const tool = typeof msg.tool_name === 'string' && msg.tool_name ? msg.tool_name : 'A tool call';
+      if (reason) {
+        const text = msg.decision_reason_type === 'classifier' ? `Auto mode's safety check stopped ${tool}: ${reason}` : `${tool} was refused: ${reason}`;
+        out.push({ kind: 'event', event: { type: 'system.note', text } });
+      }
     }
   }
 

@@ -423,6 +423,11 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
 .dock { padding: 6px 24px 18px; }
 .dock > * { max-width: 760px; margin-left: auto; margin-right: auto; }
 .box { background: var(--raised); border: 1px solid var(--line-strong); border-radius: 16px; overflow: hidden; }
+.recap { position: relative; background: var(--raised); border: 1px solid var(--line-strong); border-radius: 14px; padding: 11px 38px 11px 14px; margin-bottom: 10px; font-size: 14px; line-height: 1.5; }
+.recap p { margin: 0; }
+.recap ul { margin: 5px 0; padding-left: 18px; }
+.recap .recap-when { color: var(--muted); font-size: 12.5px; }
+.recap-close { position: absolute; top: 7px; right: 7px; width: 26px; height: 26px; display: grid; place-items: center; border: 0; background: none; color: var(--muted); cursor: pointer; }
 .box.asking { border-color: var(--accent); }
 .card { padding: 14px 16px 12px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; max-height: 52vh; overflow-y: auto; }
 .card h2 { display: flex; align-items: center; gap: 7px; font-size: 14px; margin: 0; }
@@ -438,7 +443,9 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
 .choice .radio.check { border-radius: 4px; }
 .choice.on .radio { border: 5px solid var(--accent); }
 .choice.on .radio.check { border: 0; background: var(--accent); }
-.choice .pick { color: var(--link); font-size: 12px; margin-left: 6px; }
+/* The agent's pick: a small gold star and "Recommended" in grey, as on the Mac (after Ghostex's, 9 Nov 2026). */
+.choice .pick { color: var(--muted); font-size: 12px; margin-left: 8px; }
+.choice .pick .star { color: #d9b154; font-size: 10px; }
 .choice .desc { display: block; color: var(--muted); font-size: 12.5px; }
 .ask-links { display: flex; gap: 8px; flex-wrap: wrap; }
 .approval-input { margin: 0; background: var(--code); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; max-height: 200px; overflow: auto; }
@@ -503,3 +510,8 @@ button.fold:hover > svg:last-child, button.fold:focus-visible > svg:last-child {
 @media (prefers-color-scheme: dark) { .reply-button.rb-pressed { color: #5fd17f; } }
 :root[data-theme='dark'] .reply-button.rb-pressed { color: #5fd17f; }
 :root[data-theme='light'] .reply-button.rb-pressed { color: #23863f; }
+
+.ask-run { margin: 10px 0; }
+.ask-run-command { margin: 0 0 6px; padding: 10px 12px; background: var(--hover); border: 1px solid var(--line); border-radius: 8px; font: 12.5px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+.ask-run-note { font-size: 12px; color: var(--muted, #888); margin-bottom: 4px; }
+.ask-run-failed { color: #d9534f; }

@@ -60,6 +60,9 @@ enum ShareText {
     }
 
     static let about = "Anyone with the link reads this thread on your Threadbear website: its messages, one line per step and its pictures, as it carries on. Tool output, its folder and cost stay on your Mac. Only you stops the link working; sharing again brings the same link back. You can change it from the website too."
+    /// A backend on this Mac only (setup --self-hosted --local): its website
+    /// is on 127.0.0.1, so the link opens on this Mac and nowhere else.
+    static let aboutLocalOnly = about + " Your backend is on this Mac only, so the link only opens on this Mac."
 }
 
 struct SharePopover: View {
@@ -76,7 +79,7 @@ struct SharePopover: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
                 Text("Share this thread").font(.headline)
-                InfoTip(ShareText.about)
+                InfoTip(app.localOnly ? ShareText.aboutLocalOnly : ShareText.about)
                 Spacer()
             }
 

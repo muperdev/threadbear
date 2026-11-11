@@ -1,0 +1,5 @@
+# The desktop app's Rust: the runner connection and the GPUI app, built
+# together with one lock file and one target folder.
+[workspace]
+resolver = "2"
+members = ["client", "core", "gpui", "dock", "dock/layout"]

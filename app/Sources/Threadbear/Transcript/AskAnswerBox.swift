@@ -237,12 +237,12 @@ final class AskAnswerBox: NSView {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
-        panel.allowedContentTypes = [.image]
+        panel.allowedContentTypes = ComposerTextView.attachableTypes
         panel.prompt = "Add"
         let finish = { [weak self] (response: NSApplication.ModalResponse) in
             guard response == .OK, let self else { return }
             // Chips where the cursor was, as a paste would put them.
-            self.textView.insertPictures(panel.urls)
+            self.textView.insertChosenFiles(panel.urls)
         }
         if let window { panel.beginSheetModal(for: window, completionHandler: finish) } else { finish(panel.runModal()) }
     }
