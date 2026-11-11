@@ -479,8 +479,10 @@ export class Team {
     if (rec.team) throw bad(`${rec.title} is already shared.`);
     const id = randomId('tp_', 5);
     const repos = await this.reposOf(rec.folders);
-    await this.call('mutation', 'team:shareProject', { project: { id, title: rec.title, goals: rec.goals, state: rec.state, notes: rec.notes, links: rec.links, repos } });
-    this.deps.projects.setTeam(rec.id, { id, syncedAt: this.deps.clock.now() });
+    const r = (await this.call('mutation', 'team:shareProject', { project: { id, title: rec.title, goals: rec.goals, state: rec.state, notes: rec.notes, links: rec.links, repos } })) as { updatedAt: number };
+    // The hub's clock, never this Mac's: syncedAt is only compared with the
+    // hub's updatedAt, and two clocks a little apart would drop changes.
+    this.deps.projects.setTeam(rec.id, { id, syncedAt: r.updatedAt });
     await this.refresh().catch(() => {});
     this.queueAllCards();
     this.changed();

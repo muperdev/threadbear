@@ -20,15 +20,29 @@ const access = load('teamAccess');
 
 // The hub: posts run convex/team.ts's handlers, and every subscription is
 // run again after each mutation, as Convex would.
+// The hub's clock is a year behind the runners' fake one, as another
+// machine's clock may be: nothing may compare the two.
+const HUB_SKEW_MS = -365 * 24 * 3600_000;
 function memoryHub() {
   process.env.RUNNER_KEY = OWNER;
   delete process.env.RUNNER_KEY_NEXT;
   const b = memoryBackend();
+  const realNow = Date.now;
+  // Its own clock, moving on a little with each read of it.
+  let t = Date.parse('2026-10-26T12:00:00.000Z') + HUB_SKEW_MS;
+  const onHub = async <T>(f: () => Promise<T>): Promise<T> => {
+    Date.now = () => (t += 1);
+    try {
+      return await f();
+    } finally {
+      Date.now = realNow;
+    }
+  };
   const subs = new Set<{ fn: string; args: Record<string, unknown>; onUpdate: (v: unknown) => void; onError: (e: Error) => void }>();
   const rerun = async () => {
     for (const s of [...subs]) {
       try {
-        s.onUpdate(await call(b.ctx, teamFns[s.fn.split(':')[1]!], s.args));
+        s.onUpdate(await onHub(() => call(b.ctx, teamFns[s.fn.split(':')[1]!], s.args)));
       } catch (e) {
         s.onError(e as Error);
       }
@@ -36,7 +50,7 @@ function memoryHub() {
   };
   const hub = (): Hub => ({
     post: async (kind, fn, args) => {
-      const r = await call(b.ctx, teamFns[fn.split(':')[1]!], args);
+      const r = await onHub(() => call(b.ctx, teamFns[fn.split(':')[1]!], args));
       if (kind === 'mutation') await rerun();
       return r;
     },
@@ -44,7 +58,7 @@ function memoryHub() {
       subscribe: (fn, args, onUpdate, onError) => {
         const s = { fn, args, onUpdate, onError };
         subs.add(s);
-        void call(b.ctx, teamFns[fn.split(':')[1]!], args).then(onUpdate, onError);
+        void onHub(() => call(b.ctx, teamFns[fn.split(':')[1]!], args)).then(onUpdate, onError);
         return () => subs.delete(s);
       },
       close: () => {},
@@ -213,7 +227,7 @@ test('a teammate\'s message waits for a pass-on, then reaches the thread; the se
   // Through the agent's own tool.
   const tools = buildThreadbearTools(sam.h.runner as never, from.id, Date.now, undefined, undefined, undefined, { team: sam.control });
   const send = tools.find((x) => x.name === 'send_message')!;
-  const out = await send.handler({ threadId: ref, text: 'Hold the migration until my schema lands.' }, {});
+  const out = await send.handler({ threadId: ref, text: 'Hold the migration until my schema lands.' } as never, {});
   assert.match(JSON.stringify(out), /Sent to Behrooz's thread/);
   await tick(10);
   const waiting = host.team.state().waiting;
@@ -258,7 +272,7 @@ test('a handover waits on their Mac; taking it starts a thread in the project wi
   const tools = buildThreadbearTools(host.h.runner as never, t.id, Date.now, undefined, undefined, undefined, { team: host.control });
   const hand = tools.find((x) => x.name === 'hand_over');
   assert.ok(hand, 'hand_over is there on a team');
-  await hand!.handler({ to: 'sam', note: 'Two alarms still flapping; the fix is half done.', links: [{ title: 'PR', url: 'https://github.com/collabute/infra/pull/9' }] }, {});
+  await hand!.handler({ to: 'sam', note: 'Two alarms still flapping; the fix is half done.', links: [{ title: 'PR', url: 'https://github.com/collabute/infra/pull/9' }] } as never, {});
   await tick(10);
   const w = sam.team.state().waiting;
   assert.equal(w.length, 1);
